@@ -114,7 +114,7 @@ class EmojiManager(commands.Cog):
 
     @commands.slash_command(
         name="emoji_force_upload",
-        description="Force upload all emojis to the current server"
+        description="Force upload all of the bot's custom emojis to the current server"
     )
     @commands.has_permissions(manage_emojis=True)
     async def emoji_force_upload(self, ctx):
