@@ -103,11 +103,11 @@ class EmojiManager(commands.Cog):
         self.save_processed_servers()
 
     @commands.slash_command(
-        name="force_emoji_upload",
+        name="emoji_force_upload",
         description="Force upload all emojis to the current server"
     )
     @commands.has_permissions(manage_emojis=True)
-    async def force_emoji_upload(self, ctx):
+    async def emoji_force_upload(self, ctx):
         """Force upload emojis to the current server, even if they've been uploaded before."""
         await ctx.defer()
         
