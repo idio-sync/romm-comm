@@ -99,12 +99,12 @@ Display the configured website URL. May add more functionality later.
 ### /stats
 Show current collection statistics.
 
-![Slash Stats](Screenshots/SlashStats.png)
+![Slash Stats](.github/screenshots/SlashStats.png)
 
 ### /platforms
 Display all available platforms with their ROM counts.
 
-![Slash Platforms](Screenshots/SlashPlatforms.png)
+![Slash Platforms](.github/screenshots/SlashPlatforms.png)
 
 ### /search [platform] [game]
 Search for ROMs by platform and game name. Provides:
@@ -116,7 +116,7 @@ Search for ROMs by platform and game name. Provides:
 - Download links pointing to your public URL (user still needs RomM login to DL in browser)
 - Cover images when available (if RomM's game entry is properly matched to an IGDB entry)
 
-![Slash Search](Screenshots/SlashSearch.png)
+![Slash Search](.github/screenshots/SlashSearch.png)
 
 ### /firmware [platform]
 List available firmware files for a specific platform. Shows:
@@ -125,7 +125,7 @@ List available firmware files for a specific platform. Shows:
 - Hash details (CRC, MD5, SHA1)
 - Download links pointing to your public URL (user still needs RomM login to DL in browser)
 
-![Slash Firmware](Screenshots/SlashFirmware.png)
+![Slash Firmware](.github/screenshots/SlashFirmware.png)
 
 ## Visable Statistics
 
@@ -136,13 +136,13 @@ Voice Channel Stat Display
 - Right now it creates new channels and deletes the old, will soon edit instead
 - I'm planning on making emoji's customizable and each VC toggalable individually
 
-![VC Stats](Screenshots/VCStats.png)
+![VC Stats](.github/screenshots/VCStats.png)
 
 Bot "Now Playing" ROM count
 - Lists number of ROMs as the bot's status
 - Updates whenever API is refreshed via timer or manually
 
-![Bot Status](Screenshots/BotStatus.png)
+![Bot Status](.github/screenshots/BotStatus.png)
 
 ## Error Handling
 
