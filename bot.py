@@ -222,12 +222,11 @@ intents.message_content = True
 intents.voice_states = True
 bot = RommBot(intents=intents)
 
-# Define cogs
+# Define and load cogs
 cogs_list = [
 'emoji_manager',
+'info'
 ]   
-
-# Load cogs
 for cog in cogs_list:
         bot.load_extension(f'cogs.{cog}')
 
@@ -433,47 +432,6 @@ async def refresh(ctx: discord.ApplicationContext):
     except Exception as e:
         logger.error(f"Error in refresh command: {e}", exc_info=True)
         await ctx.respond("❌ An error occurred while manually updating data")
-
-@bot.slash_command(name="website", description="Get the website URL")
-async def website(ctx: discord.ApplicationContext):
-    """Website information command."""
-    await ctx.respond(
-        embed=discord.Embed(
-            title="Website Information",
-            description=bot.config.DOMAIN,
-            color=discord.Color.blue()
-        )
-    )
-
-@bot.slash_command(name="stats", description="Display current API stats")
-async def stats(ctx: discord.ApplicationContext):
-    """Stats display command with cache usage."""
-    try:
-        stats_data = bot.cache.get('stats')
-        if stats_data:
-            last_fetch_time = bot.cache.last_fetch.get('stats')
-            if last_fetch_time:
-                time_str = datetime.fromtimestamp(last_fetch_time).strftime('%Y-%m-%d %H:%M:%S')
-            else:
-                time_str = "Unknown"
-                
-            embed = discord.Embed(
-                title="Collection Stats",
-                description=f"Last updated: {time_str}",
-                color=discord.Color.blue()
-            )
-            
-            for stat, value in stats_data.items():
-                emoji = STAT_EMOJIS.get(stat, "📊")
-                field_value = f"{value:,} TB" if stat == "Storage Size" else f"{value:,}"
-                embed.add_field(name=f"{emoji} {stat}", value=field_value, inline=False)
-            
-            await ctx.respond(embed=embed)
-        else:
-            await ctx.respond("No API data available yet. Try using /refresh first!")
-    except Exception as e:
-        logger.error(f"Error in stats command: {e}", exc_info=True)
-        await ctx.respond("❌ An error occurred while fetching stats")
 
 @bot.slash_command(name="platforms", description="Display all platforms w/ROM counts")
 async def platforms(ctx: discord.ApplicationContext):
@@ -828,7 +786,7 @@ async def search(
         logger.error(f"Error in search command: {e}", exc_info=True)
         await ctx.respond("❌ An error occurred while searching for ROMs")
 
-@bot.slash_command(name="firmware", description="List firmware files for a platform")
+@bot.slash_command(name="firmware", description="List firmware files available for a platform")
 async def firmware(
     ctx: discord.ApplicationContext,
             platform: discord.Option(
