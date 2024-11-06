@@ -7,6 +7,7 @@ A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) A
 Current
 - Near real-time ROM collection statistics in voice channel, bot status and via command
 - Platform-specific ROM searches that provide download link and game/file information
+- Per platform firmware file command that lists firmware files/information and provides download links
 - Custom game console emoji uploads upon bot installation, use of said emojis in bot responses and stats
 - Rate-limited Discord API interactions
 - Caching system for improved performance
@@ -14,7 +15,6 @@ Current
 - Relatively detailed logging system
 
 Planned (if possible)
-- Per platform firmware file command that lists firmware files/information and provides download links
 - Initiate RomM library scan globally and by platform
 - Generate and pass EmulatorJS launcher links via command (maybe)
 - Help command that lists all commands
