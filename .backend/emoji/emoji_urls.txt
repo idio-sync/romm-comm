@@ -50,5 +50,5 @@ wii|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backe
 xbox_360|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/xbox_360.png
 xbox_og|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/xbox_og.png
 
-# Default icon source:
+# Icon source:
 # https://www.deviantart.com/starvingartist/art/Antiseptic-Videogame-Systems-23217105
