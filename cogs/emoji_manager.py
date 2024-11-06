@@ -5,11 +5,12 @@ import asyncio
 import os
 import json
 from typing import Dict, List, Tuple
+import requests
 
 class EmojiManager(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.emoji_file_path = os.path.join('resources', 'emoji', 'emoji_urls.txt')
+        self.emoji_url_list = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/emoji_urls.txt"
         self.processed_servers_file = os.path.join('resources', 'emoji', 'processed_servers.json')
         self.processed_servers = self.load_processed_servers()
 
@@ -28,13 +29,18 @@ class EmojiManager(commands.Cog):
 
     async def load_emoji_list(self) -> List[Tuple[str, str]]:
         """Load emoji data from the text file."""
-        if not os.path.exists(self.emoji_file_path):
-            print(f"Warning: Emoji file not found at {self.emoji_file_path}")
-            return []
-
-        emoji_list = []
-        with open(self.emoji_file_path, 'r') as f:
-            for line in f:
+        try:
+            # Get the raw content from GitHub using aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.emoji_url_list) as response:
+                    if response.status != 200:
+                        print(f"Warning: Failed to fetch emoji list: {response.status}")
+                        return []
+                    content = await response.text()
+        
+            # Parse the content into emoji pairs
+            emoji_list = []
+            for line in content.splitlines():
                 line = line.strip()
                 if line and not line.startswith('#'):  # Skip empty lines and comments
                     try:
@@ -43,7 +49,11 @@ class EmojiManager(commands.Cog):
                     except ValueError:
                         print(f"Warning: Invalid line format: {line}")
                         continue
-        return emoji_list
+            return emoji_list
+        
+        except Exception as e:
+            print(f"Warning: Failed to load emoji list: {str(e)}")
+            return []
 
     async def upload_emoji(self, guild: discord.Guild, name: str, url: str) -> bool:
         """Upload a single emoji to the server."""
@@ -108,7 +118,7 @@ class EmojiManager(commands.Cog):
     )
     @commands.has_permissions(manage_emojis=True)
     async def emoji_force_upload(self, ctx):
-        """Force upload emojis to the current server, even if they've been uploaded before."""
+        """Force upload emojis to the current server, even if they've been uploaded before. WILL CREATE DUPLICATES"""
         await ctx.defer()
         
         try:
@@ -125,5 +135,5 @@ class EmojiManager(commands.Cog):
             print(f"Error in force_emoji_upload: {e}")
             await ctx.respond("❌ An error occurred while uploading emojis")
 
-def setup(bot):  # Changed to non-async setup
-    bot.add_cog(EmojiManager(bot))  # Removed await
+def setup(bot):
+    bot.add_cog(EmojiManager(bot))
