@@ -1,0 +1,54 @@
+# URLs of custom emojis that will be uploaded by the bot upon joining a server. 
+# Server ID is stored in processed_servers.json so the bot knows what servers it has already uplaoded to.
+# Non Nitro servers have a limit of 50 custom emoji uploads but the bot can store 2,000.
+# Use /force_emoji_upload in Discord to force a reupload.
+
+# valid URL example: emoji_name|url
+# happy_face|https://example.com/happy.png
+
+
+# List start
+2600|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/2600.png
+32x|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/32x.png
+3do|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/3do.png
+ds|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/ds.png
+ds_lite|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/ds_lite.png
+dsi|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/dsi.png
+dreamcast|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/dreamcast.png
+game_gear|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/game_gear.png
+gameboy|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/gameboy.png
+gameboy_advance|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/gameboy_advance.png
+gameboy_advance_sp|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/gameboy_advance_sp.png
+gameboy_color|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/gameboy_color.png
+gameboy_micro|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/gameboy_micro.png
+gameboy_pocket|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/gameboy_pocket.png
+gamecube|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/gamecube.png
+genesis|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/genesis.png
+genesis_2|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/genesis_2.png
+jaguar|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/jaguar.png
+master_system|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/master_system.png
+n_gage|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/n-gage.png
+n64|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/n64.png
+neogeo_aes|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/neogeo_aes.png
+neogeo_pocket_color|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/neogeo_pocket_color.png
+nes|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/nes.png
+nomad|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/nomad.png
+ps|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/ps.png
+ps2|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/ps2.png
+ps2_slim|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/ps2_slim.png
+ps3|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/ps3.png
+ps3_slim|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/ps3_slim.png
+ps_one|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/ps_one.png
+psp|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/psp.png
+psp_go|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/psp_go.png
+saturn_2|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/saturn_2.png
+snes|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/snes.png
+tg_16|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/tg-16.png
+turboduo|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/turboduo.png
+turboexpress|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/turboexpress.png
+wii|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/wii.png
+xbox_360|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/xbox_360.png
+xbox_og|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/xbox_og.png
+
+# Default icon source:
+# https://www.deviantart.com/starvingartist/art/Antiseptic-Videogame-Systems-23217105
