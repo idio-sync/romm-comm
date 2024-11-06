@@ -739,7 +739,13 @@ async def search(
                     # Total Rating (Doesn't pull over romm api?)
                     # if total_rating := selected_rom.get('total_rating'):
                         # embed.add_field(name="Rating", value=f"{total_rating:.1f}/100", inline=True)
-
+                                                      
+                    # Summary (truncated at 200 characters)
+                    if summary := selected_rom.get('summary'):
+                        if len(summary) > 240:
+                            summary = summary[:237] + "..."
+                        embed.add_field(name="Summary", value=summary, inline=False)
+                    
                     # Companies
                     if companies := selected_rom.get('companies'):
                         if isinstance(companies, list):
@@ -748,12 +754,6 @@ async def search(
                             companies_str = str(companies)
                         if companies_str:
                             embed.add_field(name="Companies", value=companies_str, inline=False)
-                                    
-                    # Summary (truncated at 200 characters)
-                    if summary := selected_rom.get('summary'):
-                        if len(summary) > 200:
-                            summary = summary[:195] + "(...)"
-                        embed.add_field(name="Summary", value=summary, inline=False)
                     
                     # Download link with size
                     file_size = format_file_size(selected_rom.get('file_size_bytes'))
