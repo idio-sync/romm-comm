@@ -9,8 +9,8 @@
 
 # List start
 2600|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/2600.png
-32x|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/32x.png
-3do|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/3do.png
+32x|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/32x.png
+3do|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/3do.png
 ds|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ds.png
 ds_lite|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ds_lite.png
 dsi|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/dsi.png
