@@ -26,9 +26,8 @@ gamecube|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/r
 genesis|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/genesis.png
 genesis_2|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/genesis_2.png
 jaguar|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/jaguar.png
-mac_90s|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/mac_90s.png
 master_system|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/master_system.png
-n-gage|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/n-gage.png
+n_gage|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/n-gage.png
 n64|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/n64.png
 neogeo_aes|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/neogeo_aes.png
 neogeo_pocket_color|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/neogeo_pocket_color.png
@@ -44,7 +43,7 @@ psp|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resour
 psp_go|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/psp_go.png
 saturn_2|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/saturn_2.png
 snes|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/snes.png
-tg-16|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/tg-16.png
+tg_16|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/tg-16.png
 turboduo|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/turboduo.png
 turboexpress|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/turboexpress.png
 wii|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/resources/emoji/wii.png
