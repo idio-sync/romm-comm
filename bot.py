@@ -95,6 +95,7 @@ class Config:
         except ValueError:
             raise ValueError("GUILD_ID and CHANNEL_ID must be numeric values")
 
+    
 def sanitize_platform_data(raw_data: List[Dict]) -> List[Dict]:
     """Sanitize and format the platforms endpoint data."""
     try:
@@ -214,11 +215,21 @@ class RommBot(discord.Bot):
             await self.session.close()
         await super().close()
 
+
 # Initialize bot with optimized configurations
 intents = discord.Intents.default()
 intents.message_content = True
 intents.voice_states = True
 bot = RommBot(intents=intents)
+
+# Define cogs
+cogs_list = [
+'emoji_manager',
+]   
+
+# Load cogs
+for cog in cogs_list:
+        bot.load_extension(f'cogs.{cog}')
 
 # Stat type to emoji mapping
 STAT_EMOJIS = {
