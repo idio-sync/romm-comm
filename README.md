@@ -21,7 +21,7 @@ In Progress
 - QR code generation for 3DS/Vita installation via apps like FBI and downloads direct to console
 
 Planned (if possible)
-- Generate and pass EmulatorJS launcher links via command (maybe)
+- Generate and pass EmulatorJS launcher links via command
 - List collections command
 - RomM file scan progress reporting (via RomM logs?)
 - User count included in stats
