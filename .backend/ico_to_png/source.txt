@@ -1,0 +1,1 @@
+https://github.com/rommapp/romm/tree/release/frontend/assets/platforms
