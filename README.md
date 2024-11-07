@@ -54,7 +54,7 @@ pip install py-cord aiohttp python-dotenv
 
 ## RomM Settings
 
-1. If you want browser downloads to function for users without logging in and Switch shop/Qr code downloads to function on consoles, set Add '''env DISABLE_DOWNLOAD_ENDPOINT_AUTH=true''' to your RomM environment variables.
+1. If you want browser downloads to function for users without logging in and Switch shop/Qr code downloads to function on consoles, set Add '''DISABLE_DOWNLOAD_ENDPOINT_AUTH=true''' to your RomM environment variables.
 
 ## Configuration
 
