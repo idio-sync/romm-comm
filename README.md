@@ -9,20 +9,23 @@ Current
 - Platform-specific ROM searches that provide download link and game/file information
 - Per platform firmware file command that lists firmware files/information and provides download links
 - Custom game console emoji uploads upon bot installation, use of said emojis in bot responses and stats
+- Help command that lists all commands
 - Rate-limited Discord API interactions
 - Caching system for improved performance
 - Basic authentication support via http api requests
 - Relatively detailed logging system
 
-Planned (if possible)
+In Progress
 - Initiate RomM library scan globally and by platform
+- Random game roll (all platforms)
+
+Planned (if possible)
 - Generate and pass EmulatorJS launcher links via command (maybe)
-- Help command that lists all commands
 - List collections command
 - RomM file scan progress reporting (via RomM logs?)
 - User count included in stats
 - List users command
-- Random game/screenshot (globally, by platform, by year, by genre, etc)
+- Random game roll by platform, by year, by genre, etc
 - Docker installation
 - Linking Discord users with RomM users (creation of Romm users via role?)
 - RomM API key usage so user/pass do not have to be passed (if RomM implements creating API key)
