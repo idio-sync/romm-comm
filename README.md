@@ -10,7 +10,8 @@ Current
 - Per platform firmware file command that lists firmware files/information and provides download links
 - Custom game console emoji uploads upon bot installation, use of said emojis in bot responses and stats
 - Help command that lists all commands
-- "Switch Shop Info" command that lists instructions on how to connect to the [Tinfoil](https://tinfoil.io/Download) endpoint of connected RomM server (download endpoint auth must be disabled on RomM instance)
+- "Switch Shop Info" command that lists instructions on how to connect to the [Tinfoil](https://tinfoil.io/Download) endpoint
+  of connected RomM server (download endpoint auth must be disabled on RomM instance)
 - Rate-limited Discord API interactions
 - Caching system, the bot onnly fetches fresh stats if that particular stat has updated since last fetch
 - Basic authentication support via http and websockets api requests 
@@ -18,7 +19,8 @@ Current
 In Progress
 - Initiate RomM library scan globally and by platform
 - Random game roll (all platforms)
-- QR code generation for 3DS/Vita rom installation via apps like FBI/[FBI Reloaded](https://github.com/TheRealZora/FBI-Reloaded)/[VitaShell](https://github.com/RealYoti/VitaShell) and downloads direct to console (download endpoint auth must be disabled on RomM instance)
+- QR code generation for 3DS/Vita rom installation via apps like FBI/[FBI Reloaded](https://github.com/TheRealZora/FBI-Reloaded)/[VitaShell](https://github.com/RealYoti/VitaShell) and downloads
+  direct to console (download endpoint auth must be disabled on RomM instance)
 
 Planned (if possible)
 - Generate and pass EmulatorJS launcher links via command
@@ -54,7 +56,8 @@ pip install py-cord aiohttp python-dotenv
 
 ## RomM Settings
 
-1. If you want browser downloads to function for users without logging in and Switch shop/Qr code downloads to function on consoles, set Add '''DISABLE_DOWNLOAD_ENDPOINT_AUTH=true''' to your RomM environment variables.
+1. If you want browser downloads to function for users without logging in and Switch shop/Qr code downloads
+   to function on consoles, set Add '''DISABLE_DOWNLOAD_ENDPOINT_AUTH=true''' to your RomM environment variables.
 
 ## Configuration
 
@@ -116,12 +119,12 @@ Display all available platforms with their ROM counts.
 
 ### /search [platform] [game]
 Search for ROMs by platform and game name. Provides:
-- Interactive selection menu listing first 25 results (may make configurable)
+- Interactive selection menu listing first 25 results
 - Platform selection autofill (pulled from RomM's internal list of avalable platforms)
 - File names
 - File sizes
 - Hash details (CRC, MD5, SHA1)
-- Download links pointing to your public URL (user still needs RomM login to DL in browser)
+- Download links pointing to your public URL or IP if configured
 - Cover images when available (if RomM's game entry is properly matched to an IGDB entry)
 - React with the :qr_code: emoji and the bot will respond with a QR code for 3DS/Vita dowloads
 
@@ -132,14 +135,14 @@ List available firmware files for a specific platform. Shows:
 - File names
 - File sizes
 - Hash details (CRC, MD5, SHA1)
-- Download links pointing to your public URL (user still needs RomM login to DL in browser)
+- Download links pointing to your public URL or IP
 
 ![Slash Firmware](.github/screenshots/SlashFirmware.png)
 
-### /scan [platform]
+### /scan [platform] (WIP)
 Trigger RomM library scan for a particular platform. 
 
-### /fullscan
+### /fullscan (WIP)
 Trigger RomM library scan for all platforms
 
 ## Visable Statistics
