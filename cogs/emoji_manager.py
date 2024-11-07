@@ -112,7 +112,7 @@ class EmojiManager(commands.Cog):
         self.processed_servers[guild_id_str] = uploaded_emojis
         self.save_processed_servers()
 
-    @commands.slash_command(
+    @discord.slash_command(
         name="emoji_force_upload",
         description="Force upload all of the bot's custom emojis to the current server"
     )
