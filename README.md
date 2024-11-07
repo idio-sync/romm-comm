@@ -10,6 +10,7 @@ Current
 - Per platform firmware file command that lists firmware files/information and provides download links
 - Custom game console emoji uploads upon bot installation, use of said emojis in bot responses and stats
 - Help command that lists all commands
+- "Switch Shop Info" command that lists instructions on how to connect to the [Tinfoil](https://tinfoil.io/Download) endpoint of connected RomM server
 - Rate-limited Discord API interactions
 - Caching system for improved performance
 - Basic authentication support via http api requests
@@ -18,7 +19,7 @@ Current
 In Progress
 - Initiate RomM library scan globally and by platform
 - Random game roll (all platforms)
-- QR code generation for 3DS/Vita installation via apps like FBI and downloads direct to console
+- QR code generation for 3DS/Vita installation via apps like FBI/[FBI Reloaded](https://github.com/TheRealZora/FBI-Reloaded) and downloads direct to console
 
 Planned (if possible)
 - Generate and pass EmulatorJS launcher links via command
