@@ -7,7 +7,7 @@
 # happy_face|https://example.com/happy.png
 
 
-# List start
+# Platforms
 2600|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/2600.png
 32x|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/32x.png
 3do|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/3do.png
@@ -49,6 +49,9 @@ turboexpress|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/ma
 wii|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/wii.png
 xbox_360|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/xbox_360.png
 xbox_og|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/xbox_og.png
+
+# Utilities
+qr_code|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/qr_code.gif
 
 # Icon source:
 # https://www.deviantart.com/starvingartist/art/Antiseptic-Videogame-Systems-23217105
