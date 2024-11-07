@@ -17,7 +17,7 @@ class Scan(commands.Cog):
         self.config = bot.config
         self.scan_start_time: Optional[datetime] = None
         self.last_channel: Optional[discord.TextChannel] = None
-        self._connection_lock = asyncio.Lock()  # Add lock for connection management
+        self._connection_lock = asyncio.Lock()
         self.setup_socket_handlers()
 
     def setup_socket_handlers(self):
@@ -38,7 +38,7 @@ class Scan(commands.Cog):
         async def on_disconnect():
             logger.warning("Disconnected from websocket")
 
-        @self.sio.on('scan:done')
+        @self.sio.on('done')
         async def on_scan_complete(stats):
             try:
                 if self.scan_start_time is None:
@@ -47,19 +47,39 @@ class Scan(commands.Cog):
 
                 duration = datetime.now() - self.scan_start_time
                 duration_str = str(duration).split('.')[0]
-                
+        
+                # Get scan stats
+                added_platforms = stats.get('added_platforms', 0)
+                added_roms = stats.get('added_roms', 0)
+                scanned_roms = stats.get('scanned_roms', 0)
+                # total_data_added = stats.get('total_data_added', 0)  # Assuming data in bytes
+
+                # Format total data added in a human-readable way
+                #if total_data_added >= 1_000_000_000_000:
+                    #data_size = f"{total_data_added / 1_000_000_000_000:.2f} TB"
+                #elif total_data_added >= 1_000_000_000:
+                    #data_size = f"{total_data_added / 1_000_000_000:.2f} GB"
+                #elif total_data_added >= 1_000_000:
+                    #data_size = f"{total_data_added / 1_000_000:.2f} MB"
+                #elif total_data_added >= 1_000:
+                    #data_size = f"{total_data_added / 1_000:.2f} KB"
+                #else:
+                    #data_size = f"{total_data_added} bytes"
+        
                 message = (
                     f"✅ Scan completed in {duration_str}\n"
                     f"📊 Stats:\n"
-                    f"- Added Platforms: {stats.get('added_platforms', 0)}\n"
-                    f"- Added ROMs: {stats.get('added_roms', 0)}\n"
-                    f"- Total ROMs Scanned: {stats.get('scanned_roms', 0)}"
+                    f"- Added Platforms: {added_platforms}\n"
+                    f"- Added ROMs: {added_roms}\n"
+                    f"- Total ROMs Scanned: {scanned_roms}\n"
+                    #f"- Total Data Added: {data_size}"
                 )
-                
+        
                 if self.last_channel:
                     await self.last_channel.send(message)
             except Exception as e:
                 logger.error(f"Error handling scan completion: {e}")
+
 
         @self.sio.on('scan:done_ko')
         async def on_scan_error(error_message):
@@ -68,6 +88,15 @@ class Scan(commands.Cog):
                     await self.last_channel.send(f"❌ Scan failed: {error_message}")
             except Exception as e:
                 logger.error(f"Error handling scan error: {e}")
+        
+        @self.sio.on('scan:scanning_platform')
+        async def on_scanning_platform(platform_name):
+            """Update the user about the progress of the platform scan."""
+            try:
+                if self.last_channel:
+                await self.last_channel.send(f"🔍 Scanning platform: {platform_name}")
+            except Exception as e:
+                logger.error(f"Error sending scan update: {e}")
 
     async def ensure_connected(self):
         async with self._connection_lock:  # Use lock to prevent multiple simultaneous connection attempts
@@ -153,12 +182,7 @@ class Scan(commands.Cog):
             self.last_channel = ctx.channel
             self.scan_start_time = datetime.now()
             
-            await self.sio.emit('scan', {
-                'platforms': [platform_id],
-                'type': 'quick',
-                'roms_ids': [],
-                'apis': ['igdb', 'moby']
-            })
+            await self.sio.emit('scan', json.dumps([platform_id]), {'complete_rescan': False})
             
             await ctx.respond(f"🔍 Started scanning platform: {platform_name}")
             
@@ -170,26 +194,78 @@ class Scan(commands.Cog):
     @discord.slash_command(name="fullscan", description="Perform a full system scan")
     async def fullscan(self, ctx: discord.ApplicationContext):
         await ctx.defer()
-        
+    
         try:
             # Connect to websocket before updating channel and time
             await self.ensure_connected()
-            
+        
+            # Save the last used channel and scan start time for completion tracking
             self.last_channel = ctx.channel
             self.scan_start_time = datetime.now()
-            
-            await self.sio.emit('scan', {
-                'platforms': [],
-                'type': 'complete',
-                'roms_ids': [],
-                'apis': ['igdb', 'moby']
-            })
-            
+
+            # Emit the full scan event with complete_rescan set to True
+            await self.sio.emit('scan', json.dumps([]), {'complete_rescan': True})
+
+            # Notify user that full scan has started
             await ctx.respond("🔍 Started full system scan. Default maximum scan length is four hours.")
-            
+        
         except Exception as e:
             logger.error(f"Error in fullscan command: {e}")
             await ctx.respond("❌ Error: Failed to start full scan. Please try again later.")
+
+    @discord.slash_command(name="stopscan", description="Stop the current scan process.")
+    async def stopscan(self, ctx: discord.ApplicationContext):
+        await ctx.defer()
+    
+        try:
+            # Emit the `scan:stop` event to halt any ongoing scan
+            await self.sio.emit("scan:stop")
+        
+            await ctx.respond("🛑 Scan stop request has been sent.")
+        except Exception as e:
+            logger.error(f"Error in stopscan command: {e}")
+            await ctx.respond("❌ Error: Failed to send stop scan request.")
+    
+    @discord.slash_command(name="scanstatus", description="Get the current scan status.")
+        async def scanstatus(self, ctx: discord.ApplicationContext):
+            await ctx.defer()
+
+            try:
+                if self.scan_start_time is None:
+                    await ctx.respond("❌ No scan is currently running.")
+                    return
+
+                # Calculate scan duration
+                duration = datetime.now() - self.scan_start_time
+                duration_str = str(duration).split('.')[0]
+        
+                # Get scan stats
+                added_roms = self.scan_progress.get('added_roms', 0)
+                # total_data_added = self.scan_progress.get('total_data_added', 0)  # Total data in bytes
+
+                # Format total data added
+                # if total_data_added >= 1_000_000_000_000:
+                    # data_size = f"{total_data_added / 1_000_000_000_000:.2f} TB"
+                # elif total_data_added >= 1_000_000_000:
+                    # data_size = f"{total_data_added / 1_000_000_000:.2f} GB"
+                # elif total_data_added >= 1_000_000:
+                    # data_size = f"{total_data_added / 1_000_000:.2f} MB"
+                # elif total_data_added >= 1_000:
+                    # data_size = f"{total_data_added / 1_000:.2f} KB"
+                # else:
+                    # data_size = f"{total_data_added} bytes"
+        
+                message = (
+                    f"⏱️ Scan Duration: {duration_str}\n"
+                    f"📊 Current Scan Status:\n"
+                    f"👾 ROMs Added So Far: {added_roms}\n"
+                    # f"- Total Data Added: {data_size}"
+                )
+
+        await ctx.respond(message)
+    except Exception as e:
+        logger.error(f"Error fetching scan status: {e}")
+        await ctx.respond("❌ Error: Failed to fetch scan status.")
 
     def cog_unload(self):
         """Cleanup when cog is unloaded."""
