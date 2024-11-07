@@ -1,6 +1,6 @@
 # URLs of custom emojis that will be uploaded by the bot upon joining a server. 
 # Server ID is stored in processed_servers.json so the bot knows what servers it has already uplaoded to.
-# Non Nitro servers have a limit of 50 custom emoji uploads but the bot can store 2,000.
+# Non Nitro servers have a limit of 50 custom emoji uploads but the bot can store 2,000 uploaded to the dev portal.
 # Use /force_emoji_upload in Discord to force a reupload.
 
 # valid URL example: emoji_name|url
