@@ -10,7 +10,7 @@ Current
 - Per platform firmware file command that lists firmware files/information and provides download links
 - Custom game console emoji uploads upon bot installation, use of said emojis in bot responses and stats
 - Help command that lists all commands
-- "Switch Shop Info" command that lists instructions on how to connect to the [Tinfoil](https://tinfoil.io/Download) endpoint of connected RomM server
+- "Switch Shop Info" command that lists instructions on how to connect to the [Tinfoil](https://tinfoil.io/Download) endpoint of connected RomM server (download endpoint auth must be disabled on RomM instance)
 - Rate-limited Discord API interactions
 - Caching system for improved performance
 - Basic authentication support via http api requests
