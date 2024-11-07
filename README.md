@@ -19,7 +19,7 @@ Current
 In Progress
 - Initiate RomM library scan globally and by platform
 - Random game roll (all platforms)
-- QR code generation for 3DS/Vita rom installation via apps like FBI/[FBI Reloaded](https://github.com/TheRealZora/FBI-Reloaded) and downloads direct to console
+- QR code generation for 3DS/Vita rom installation via apps like FBI/[FBI Reloaded](https://github.com/TheRealZora/FBI-Reloaded)/[VitaShell](https://github.com/RealYoti/VitaShell) and downloads direct to console
 
 Planned (if possible)
 - Generate and pass EmulatorJS launcher links via command
