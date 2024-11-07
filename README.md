@@ -1,4 +1,4 @@
-# romm-comm
+# RomM-ComM (RomM Communicator Module)
 
 A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) API to provide information about your ROM collection.
 
@@ -12,9 +12,8 @@ Current
 - Help command that lists all commands
 - "Switch Shop Info" command that lists instructions on how to connect to the [Tinfoil](https://tinfoil.io/Download) endpoint of connected RomM server (download endpoint auth must be disabled on RomM instance)
 - Rate-limited Discord API interactions
-- Caching system for improved performance
-- Basic authentication support via http api requests
-- Relatively detailed logging system
+- Caching system, the bot onnly fetches fresh stats if that particular stat has updated since last fetch
+- Basic authentication support via http and websockets api requests 
 
 In Progress
 - Initiate RomM library scan globally and by platform
@@ -52,6 +51,10 @@ pip install py-cord aiohttp python-dotenv
 ```
 ## Discord Bot Token Creation
 - See https://docs.pycord.dev/en/stable/discord.html
+
+## RomM Settings
+
+1. If you want browser downloads to function for users without logging in and Switch shop/Qr code downloads to function on consoles, set Add '''env DISABLE_DOWNLOAD_ENDPOINT_AUTH=true''' to your RomM environment variables.
 
 ## Configuration
 
@@ -120,6 +123,7 @@ Search for ROMs by platform and game name. Provides:
 - Hash details (CRC, MD5, SHA1)
 - Download links pointing to your public URL (user still needs RomM login to DL in browser)
 - Cover images when available (if RomM's game entry is properly matched to an IGDB entry)
+- React with the :qr_code: emoji and the bot will respond with a QR code for 3DS/Vita dowloads
 
 ![Slash Search](.github/screenshots/SlashSearch.png)
 
@@ -131,6 +135,12 @@ List available firmware files for a specific platform. Shows:
 - Download links pointing to your public URL (user still needs RomM login to DL in browser)
 
 ![Slash Firmware](.github/screenshots/SlashFirmware.png)
+
+### /scan [platform]
+Trigger RomM library scan for a particular platform. 
+
+### /fullscan
+Trigger RomM library scan for all platforms
 
 ## Visable Statistics
 
@@ -145,7 +155,7 @@ Voice Channel Stat Display
 
 Bot "Now Playing" ROM count
 - Lists number of ROMs as the bot's status
-- Updates whenever API is refreshed via timer or manually
+- Updates whenever API data is refreshed via timer or manually
 
 ![Bot Status](.github/screenshots/BotStatus.png)
 
@@ -158,18 +168,6 @@ The bot includes comprehensive error handling and logging:
 - Data validation
 - Cache management
 
-Logs are saved with timestamps and include:
-- INFO level for normal operations
-- WARNING level for non-critical issues
-- ERROR level for critical problems
-
-## Rate Limiting
-
-The bot implements rate limiting to prevent Discord API abuse:
-- Default: 30 calls per minute
-- Automatic queue management
-- Built-in wait times for API calls
-
 ## Cache System
 
 Implements an efficient caching system:
@@ -180,41 +178,20 @@ Implements an efficient caching system:
 
 ## Security
 
-- Basic authentication for API requests using http
-- Environment variable configuration
+- Basic authentication for API requests using http and websockets
+- Environment variable configuration instead of storing passwors in code
 - No sensitive data logging (passwords, etc)
 - Proper permission checking
 
 ## Troubleshooting
 
-1. Bot not responding:
-   - Check Discord bot token
-   - Verify bot permissions on Discord's end
-   - Check API connectivity to RomM
-
-2. Statistics not updating:
-   - Verify API URL
-   - Check API credentials
-   - Confirm SYNC_RATE setting
-
-3. Voice channels not updating:
-   - Ensure UPDATE_VOICE_NAMES is true
-   - Verify bot has channel management permissions
-   - Check rate limiting settings
+- Check Discord bot token
+- Verify bot permissions on Discord's end
+- Check API connectivity to RomM
+- Check logs for error messages, I tried to meticulously report errors
+- Verify configuration settings in the env
 
 ## Support
 
-For issues and feature requests, please:
-1. Check logs for error messages, I tried to meticulously report errors 
-2. Verify configuration settings in the env
-3. Ensure all bot permissions are correctly set in the Discord dev settings
-4. I'm not promising that development will be super active on my end, so feel free
+1. I'm not promising that development will be super active on my end, so feel free
    to poke around the code yourself and see what's up and suggest changes
-
-## Note
-
-As I am new to coding, this project has utilized a good deal of code produced 
-by ai models and modified by me to fit the needs of the project. I am learning 
-as I go, and hopefully as the project progresses I will be able to contribute more
-and more of my own code. If you see anything glaring, please feel free to reach out
-and inform me.
