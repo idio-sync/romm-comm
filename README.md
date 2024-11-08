@@ -18,7 +18,7 @@ Current
 
 In Progress
 - Initiate RomM library scan globally and by platform
-- Random game roll (all platforms)
+- Random game roll (optional platform input or all platforms)
 - QR code generation for 3DS/Vita rom installation via apps like FBI/[FBI Reloaded](https://github.com/TheRealZora/FBI-Reloaded)/[VitaShell](https://github.com/RealYoti/VitaShell) and downloads
   direct to console (download endpoint auth must be disabled on RomM instance)
 
@@ -28,7 +28,6 @@ Planned (if possible)
 - RomM file scan progress reporting (via RomM logs?)
 - User count included in stats
 - List users command
-- Random game roll by platform, by year, by genre, etc
 - Docker installation
 - Linking Discord users with RomM users (creation of Romm users via role?)
 - RomM API key usage so user/pass do not have to be passed (if RomM implements creating API key)
