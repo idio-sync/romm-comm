@@ -8,8 +8,9 @@ Current
 - Near real-time ROM collection statistics in voice channel, bot status and via command
 - Platform-specific ROM searches that provide download link and game/file information
 - Per platform firmware file command that lists firmware files/information and provides download links
-- Custom game console emoji uploads upon bot installation, use of said emojis in bot responses and stats
-- Help command that lists all commands
+- Custom game console emoji uploads upon bot installation, use of said emojis in bot responses and stats.
+- QR code generation for 3DS/Vita rom installation via apps like FBI/[FBI Reloaded](https://github.com/TheRealZora/FBI-Reloaded)/[VitaShell](https://github.com/RealYoti/VitaShell) and downloads
+  direct to console (download endpoint auth must be disabled on RomM instance). React to /search or /random reply with the custom qr_code emoji to trigger. 
 - "Switch Shop Info" command that lists instructions on how to connect to the [Tinfoil](https://tinfoil.io/Download) endpoint
   of connected RomM server (download endpoint auth must be disabled on RomM instance)
 - Rate-limited Discord API interactions
@@ -19,8 +20,6 @@ Current
 In Progress
 - Initiate RomM library scan globally and by platform
 - Random game roll (optional platform input or all platforms)
-- QR code generation for 3DS/Vita rom installation via apps like FBI/[FBI Reloaded](https://github.com/TheRealZora/FBI-Reloaded)/[VitaShell](https://github.com/RealYoti/VitaShell) and downloads
-  direct to console (download endpoint auth must be disabled on RomM instance)
 
 Planned (if possible)
 - Generate and pass EmulatorJS launcher links via command
