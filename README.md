@@ -49,7 +49,7 @@ Planned (if possible)
 1. Clone the repository or download the source code
 2. Install required dependencies:
 ```bash
-pip install py-cord aiohttp python-dotenv
+pip install py-cord aiohttp python-dotenv qrcode Pillow python-socketio
 ```
 ## Discord Bot Token Creation
 - See https://docs.pycord.dev/en/stable/discord.html
