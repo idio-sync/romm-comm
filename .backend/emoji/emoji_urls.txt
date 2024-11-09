@@ -43,6 +43,8 @@ psp|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backe
 psp_go|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/psp_go.png
 saturn_2|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/saturn_2.png
 snes|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/snes.png
+switch|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/switch.png
+switch_docked|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/switch_docked.png
 tg_16|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/tg-16.png
 turboduo|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/turboduo.png
 turboexpress|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/turboexpress.png
