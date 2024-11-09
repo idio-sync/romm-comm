@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+from discord.commands import slash_command
 from datetime import datetime
 from typing import Dict, Any
 import logging
@@ -10,7 +11,7 @@ logger = logging.getLogger('romm_bot')
 STAT_EMOJIS = {
     "Platforms": "🎮", "Roms": "👾", "Saves": "📁", 
     "States": "⏸", "Screenshots": "📸", "Storage Size": "💾",
-    "Active Users": "👥"
+    "User Count": "👤"
 }
 
 class Info(commands.Cog):
@@ -19,8 +20,6 @@ class Info(commands.Cog):
         self.stat_channels = {}
         self.last_stats = {}  # Store previous stats for comparison
      
-    ## Update voice Channel stats
-    #  Main logic
     async def get_or_create_category(self, guild: discord.Guild, category_name: str) -> discord.CategoryChannel:
         """Get or create a category in the guild."""
         category = discord.utils.get(guild.categories, name=category_name)
@@ -50,9 +49,13 @@ class Info(commands.Cog):
             return
             
         stats_data = self.bot.cache.get('stats')
+        user_count_data = self.bot.cache.get('user_count')        
         if not stats_data:
             return
-            
+        
+        if user_count_data and 'user_count' in user_count_data:
+            stats_data['User Count'] = user_count_data['user_count']
+        
         # Check if stats have changed
         if not self.has_stats_changed(stats_data):
             return
@@ -117,7 +120,7 @@ class Info(commands.Cog):
                 await self.bot.change_presence(
                     activity=discord.Activity(
                         type=discord.ActivityType.playing,
-                        name=f"{stats_data['Roms']:,} games 🕹"
+                        name=f"{stats_data['Roms']:,} games 🎮"
                     ),
                     status=discord.Status.online
                 )
@@ -209,7 +212,13 @@ class Info(commands.Cog):
         """Stats display command with cache usage."""
         try:
             stats_data = self.bot.cache.get('stats')
+            user_count_data = self.bot.cache.get('user_count')
+            
             if stats_data:
+                # Merge user count into stats data if available
+                if user_count_data and 'user_count' in user_count_data:
+                    stats_data['User Count'] = user_count_data['user_count']
+                
                 last_fetch_time = self.bot.cache.last_fetch.get('stats')
                 if last_fetch_time:
                     time_str = datetime.fromtimestamp(last_fetch_time).strftime('%Y-%m-%d %H:%M:%S')
@@ -217,11 +226,12 @@ class Info(commands.Cog):
                     time_str = "Unknown"
                 
                 embed = discord.Embed(
-                    title="Collection Stats",
+                    title="Server Stats",
                     description=f"Last updated: {time_str}",
                     color=discord.Color.blue()
                 )
             
+                # Display all stats including user count in the same format
                 for stat, value in stats_data.items():
                     emoji = STAT_EMOJIS.get(stat, "📊")
                     field_value = f"{value:,} TB" if stat == "Storage Size" else f"{value:,}"
@@ -234,7 +244,6 @@ class Info(commands.Cog):
             if hasattr(self.bot, 'logger'):
                 self.bot.logger.error(f"Error in stats command: {e}", exc_info=True)
             await ctx.respond("❌ An error occurred while fetching stats")
-        pass
 
     # Refresh
     @discord.slash_command(
@@ -280,7 +289,7 @@ class Info(commands.Cog):
             # Fetch platforms data
             raw_platforms = await self.bot.fetch_api_endpoint('platforms')
             if raw_platforms:
-                platforms_data = self.bot.sanitize_platform_data(raw_platforms)
+                platforms_data = self.bot.sanitize_data(raw_platforms, data_type='platforms')
             
                 if platforms_data:
                     # Create embed with platform information
@@ -404,5 +413,44 @@ class Info(commands.Cog):
             logger.error(f"Error in switch shop connection info command: {e}", exc_info=True)
             await ctx.respond("❌ An error occurred while displaying Switch shop connection info")
     
+    # Add this command to your Info class in info.py
+    @discord.slash_command(
+        name="sync",
+        description="Manually sync bot commands (Owner only)"
+    )
+    @commands.is_owner()  # This ensures only the bot owner can use it
+    async def sync(self, ctx):
+        """Manually sync slash commands."""
+        try:
+            await ctx.defer(ephemeral=True)  # Show thinking state and make response private
+            
+            logger.info("Manual command sync initiated by owner")
+            await self.bot.sync_commands()
+            
+            embed = discord.Embed(
+                title="✅ Command Sync Successful",
+                description="All slash commands have been synced to Discord.",
+                color=discord.Color.green()
+            )
+            
+            await ctx.respond(embed=embed, ephemeral=True)
+            
+        except discord.HTTPException as e:
+            if e.code == 429:  # Rate limit error
+                retry_after = e.retry_after if hasattr(e, 'retry_after') else 3600
+                embed = discord.Embed(
+                    title="⚠️ Rate Limited",
+                    description=f"Command sync is rate limited. Please try again in {retry_after:.1f} seconds.",
+                    color=discord.Color.orange()
+                )
+            else:
+                embed = discord.Embed(
+                    title="❌ Sync Failed",
+                    description=f"Error: {str(e)}",
+                    color=discord.Color.red()
+                )
+            
+            await ctx.respond(embed=embed, ephemeral=True)
+            logger.error(f"Sync command error: {e}")
 def setup(bot):
     bot.add_cog(Info(bot))
