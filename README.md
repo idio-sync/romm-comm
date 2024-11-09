@@ -6,21 +6,20 @@ A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) A
 
 Current
 - Near real-time ROM collection statistics in voice channel, bot status and via command
-- Platform-specific ROM searches that provide download link and game/file information
-- Per platform firmware file command that lists firmware files/information and provides download links
+- Platform-specific ROM searches that provide download link and game/file information as well as a rondom ROM roll
+- Platform based firmware search that lists firmware file information and provides download links
+- RomM scan management that includes the ability to start/stop different types of rom scans and reports back with
+  info about the scan when complete, and also during a scan in progress using a command.
 - Custom game console emoji uploads upon bot installation, use of said emojis in bot responses and stats.
-- QR code generation for 3DS/Vita rom installation via apps like FBI/[FBI Reloaded](https://github.com/TheRealZora/FBI-Reloaded)/[VitaShell](https://github.com/RealYoti/VitaShell) and downloads
-  direct to console (download endpoint auth must be disabled on RomM instance). React to /search or /random reply with the custom qr_code emoji to trigger. 
-- "Switch Shop Info" command that lists instructions on how to connect to the [Tinfoil](https://tinfoil.io/Download) endpoint
+- QR code generation for 3DS/Vita rom installation via apps like FBI/[FBI Reloaded](https://github.com/TheRealZora/FBI-Reloaded)/[VitaShell](https://github.com/RealYoti/VitaShell) (download endpoint auth must be   disabled on RomM instance).
+- Switch Shop Info command that lists instructions on how to connect to the [Tinfoil](https://tinfoil.io/Download) endpoint
   of connected RomM server (download endpoint auth must be disabled on RomM instance)
 - Rate-limited Discord API interactions
 - Caching system, the bot onnly fetches fresh stats if that particular stat has updated since last fetch
-- Basic authentication support via http and websockets api requests 
 
 In Progress
-- Initiate RomM library scan globally and by platform
-- Random game roll (works globally, optional platform input or all platforms is still broken)
 
+ 
 Planned (if possible)
 - Generate and pass EmulatorJS launcher links via command
 - List collections command
