@@ -115,6 +115,9 @@ class RommBot(discord.Bot):
         self.session: Optional[aiohttp.ClientSession] = None
         self._session_lock = asyncio.Lock()
 
+        # Add a commands sync flag
+        self.synced = False
+
         # Global cooldown
         self._cd_bucket = commands.CooldownMapping.from_cooldown(1, 60, commands.BucketType.user)
         
@@ -187,12 +190,30 @@ class RommBot(discord.Bot):
         """When bot is ready, start tasks."""
         logger.info(f'{self.user} has connected to Discord!')
 
+        # Load cogs
         await self.load_all_cogs()
-
         loaded_cogs = list(self.cogs.keys())
         logger.info(f"Currently loaded cogs: {loaded_cogs}")
-        await self.sync_commands()
+
+        # Only sync commands once
+        if not self.synced:
+            try:
+                guild = self.get_guild(self.config.GUILD_ID)
+                if guild:
+                    # Sync to specific guild
+                    synced = await self.sync_commands(guild_ids=[guild.id])
+                    logger.info(f"Synced commands to guild {guild.name}")
+                    self.synced = True
+                
+                    # Debug info about available commands
+                    all_commands = [
+                        cmd.name for cmd in self.application_commands
+                    ]
+                    logger.info(f"Available commands: {all_commands}")
+            except Exception as e:
+                logger.error(f"Failed to sync commands: {e}", exc_info=True)
         
+        # Start update loop if not running
         if not self.update_loop.is_running():
             self.update_loop.start()
                     
@@ -265,40 +286,44 @@ class RommBot(discord.Bot):
         """Convert bytes to terabytes with 2 decimal places."""
         return round(bytes_value / (1024 ** 4), 2)
 
-    def sanitize_stats_data(self, raw_data: Dict) -> Optional[Dict]:
-        """Sanitize and format the stats endpoint data."""
+    def sanitize_data(self, raw_data: Dict, data_type: str) -> Optional[Dict]:
+        """Generalized function to sanitize various types of data."""
         try:
-            return {
-                "Platforms": raw_data.get('PLATFORMS', 0),
-                "Roms": raw_data.get('ROMS', 0),
-                "Saves": raw_data.get('SAVES', 0),
-                "States": raw_data.get('STATES', 0),
-                "Screenshots": raw_data.get('SCREENSHOTS', 0),
-                "Storage Size": self.bytes_to_tb(raw_data.get('FILESIZE', 0))
-            }
-        except Exception as e:
-            logger.error(f"Error sanitizing stats data: {e}")
-            return None
-
-    def sanitize_platform_data(self, raw_data: List[Dict]) -> List[Dict]:
-        """Sanitize and format the platforms endpoint data."""
-        try:
-        # Extract relevant platform information and sort alphabetically
-            platforms = [
-                {
-                    "id": platform.get("id", 0),  # Added ID field
-                    "name": platform.get("name", "Unknown Platform"),
-                    "rom_count": platform.get("rom_count", 0)
+            if data_type == 'stats':
+                return {
+                    "Platforms": raw_data.get('PLATFORMS', 0),
+                    "Roms": raw_data.get('ROMS', 0),
+                    "Saves": raw_data.get('SAVES', 0),
+                    "States": raw_data.get('STATES', 0),
+                    "Screenshots": raw_data.get('SCREENSHOTS', 0),
+                    "Storage Size": self.bytes_to_tb(raw_data.get('FILESIZE', 0))
                 }
-                for platform in raw_data
-                if isinstance(platform, dict) and platform.get("name") and platform.get("rom_count")
-            ]
         
-            # Sort alphabetically by platform name
-            return sorted(platforms, key=lambda x: x["name"].lower())
+            elif data_type == 'platforms':
+                return [
+                    {
+                        "id": platform.get("id", 0),
+                        "name": platform.get("name", "Unknown Platform"),
+                        "rom_count": platform.get("rom_count", 0)
+                    }
+                    for platform in raw_data if isinstance(platform, dict) and platform.get("name") and platform.get("rom_count")
+                ]
+        
+            elif data_type == 'user_count':
+                user_count = raw_data.get('user_count', 0)
+                # Validate the user count as a non-negative integer
+                if isinstance(user_count, int) and user_count >= 0:
+                    return {"user_count": user_count}
+                else:
+                    logger.warning(f"Invalid user count data: {user_count}")
+                    return None
+            else:
+                logger.warning(f"Unsupported data type for sanitization: {data_type}")
+                return None
+
         except Exception as e:
-            logger.error(f"Error sanitizing platform data: {e}")
-            return [] 
+            logger.error(f"Error sanitizing {data_type} data: {e}")
+            return None
 
     async def close(self):
         """Cleanup resources on shutdown."""
@@ -312,9 +337,9 @@ class RommBot(discord.Bot):
             # Stats Update
             raw_stats = await self.fetch_api_endpoint('stats', bypass_cache=True)
             stats_success = False
-            
+        
             if raw_stats is not None:
-                sanitized_stats = self.sanitize_stats_data(raw_stats)
+                sanitized_stats = self.sanitize_data(raw_stats, 'stats')
                 if sanitized_stats:
                     self.cache.set('stats', sanitized_stats)
                     stats_success = True
@@ -327,9 +352,9 @@ class RommBot(discord.Bot):
             # Platforms Update
             raw_platforms = await self.fetch_api_endpoint('platforms', bypass_cache=True)
             platforms_success = False
-            
+        
             if raw_platforms is not None:
-                sanitized_platforms = self.sanitize_platform_data(raw_platforms)
+                sanitized_platforms = self.sanitize_data(raw_platforms, 'platforms')
                 if sanitized_platforms:
                     self.cache.set('platforms', sanitized_platforms)
                     platforms_success = True
@@ -339,14 +364,32 @@ class RommBot(discord.Bot):
             else:
                 logger.warning("Failed to fetch platforms data")
 
+            # User Count Update
+            user_count_success = False
+            try:
+                users_data = await self.fetch_api_endpoint('users', bypass_cache=True)
+                if users_data is not None:
+                    user_count_data = {"user_count": len(users_data)}
+                    sanitized_user_count = self.sanitize_data(user_count_data, 'user_count')
+                    if sanitized_user_count is not None:
+                        self.cache.set('user_count', sanitized_user_count)
+                        user_count_success = True
+                        logger.info(f"Successfully updated user count data: {sanitized_user_count}")
+                    else:
+                        logger.warning("Failed to sanitize user count data")
+                else:
+                    logger.warning("Failed to fetch users data")
+            except Exception as e:
+                logger.error(f"Error fetching user count data: {e}")
+
             # Update presence based on overall success
-            success = stats_success and platforms_success
+            success = stats_success and platforms_success and user_count_success
             info_cog = self.get_cog('Info')
             if info_cog:
                 await info_cog.update_presence(success)
             else:
                 logger.error("Info cog not found when trying to update presence")
-            
+        
             # Update stat channels if stats were updated
             guild = self.get_guild(self.config.GUILD_ID)
             if guild and success:
@@ -354,7 +397,7 @@ class RommBot(discord.Bot):
                     await info_cog.update_stat_channels(guild)
                 else:
                     logger.error("Info cog not found when trying to update stat channels")
-            
+        
             if self.config.SHOW_API_SUCCESS:
                 channel = self.get_channel(self.config.CHANNEL_ID)
                 if channel:
@@ -363,6 +406,7 @@ class RommBot(discord.Bot):
                         if success else "❌ Failed to update API data"
                     )
                     await channel.send(status_message)
+
         except Exception as e:
             logger.error(f"Error in update task: {e}", exc_info=True)
 
