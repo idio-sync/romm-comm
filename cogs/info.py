@@ -326,9 +326,9 @@ class Info(commands.Cog):
         """Display Switch shop connection setup instructions."""
         try:
             embed = discord.Embed(
-                title=":switch: Switch Shop Connection Guide :switch_docked:",
-                description="Follow these steps to configure your Switch for connection to this server.\n"
-                           "*Note: This guide assumes you have Tinfoil installed and know how to use its basic functions.*",
+                title="Switch Shop Connection Guide",
+                description=":switch: Follow these steps to configure your Switch for connection to this server.\n"
+                           "*Note: This guide assumes you have Tinfoil installed and know how to use its basic functions.* :switch_docked:",
                 color=discord.Color.blue()
             )
 
