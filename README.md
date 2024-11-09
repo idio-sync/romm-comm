@@ -19,7 +19,7 @@ Current
 
 In Progress
 - Initiate RomM library scan globally and by platform
-- Random game roll (optional platform input or all platforms)
+- Random game roll (works globally, optional platform input or all platforms is still broken)
 
 Planned (if possible)
 - Generate and pass EmulatorJS launcher links via command
