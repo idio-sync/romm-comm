@@ -11,6 +11,7 @@ import io
 import aiohttp
 from io import BytesIO
 import asyncio
+import time
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -118,8 +119,8 @@ class ROM_View(discord.ui.View):
                     logger.error(f"Error formatting date: {e}")
             
             if summary := rom_data.get('summary'):
-                if len(summary) > 240:
-                    summary = summary[:237] + "..."
+                if len(summary) > 200:
+                    summary = summary[:197] + "..."
                 embed.add_field(name="Summary", value=summary, inline=False)
             
             if companies := rom_data.get('companies'):
@@ -138,12 +139,15 @@ class ROM_View(discord.ui.View):
             # Hash values
             hashes = []
             if crc := rom_data.get('crc_hash'):
-                hashes.append(f"**CRC:** {crc}")
-            if md5 := rom_data.get('md5_hash'):
+                if md5 := rom_data.get('md5_hash'):
+                    hashes.append(f"**CRC:** {crc} **MD5:** {md5}")
+                else:
+                    hashes.append(f"**CRC:** {crc}")
+            elif md5 := rom_data.get('md5_hash'):
                 hashes.append(f"**MD5:** {md5}")
             if sha1 := rom_data.get('sha1_hash'):
                 hashes.append(f"**SHA1:** {sha1}")
-            
+
             if hashes:
                 embed.add_field(name="Hash Values", value="\n".join(hashes), inline=False)
                 
@@ -178,9 +182,21 @@ class ROM_View(discord.ui.View):
     async def handle_qr_trigger(self, interaction: discord.Interaction, trigger_type: str):
         """Handle QR code generation and sending"""
         try:
-            selected_rom = self.search_results[0] if len(self.search_results) == 1 else None
-            if not selected_rom:
+            # For search results with multiple ROMs
+            if len(self.search_results) > 1 and not hasattr(interaction, 'values'):
                 await interaction.channel.send("Please select a ROM first!")
+                return
+
+            # Get the ROM data
+            selected_rom = None
+            if len(self.search_results) == 1:
+                selected_rom = self.search_results[0]
+            elif hasattr(interaction, 'values'):
+                selected_rom_id = int(interaction.values[0])
+                selected_rom = next((rom for rom in self.search_results if rom['id'] == selected_rom_id), None)
+
+            if not selected_rom:
+                await interaction.channel.send("❌ Unable to find ROM data")
                 return
 
             file_name = selected_rom.get('file_name', 'unknown_file').replace(' ', '%20')
@@ -204,92 +220,103 @@ class ROM_View(discord.ui.View):
                 await interaction.channel.send("❌ Failed to generate QR code")
         except Exception as e:
             logger.error(f"Error handling QR code request: {e}")
-            await interaction.channel.send("❌ An error occurred while generating the QR code")
+            await interaction.channel.send("❌ An error occurred while generating the QR code", ephemeral=True)
 
     async def start_watching_triggers(self, interaction: discord.Interaction):
-            """Start watching for QR code triggers"""
+        """Start watching for QR code triggers"""
+        try:
+            # Ensure we have a valid message reference
+            if not self.message:
+                logger.warning("No message reference for QR code triggers")
+                return
+
+            def message_check(m):
+                # First verify the reference exists
+                if not m.reference or not hasattr(m.reference, 'cached_message'):
+                    return False
+                    
+                referenced_message = m.reference.cached_message
+                # Make sure we can access the referenced message
+                if not referenced_message:
+                    return False
+                    
+                return (
+                    any(keyword in m.content.lower() for keyword in {'qr'}) and
+                    referenced_message.author.id == self.bot.user.id and  # Check if referencing our bot
+                    referenced_message.embeds and  # Referenced message should have embed
+                    self.message.embeds and  # Original message should have embed
+                    referenced_message.embeds[0].title == self.message.embeds[0].title  # Compare embed titles
+                )  
+            def reaction_check(reaction, user):
+                # List of accepted emoji names and Unicode emojis
+                valid_emojis = {
+                    'qr_code',  # Custom emoji names
+                    '📱', 'qr'  # Unicode emojis and text alternatives
+                }
+                return (
+                    user.id == self.author_id and
+                    reaction.message.embeds and  # Ensure message has embeds
+                    self.message.embeds and  # Ensure original message has embeds
+                    reaction.message.embeds[0].title == self.message.embeds[0].title and  # Compare embeds
+                    (getattr(reaction.emoji, 'name', str(reaction.emoji)).lower() in valid_emojis)  # Check emoji safely
+                )
+            # Create tasks for both events
+            message_task = asyncio.create_task(
+                self.bot.wait_for(
+                    'message',
+                    timeout=60.0,
+                    check=message_check
+                )
+            )
+            
+            reaction_task = asyncio.create_task(
+                self.bot.wait_for(
+                    'reaction_add',
+                    timeout=60.0,
+                    check=reaction_check
+                )
+            )
+
+            # Wait for either task to complete
             try:
-                # Define non-async check functions
-                def message_check(m):
-                    return (
-                        m.reference 
-                        and m.reference.message_id == interaction.message.id  # Check against the ROM details message
-                        and any(keyword in m.content.lower() for keyword in {'3ds', 'ds', 'psp', 'vita', 'qr'})
-                    )
-
-                def reaction_check(reaction, user):
-                    return (
-                        user.id == self.author_id
-                        and reaction.message.id == interaction.message.id  # Check against the ROM details message
-                        and str(reaction.emoji) in {'qr_code', '3ds', 'ds', 'vita', 'psp'}
-                    )
-
-                # Create tasks for both events
-                message_task = asyncio.create_task(
-                    self.bot.wait_for(
-                        'message',
-                        timeout=60.0,
-                        check=message_check
-                    )
+                done, pending = await asyncio.wait(
+                    [message_task, reaction_task],
+                    return_when=asyncio.FIRST_COMPLETED
                 )
+
+                # Cancel pending tasks
+                for task in pending:
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+
+                # Get the result from the completed task
+                result = done.pop().result()
                 
-                reaction_task = asyncio.create_task(
-                    self.bot.wait_for(
-                        'reaction_add',
-                        timeout=60.0,
-                        check=reaction_check
-                    )
-                )
+                if isinstance(result, discord.Message):
+                    trigger_type = "message reply"
+                else:
+                    reaction, user = result
+                    emoji_identifier = str(reaction.emoji.name) if hasattr(reaction.emoji, 'name') else str(reaction.emoji)
+                    trigger_type = f"reaction {reaction.emoji}"
                 
-                reaction_task = asyncio.create_task(
-                    self.bot.wait_for(
-                        'reaction_add',
-                        timeout=60.0,
-                        check=reaction_check
-                    )
-                )
+                await self.handle_qr_trigger(interaction, trigger_type)
 
-                # Wait for either task to complete
-                try:
-                    done, pending = await asyncio.wait(
-                        [message_task, reaction_task],
-                        return_when=asyncio.FIRST_COMPLETED
-                    )
+            except asyncio.TimeoutError:
+                logger.info("QR code trigger watch timed out")
+                return
 
-                    # Cancel pending tasks
-                    for task in pending:
-                        task.cancel()
-                        try:
-                            await task
-                        except asyncio.CancelledError:
-                            pass
-
-                    # Get the result from the completed task
-                    result = done.pop().result()
-                    
-                    if isinstance(result, discord.Message):
-                        trigger_type = "message reply"
-                    else:
-                        reaction, user = result
-                        trigger_type = f"reaction {reaction.emoji}"
-                    
-                    await self.handle_qr_trigger(interaction, trigger_type)
-
-                except asyncio.TimeoutError:
-                    await interaction.channel.send("⏰ Timed out waiting for QR code trigger")
-
-            except Exception as e:
-                logger.error(f"Error watching for triggers: {e}")
-                await interaction.channel.send("❌ An error occurred while watching for triggers")
+        except Exception as e:
+            logger.error(f"Error watching for triggers: {e}")
 
     async def watch_for_qr_triggers(self, interaction: discord.Interaction):
         """Start watching for QR code triggers after ROM selection"""
-     #  await interaction.channel.send(
-     #      "**📱 QR Code Available!**\n"
-     #      "• React with 3DS/DS/Vita/PSP emoji\n"
-     #      "• Or reply with '3ds', 'ds', 'psp', 'vita', or 'qr'\n"
-     #      "to get a QR code for this ROM."
-     #  )
+        if not self.message:
+            logger.warning("No message reference for QR code triggers")
+            return
+            
         await self.start_watching_triggers(interaction)
 
     async def select_callback(self, interaction: discord.Interaction):
@@ -342,7 +369,7 @@ class Search(commands.Cog):
             if not platforms_data:
                 raw_platforms = await self.bot.fetch_api_endpoint('platforms')
                 if raw_platforms:
-                    platforms_data = self.bot.sanitize_platform_data(raw_platforms)
+                    platforms_data = self.bot.sanitize_data(raw_platforms, data_type='platforms')
 
             if platforms_data:
                 platform_names = [p.get('name', '') for p in platforms_data if p.get('name')]
@@ -434,36 +461,143 @@ class Search(commands.Cog):
             logger.error(f"Error in firmware command: {e}")
             await ctx.respond("❌ An error occurred while fetching firmware data")
 
-    @discord.slash_command(name="random", description="Get a random ROM from the collection")
-    async def random(self, ctx: discord.ApplicationContext):
-        """Get a random ROM from the collection."""
+    @discord.slash_command(name="random", description="Get a random ROM from the collection or a specific platform")
+    async def random(
+        self, 
+        ctx: discord.ApplicationContext,
+        platform: discord.Option(
+            str, 
+            "Platform to get random ROM from", 
+            required=False,
+            autocomplete=platform_autocomplete
+        )
+    ):
+        """Get a random ROM from the collection or a specific platform."""
         await ctx.defer()
-        
         try:
-            await self.bot.rate_limiter.acquire()
-            if status and 'stats' in self.bot.cache.cache:
-                stats_data = self.bot.cache.cache['stats']
-        
-            if not stats_data:
-                await ctx.respond("❌ Unable to fetch collection data")
-                return
+            if platform:
+                # Get platform data
+                raw_platforms = await self.bot.fetch_api_endpoint('platforms')
+                if not raw_platforms:
+                    await ctx.respond("❌ Unable to fetch platforms data")
+                    return
             
-            total_roms = stats_data.get('ROMS', 0)
-            if total_roms <= 0:
-                await ctx.respond("❌ No ROMs found in the collection")
-                return
+                # Find matching platform
+                platform_id = None
+                platform_name = None
+                sanitized_platforms = self.bot.sanitize_data(raw_platforms, data_type='platforms')
             
-            random_offset = random.randint(0, total_roms - 1)
-            random_rom = await self.bot.fetch_api_endpoint(f'roms?offset={random_offset}&limit=1')
-            
-            if not random_rom or not isinstance(random_rom, list) or len(random_rom) == 0:
-                await ctx.respond("❌ Failed to fetch random ROM")
-                return
+                for p in sanitized_platforms:
+                    if p['name'].lower() == platform.lower():
+                        platform_id = p['id']
+                        platform_name = p['name']
+                        rom_count = p['rom_count']
+                        break
+                    
+                if not platform_id:
+                    platforms_list = "\n".join(f"• {name}" for name in sorted([p['name'] for p in sanitized_platforms]))
+                    await ctx.respond(f"❌ Platform '{platform}' not found. Available platforms:\n{platforms_list}")
+                    return
 
-            message = await ctx.respond(
-                f"🎲 Found a random ROM! Game #{random_offset + 1} of {total_roms}:",
-                view=ROM_View(self.bot, random_rom, ctx.author.id)
-            )
+                if rom_count <= 0:
+                    await ctx.respond(f"❌ No ROMs found for platform '{platform_name}'")
+                    return
+
+                # Try up to 5 times to find a valid ROM for the specific platform
+                max_attempts = 5
+                for attempt in range(max_attempts):
+                    # Calculate random offset (subtract 1 from limit to avoid exceeding total)
+                    random_offset = random.randint(0, max(0, rom_count - 1))
+                
+                    # First get the list of ROMs at this offset
+                    rom_list = await self.bot.fetch_api_endpoint(
+                        f'roms?platform_id={platform_id}&limit=1&order_by=random&order_dir=asc'
+                    )
+                
+                    if rom_list and isinstance(rom_list, list) and len(rom_list) > 0:
+                        rom_data = rom_list[0]  # Get the first ROM from the result
+                    
+                        # Fetch detailed ROM data if available
+                        try:
+                            detailed_rom = await self.bot.fetch_api_endpoint(f'roms/{rom_data["id"]}')
+                            if detailed_rom:
+                                rom_data.update(detailed_rom)
+                        except Exception as e:
+                            logger.error(f"Error fetching detailed ROM data: {e}")
+                    
+                        # Create ROM view without select menu
+                        view = ROM_View(self.bot, [rom_data], ctx.author.id, platform_name)
+                        view.remove_item(view.select)
+                        embed = await view.create_rom_embed(rom_data)
+
+                        initial_message = await ctx.respond(
+                            f"🎲 Found a random ROM from {platform_name}:",
+                            embed=embed,
+                            view=view
+                        )
+    
+                        if isinstance(initial_message, discord.Interaction):
+                            initial_message = await initial_message.original_response()
+                    
+                        view.message = initial_message
+                        await view.watch_for_qr_triggers(ctx.interaction)
+                        return
+
+                    logger.info(f"Random ROM attempt {attempt + 1} for platform {platform_name} failed")
+                    await asyncio.sleep(1)
+
+            else:
+                # Original random logic for any platform
+                stats_data = self.bot.cache.get('stats')
+                if not stats_data or 'Roms' not in stats_data:
+                    await ctx.respond("❌ Unable to fetch collection data")
+                    return
+                
+                total_roms = stats_data['Roms']
+                if total_roms <= 0:
+                    await ctx.respond("❌ No ROMs found in the collection")
+                    return
+
+                # Try up to 5 times to find a valid ROM
+                max_attempts = 5
+                for attempt in range(max_attempts):
+                    random_rom_id = random.randint(1, total_roms)
+                    rom_data = await self.bot.fetch_api_endpoint(f'roms/{random_rom_id}')
+                
+                    if rom_data and isinstance(rom_data, dict) and rom_data.get('id'):
+                        # Get platform name
+                        platform_name = None
+                        if platform_id := rom_data.get('platform_id'):
+                            platforms_data = self.bot.cache.get('platforms')
+                            if platforms_data:
+                                for p in platforms_data:
+                                    if p.get('id') == platform_id:
+                                        platform_name = p.get('name')
+                                        break
+
+                        # Create ROM view without select menu
+                        view = ROM_View(self.bot, [rom_data], ctx.author.id, platform_name)
+                        view.remove_item(view.select)
+                        embed = await view.create_rom_embed(rom_data)
+
+                        initial_message = await ctx.respond(
+                            f"🎲 Found a random ROM" + (f" from {platform_name}" if platform_name else "") + ":",
+                            embed=embed,
+                            view=view
+                        )
+    
+                        if isinstance(initial_message, discord.Interaction):
+                            initial_message = await initial_message.original_response()
+                    
+                        view.message = initial_message
+                        await view.watch_for_qr_triggers(ctx.interaction)
+                        return
+
+                    logger.info(f"Random ROM attempt {attempt + 1} with ID {random_rom_id} failed")
+                    await asyncio.sleep(1)
+
+            # If we tried max_attempts times and couldn't find a valid ROM
+            await ctx.respond("❌ Failed to find a valid random ROM. Please try again.")
 
         except Exception as e:
             logger.error(f"Error in random command: {e}", exc_info=True)
@@ -488,7 +622,7 @@ class Search(commands.Cog):
             # Find matching platform
             platform_id = None
             platform_name = None
-            sanitized_platforms = self.bot.sanitize_platform_data(raw_platforms)
+            sanitized_platforms = self.bot.sanitize_data(raw_platforms, data_type='platforms')
             
             for p in sanitized_platforms:
                 if p['name'].lower() == platform.lower():
