@@ -52,27 +52,13 @@ class Scan(commands.Cog):
                 added_platforms = stats.get('added_platforms', 0)
                 added_roms = stats.get('added_roms', 0)
                 scanned_roms = stats.get('scanned_roms', 0)
-                # total_data_added = stats.get('total_data_added', 0)  # Assuming data in bytes
 
-                # Format total data added in a human-readable way
-                #if total_data_added >= 1_000_000_000_000:
-                    #data_size = f"{total_data_added / 1_000_000_000_000:.2f} TB"
-                #elif total_data_added >= 1_000_000_000:
-                    #data_size = f"{total_data_added / 1_000_000_000:.2f} GB"
-                #elif total_data_added >= 1_000_000:
-                    #data_size = f"{total_data_added / 1_000_000:.2f} MB"
-                #elif total_data_added >= 1_000:
-                    #data_size = f"{total_data_added / 1_000:.2f} KB"
-                #else:
-                    #data_size = f"{total_data_added} bytes"
-        
                 message = (
                     f"✅ Scan completed in {duration_str}\n"
                     f"📊 Stats:\n"
                     f"- Added Platforms: {added_platforms}\n"
                     f"- Added ROMs: {added_roms}\n"
                     f"- Total ROMs Scanned: {scanned_roms}\n"
-                    #f"- Total Data Added: {data_size}"
                 )
         
                 if self.last_channel:
@@ -94,7 +80,7 @@ class Scan(commands.Cog):
             """Update the user about the progress of the platform scan."""
             try:
                 if self.last_channel:
-                await self.last_channel.send(f"🔍 Scanning platform: {platform_name}")
+                    await self.last_channel.send(f"🔍 Scanning platform: {platform_name}")
             except Exception as e:
                 logger.error(f"Error sending scan update: {e}")
 
@@ -227,7 +213,7 @@ class Scan(commands.Cog):
             await ctx.respond("❌ Error: Failed to send stop scan request.")
     
     @discord.slash_command(name="scanstatus", description="Get the current scan status.")
-        async def scanstatus(self, ctx: discord.ApplicationContext):
+    async def scanstatus(self, ctx: discord.ApplicationContext):
             await ctx.defer()
 
             try:
@@ -242,30 +228,17 @@ class Scan(commands.Cog):
                 # Get scan stats
                 added_roms = self.scan_progress.get('added_roms', 0)
                 # total_data_added = self.scan_progress.get('total_data_added', 0)  # Total data in bytes
-
-                # Format total data added
-                # if total_data_added >= 1_000_000_000_000:
-                    # data_size = f"{total_data_added / 1_000_000_000_000:.2f} TB"
-                # elif total_data_added >= 1_000_000_000:
-                    # data_size = f"{total_data_added / 1_000_000_000:.2f} GB"
-                # elif total_data_added >= 1_000_000:
-                    # data_size = f"{total_data_added / 1_000_000:.2f} MB"
-                # elif total_data_added >= 1_000:
-                    # data_size = f"{total_data_added / 1_000:.2f} KB"
-                # else:
-                    # data_size = f"{total_data_added} bytes"
         
                 message = (
                     f"⏱️ Scan Duration: {duration_str}\n"
                     f"📊 Current Scan Status:\n"
                     f"👾 ROMs Added So Far: {added_roms}\n"
-                    # f"- Total Data Added: {data_size}"
                 )
 
-        await ctx.respond(message)
-    except Exception as e:
-        logger.error(f"Error fetching scan status: {e}")
-        await ctx.respond("❌ Error: Failed to fetch scan status.")
+                await ctx.respond(message)
+            except Exception as e:
+                logger.error(f"Error fetching scan status: {e}")
+                await ctx.respond("❌ Error: Failed to fetch scan status.")
 
     def cog_unload(self):
         """Cleanup when cog is unloaded."""
