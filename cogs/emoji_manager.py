@@ -113,11 +113,12 @@ class EmojiManager(commands.Cog):
         self.save_processed_servers()
 
     @discord.slash_command(
-        name="emoji_force_upload",
-        description="Force upload all of the bot's custom emojis to the current server"
+        name="emoji_upload",
+        description="Force upload the bot's custom emojis to current server (owner only)"
     )
     @commands.has_permissions(manage_emojis=True)
-    async def emoji_force_upload(self, ctx):
+    @commands.is_owner()  # This ensures only the bot owner can use it
+    async def emoji_upload(self, ctx):
         """Force upload emojis to the current server, even if they've been uploaded before. WILL CREATE DUPLICATES"""
         await ctx.defer()
         
