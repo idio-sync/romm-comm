@@ -11,6 +11,7 @@
 2600|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/2600.png
 32x|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/32x.png
 3do|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/3do.png
+3ds|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/3ds.png
 ds|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ds.png
 ds_lite|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ds_lite.png
 dsi|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/dsi.png
@@ -33,6 +34,7 @@ neogeo_aes|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main
 neogeo_pocket_color|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/neogeo_pocket_color.png
 nes|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/nes.png
 nomad|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/nomad.png
+pc|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/pc.png
 ps|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ps.png
 ps2|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ps2.png
 ps2_slim|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ps2_slim.png
@@ -48,6 +50,7 @@ switch_docked|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/m
 tg_16|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/tg-16.png
 turboduo|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/turboduo.png
 turboexpress|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/turboexpress.png
+vita|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/vita.png
 wii|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/wii.png
 xbox_360|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/xbox_360.png
 xbox_og|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/xbox_og.png
