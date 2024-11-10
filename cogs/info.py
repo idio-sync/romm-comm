@@ -323,12 +323,12 @@ class Info(commands.Cog):
         description="Instructions for connecting your Switch to this server"
     )
     async def switch_shop_info(self, ctx):
-        """Display Switch shop connection setup instructions."""
+        """Display Switch shop connection setup instructions."""      
         try:
             embed = discord.Embed(
-                title="Switch Shop Connection Guide",
-                description=":switch: Follow these steps to configure your Switch for connection to this server.\n"
-                           "*Note: This guide assumes you have Tinfoil installed and know how to use its basic functions.* :switch_docked:",
+                title=f"{self.bot.emoji_dict['switch']}  Switch Shop Connection Guide  {self.bot.emoji_dict['switch_docked']}",
+                description="Follow these steps to configure your Switch for connection to this server.\n"
+                           "/n*Note: This guide assumes you have Tinfoil installed and know how to use its basic functions.*",
                 color=discord.Color.blue()
             )
 
