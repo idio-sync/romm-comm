@@ -21,7 +21,6 @@ In Progress
 
 Planned (if possible)
 - Generate and pass EmulatorJS launcher links via command or include in game details after search
-- Docker installation
 - RomM API key usage so user/pass do not have to be passed (if RomM implements creating API key)
 - Better IGDB integration (currently pulles IGDB cover url from RomM db entry for game)
 - More robust request command that searches IGDB per platform and passes along requested game ID
@@ -41,6 +40,12 @@ Planned (if possible)
 
 ## Installation
 
+Docker:
+1. `docker pull idiosync000/romm-comm:latest`
+2. Pass env variables as shown below
+3. Pass `/app/data` in the container to host directory, this is where the request DB and emoji sync status are stored
+
+Non-Docker:
 1. Clone the repository or download the source code
 2. Install required dependencies:
 ```bash
@@ -98,21 +103,6 @@ API_TIMEOUT=10
 - `CHANNEL_ID`: Channel ID for API sync result and user manager notifications to be sent to (if enabled above) and user manager log messages
 - `CACHE_TTL`: Cache time-to-live in seconds (default: 300)
 - `API_TIMEOUT`: API request timeout in seconds (default: 10)
-
-## Visable Statistics
-
-Voice Channel Stat Display
-- If enabled (`UPDATE_VOICE_NAMES=true`), the bot creates voice channels displaying platform, rom, save, savestate, and screenshot count as well as RomM storage use size and RomM user count
-- Updates at bot boot and if stats change upon API refresh
-
-![VC Stats](.github/screenshots/VCStats.png)
-
-Bot "Now Playing" ROM count
-- Lists number of ROMs as the bot's status
-- Updates whenever API data is refreshed via timer or manually
-
-![Bot Status](.github/screenshots/BotStatus.png)
-
 
 ## Available Commands
 
@@ -233,6 +223,23 @@ Role Removal:
 - Preserves admin accounts even if role is removed
 - Logs attempted deletions of admin accounts
 - Notifies server admins of protection
+
+## Visable Statistics
+
+Voice Channel Stat Display
+- If enabled (`UPDATE_VOICE_NAMES=true`), the bot creates voice channels displaying
+  platform, rom, save, savestate, and screenshot count as well as RomM storage use size
+- Only updates if stats change upon API refresh
+- Right now it creates new channels and deletes the old, will soon edit instead
+- I'm planning on making emoji's customizable and each VC toggalable individually
+
+![VC Stats](.github/screenshots/VCStats.png)
+
+Bot "Now Playing" ROM count
+- Lists number of ROMs as the bot's status
+- Updates whenever API data is refreshed via timer or manually
+
+![Bot Status](.github/screenshots/BotStatus.png)
 
 ## Error Handling
 
