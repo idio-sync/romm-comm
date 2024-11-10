@@ -11,7 +11,7 @@ class EmojiManager(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.emoji_url_list = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/emoji_urls.txt"
-        self.processed_servers_file = os.path.join('resources', 'emoji', 'processed_servers.json')
+        self.processed_servers_file = os.path.join('data', 'emoji_processed_servers.json')
         self.processed_servers = self.load_processed_servers()
         self.bot.emoji_dict = {}  # Dictionary for all emojis (once uploaded)
         bot.loop.create_task(self.initialize_emoji_dict())
