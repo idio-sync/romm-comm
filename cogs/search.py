@@ -506,43 +506,45 @@ class Search(commands.Cog):
                 # Try up to 5 times to find a valid ROM for the specific platform
                 max_attempts = 5
                 for attempt in range(max_attempts):
-                    # Calculate random offset (subtract 1 from limit to avoid exceeding total)
-                    random_offset = random.randint(0, max(0, rom_count - 1))
-                
-                    # First get the list of ROMs at this offset
-                    rom_list = await self.bot.fetch_api_endpoint(
-                        f'roms?platform_id={platform_id}&limit=1&order_by=random&order_dir=asc'
-                    )
-                
-                    if rom_list and isinstance(rom_list, list) and len(rom_list) > 0:
-                        rom_data = rom_list[0]  # Get the first ROM from the result
-                    
-                        # Fetch detailed ROM data if available
-                        try:
-                            detailed_rom = await self.bot.fetch_api_endpoint(f'roms/{rom_data["id"]}')
-                            if detailed_rom:
-                                rom_data.update(detailed_rom)
-                        except Exception as e:
-                            logger.error(f"Error fetching detailed ROM data: {e}")
-                    
-                        # Create ROM view without select menu
-                        view = ROM_View(self.bot, [rom_data], ctx.author.id, platform_name)
-                        view.remove_item(view.select)
-                        embed = await view.create_rom_embed(rom_data)
-
-                        initial_message = await ctx.respond(
-                            f"🎲 Found a random ROM from {platform_name}:",
-                            embed=embed,
-                            view=view
+                    try:
+                        # Get all ROMs for the platform
+                        all_roms = await self.bot.fetch_api_endpoint(
+                            f'roms?platform_id={platform_id}&limit={rom_count}'
                         )
-    
-                        if isinstance(initial_message, discord.Interaction):
-                            initial_message = await initial_message.original_response()
-                    
-                        view.message = initial_message
-                        await view.watch_for_qr_triggers(ctx.interaction)
-                        return
+                        
+                        if all_roms and isinstance(all_roms, list) and len(all_roms) > 0:
+                            # Select a random ROM from the list
+                            rom_data = random.choice(all_roms)
+                            
+                            # Fetch detailed ROM data if available
+                            try:
+                                detailed_rom = await self.bot.fetch_api_endpoint(f'roms/{rom_data["id"]}')
+                                if detailed_rom:
+                                    rom_data.update(detailed_rom)
+                            except Exception as e:
+                                logger.error(f"Error fetching detailed ROM data: {e}")
+                            
+                            # Create ROM view without select menu
+                            view = ROM_View(self.bot, [rom_data], ctx.author.id, platform_name)
+                            view.remove_item(view.select)
+                            embed = await view.create_rom_embed(rom_data)
 
+                            initial_message = await ctx.respond(
+                                f"🎲 Found a random ROM from {platform_name}:",
+                                embed=embed,
+                                view=view
+                            )
+
+                            if isinstance(initial_message, discord.Interaction):
+                                initial_message = await initial_message.original_response()
+                            
+                            view.message = initial_message
+                            await view.watch_for_qr_triggers(ctx.interaction)
+                            return
+
+                    except Exception as e:
+                        logger.error(f"Error in attempt {attempt + 1}: {e}")
+                    
                     logger.info(f"Random ROM attempt {attempt + 1} for platform {platform_name} failed")
                     await asyncio.sleep(1)
 
