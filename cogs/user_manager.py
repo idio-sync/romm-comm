@@ -8,6 +8,7 @@ import asyncio
 import aiohttp
 import os
 from dotenv import load_dotenv
+import base64
 
 # Load environment variables
 load_dotenv()
@@ -354,26 +355,6 @@ class UserManager(commands.Cog):
             logger.error(f"Error in link_existing_account for {member.display_name}: {e}", exc_info=True)
             return None
 
-    async def get_csrf_token(self) -> Optional[str]:
-        """Get CSRF token from the API"""
-        try:
-            session = await self.bot.ensure_session()
-            url = f"{self.bot.config.API_BASE_URL}/api/auth/login"
-            
-            async with session.get(url) as response:
-                if response.status == 200:
-                    # Get CSRF token from cookies
-                    cookies = response.cookies
-                    csrf_token = cookies.get('csrf_token')
-                    if csrf_token:
-                        return csrf_token.value
-                logger.error(f"Failed to get CSRF token. Status: {response.status}")
-                return None
-        except Exception as e:
-            logger.error(f"Error getting CSRF token: {e}")
-            return None
-
-
     async def create_user_account(self, member: discord.Member) -> bool:
         """Create a new user account and send credentials"""
         try:
@@ -389,42 +370,39 @@ class UserManager(commands.Cog):
             # Generate password and create new regular user
             password = await self.generate_secure_password()
             
-            # Get CSRF token
-            csrf_token = await self.get_csrf_token()
-            if not csrf_token:
-                logger.error("Failed to get CSRF token")
-                return False
-            
             session = await self.bot.ensure_session()
             url = f"{self.bot.config.API_BASE_URL}/api/users"
-            auth = aiohttp.BasicAuth(self.bot.config.USER, self.bot.config.PASS)
             
-            # Create form data
-            form_data = aiohttp.FormData()
-            form_data.add_field('username', username)
-            form_data.add_field('password', password)
-            form_data.add_field('role', 'USER')
-            form_data.add_field('enabled', 'true')
-            
-            logger.info(f"Making POST request to {url} for new user {username}")
+            # Create proper basic auth header
+            auth_str = f"{self.bot.config.USER}:{self.bot.config.PASS}"
+            auth_bytes = auth_str.encode('ascii')
+            auth_b64 = base64.b64encode(auth_bytes).decode('ascii')
             
             headers = {
                 "Accept": "application/json",
-                "X-CSRF-TOKEN": csrf_token,
-                "Cookie": f"csrf_token={csrf_token}"
+                "User-Agent": "RommBot/1.0",
+                "Authorization": f"Basic {auth_b64}"
             }
+
+            # Create JSON payload
+            payload = {
+                'username': username,
+                'password': password,
+                'role': 'USER'
+            }
+            
+            logger.info(f"Making POST request to {url} for new user {username}")
+            logger.info(f"Using auth header: Basic {auth_b64[:10]}...")  # Log part of auth header for debugging
             
             async with session.post(
                 url, 
-                data=form_data,
-                auth=auth,
+                json=payload,  # Use JSON instead of params
                 headers=headers,
-                allow_redirects=True
+                ssl=None  # Add this if using self-signed certs
             ) as response:
                 response_text = await response.text()
                 logger.info(f"Create user response status: {response.status}")
                 logger.info(f"Create user response body: {response_text}")
-                logger.info(f"Response headers: {response.headers}")
                 
                 if response.status not in (200, 201):
                     logger.error(f"Failed to create user account. Status: {response.status}, Response: {response_text}")
