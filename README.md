@@ -17,7 +17,7 @@ Current
 - Caching system, the bot onnly fetches fresh stats if that particular stat has updated since last fetch
 
 In Progress
-- RomM User Management: Manage users, automatically create RomM account for users with specific role
+- RomM User Management: Manage users, automatically create RomM account for users with specific role, module currently not included in main
 
 Planned (if possible)
 - Generate and pass EmulatorJS launcher links via command or include in game details after search
