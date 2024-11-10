@@ -32,13 +32,17 @@ Planned (if possible)
 - Pycord library
 - aiohttp
 - python-dotenv
+- qrcode
+- Pillow
+- python-socketio
+- requests
 
 ## Installation
 
 1. Clone the repository or download the source code
 2. Install required dependencies:
 ```bash
-pip install py-cord aiohttp python-dotenv qrcode Pillow python-socketio
+pip install py-cord aiohttp python-dotenv qrcode Pillow python-socketio requests
 ```
 ## Discord Bot Token Creation
 - See https://docs.pycord.dev/en/stable/discord.html
