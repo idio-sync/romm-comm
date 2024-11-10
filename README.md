@@ -165,7 +165,7 @@ Request System Features:
 - Uses SQLite database to store requests
 
 Admin Features:
--List all pending requests
+- List all pending requests
 - Fulfill or reject requests
 - Add notes to requests
 - DM notifications to users when their requests are fulfilled/rejected
