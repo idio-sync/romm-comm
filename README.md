@@ -168,6 +168,8 @@ Trigger RomM library scan. Options are:
 
 ![RrequestFulfulledDM](.github/screenshots/RequestFulfilledDM.png)
 
+![ListRequests](.github/screenshots/ListRequests.png)
+
 Request System Features:
 - Users can submit ROM requests with platform, game name, and optional details as text
 - Searches for existing ROM names in the RomM database to see if there is already a ROM present with the requested game name to avoid unnecessary requests
