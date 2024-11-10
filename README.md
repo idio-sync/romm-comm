@@ -9,6 +9,7 @@ Current
 - Search: Platform-specific ROM searches and random ROM roll that provide download link and game/file information
 - Search: Platform based firmware search that lists firmware file information and provides download links
 - Scans: Start/stop different types of RomM scans, report back with info about the scan when complete and also during a scan in progress via command
+- Request System: Make and manage ROM requests entirely in Discord, currently functional in a simple capacity but want to expand
 - Emojis: Custom game console emoji uploads upon bot installation, use of said emojis in bot responses and stats
 - QR code generation: Install games on 3DS/Vita via QR code with apps like FBI/[FBI Reloaded](https://github.com/TheRealZora/FBI-Reloaded)/[VitaShell](https://github.com/RealYoti/VitaShell) (download endpoint auth must be disabled on RomM instance)
 - Switch Shop Info: Command that lists instructions on how to connect to the [Tinfoil](https://tinfoil.io/Download) endpoint of connected RomM server (download endpoint auth must be disabled on RomM instance)
@@ -16,7 +17,6 @@ Current
 - Caching system, the bot onnly fetches fresh stats if that particular stat has updated since last fetch
 
 In Progress
-- Request System: Make and manage ROM requests entirely in Discord. Currently functional but want to do a usability/formattiong pass.
 - RomM User Management: Manage users, automatically create RomM account for users with specific role
 
 Planned (if possible)
