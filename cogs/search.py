@@ -23,7 +23,6 @@ console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
 class ROM_View(discord.ui.View):
-    """Shared view for both search and random commands"""
     def __init__(self, bot, search_results: List[Dict], author_id: int, platform_name: Optional[str] = None, initial_message: Optional[discord.Message] = None):
         super().__init__()
         self.bot = bot
@@ -31,6 +30,7 @@ class ROM_View(discord.ui.View):
         self.author_id = author_id
         self.platform_name = platform_name
         self.message = initial_message
+        self._selected_rom = None  # Initialize selected_rom
         
         # Create select menu
         self.select = discord.ui.Select(
@@ -189,18 +189,13 @@ class ROM_View(discord.ui.View):
         """Handle QR code generation and sending"""
         try:
             # For search results with multiple ROMs
-            if len(self.search_results) > 1 and not hasattr(interaction, 'values'):
+            if len(self.search_results) > 1 and not self._selected_rom:
                 await interaction.channel.send("Please select a ROM first!")
                 return
 
             # Get the ROM data
-            selected_rom = None
-            if len(self.search_results) == 1:
-                selected_rom = self.search_results[0]
-            elif hasattr(interaction, 'values'):
-                selected_rom_id = int(interaction.values[0])
-                selected_rom = next((rom for rom in self.search_results if rom['id'] == selected_rom_id), None)
-
+            selected_rom = self._selected_rom if self._selected_rom else self.search_results[0]
+            
             if not selected_rom:
                 await interaction.channel.send("❌ Unable to find ROM data")
                 return
@@ -226,7 +221,7 @@ class ROM_View(discord.ui.View):
                 await interaction.channel.send("❌ Failed to generate QR code")
         except Exception as e:
             logger.error(f"Error handling QR code request: {e}")
-            await interaction.channel.send("❌ An error occurred while generating the QR code", ephemeral=True)
+            await interaction.channel.send("❌ An error occurred while generating the QR code")  # Removed ephemeral
 
     async def start_watching_triggers(self, interaction: discord.Interaction):
         """Start watching for QR code triggers"""
@@ -330,13 +325,10 @@ class ROM_View(discord.ui.View):
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("This selection menu isn't for you!", ephemeral=True)
             return
-
         await interaction.response.defer()
-
         try:
             selected_rom_id = int(interaction.data['values'][0])
             selected_rom = next((rom for rom in self.search_results if rom['id'] == selected_rom_id), None)
-
             if selected_rom:
                 try:
                     detailed_rom = await self.bot.fetch_api_endpoint(f'roms/{selected_rom_id}')
@@ -344,19 +336,19 @@ class ROM_View(discord.ui.View):
                         selected_rom.update(detailed_rom)
                 except Exception as e:
                     logger.error(f"Error fetching detailed ROM data: {e}")
-
+                
                 embed = await self.create_rom_embed(selected_rom)
-                await interaction.message.edit(
+                edited_message = await interaction.message.edit(
                     content=interaction.message.content,
                     embed=embed,
                     view=self
                 )
-                    
-                # Store the message for QR code trigger reference
-                self.message = interaction.message
-                    
-                # Start watching for QR code triggers
-                await self.watch_for_qr_triggers(interaction)
+                
+                # Store both the edited message and selected ROM
+                self.message = edited_message
+                self._selected_rom = selected_rom  # Store the selected ROM
+                
+                # Don't start watching for QR triggers here since the search command already does it
             else:
                 await interaction.followup.send("❌ Error retrieving ROM details", ephemeral=True)
         except Exception as e:
@@ -534,7 +526,7 @@ class Search(commands.Cog):
             embeds = []
             current_embed = discord.Embed(
                 title=f"Firmware Files for {self.get_platform_with_emoji(platform_data.get('name', platform))}",
-                description=f"Found {len(firmware_data)} firmware file(s)",
+                description=f"Found {len(firmware_data)} firmware file(s) {self.bot.emoji_dict['bios']}",
                 color=discord.Color.blue()
             )
             field_count = 0
@@ -735,7 +727,7 @@ class Search(commands.Cog):
                     game: discord.Option(str, "Game name to search for", required=True)):
         """Search for a ROM and provide download options."""
         await ctx.defer()
-    
+
         try:
             # Get platform data
             raw_platforms = await self.bot.fetch_api_endpoint('platforms')
@@ -821,11 +813,24 @@ class Search(commands.Cog):
             else:
                 initial_content = f"Found {len(search_results)} ROMs matching '{game}' for platform '{self.get_platform_with_emoji(platform_name)}':"
 
-            # Send message with view
-            message = await ctx.respond(
+            # Create view first
+            view = ROM_View(self.bot, search_results, ctx.author.id, platform_name)
+            
+            # Send message exactly like random command
+            initial_message = await ctx.respond(
                 initial_content,
-                view=ROM_View(self.bot, search_results, ctx.author.id, platform_name)
+                view=view
             )
+            
+            # Handle interaction response exactly like random command
+            if isinstance(initial_message, discord.Interaction):
+                initial_message = await initial_message.original_response()
+            
+            # Store message reference
+            view.message = initial_message
+            
+            # Use watch_for_qr_triggers like random command
+            await view.watch_for_qr_triggers(ctx.interaction)
 
         except Exception as e:
             logger.error(f"Error in search command: {e}", exc_info=True)
