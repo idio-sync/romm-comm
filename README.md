@@ -15,6 +15,9 @@ Current
 - Rate-limited Discord API interactions
 - Caching system, the bot onnly fetches fresh stats if that particular stat has updated since last fetch
 
+In Progress
+- Request System: Make and manage ROM requests entirely in Discord. 
+
 Planned (if possible)
 - Generate and pass EmulatorJS launcher links via command
 - List collections command
@@ -36,13 +39,14 @@ Planned (if possible)
 - Pillow
 - python-socketio
 - requests
+- aiosqlite
 
 ## Installation
 
 1. Clone the repository or download the source code
 2. Install required dependencies:
 ```bash
-pip install py-cord aiohttp python-dotenv qrcode Pillow python-socketio requests
+pip install py-cord aiohttp python-dotenv qrcode Pillow python-socketio requests aiosqlite
 ```
 ## Discord Bot Token Creation
 - See https://docs.pycord.dev/en/stable/discord.html
@@ -144,6 +148,35 @@ Trigger RomM library scan. Options are:
 - [new_platforms]: Scan new platforms only
 - [partial]: Scan ROMs with partial metadata
 - [summary]: View last scan summar
+
+![Slash Scan](.github/screenshots/SlashScanStatus.png)
+
+### Requests
+- /request - Submit a new request
+- /myrequests - View your requests
+- /cancelrequest - Cancel a pending request
+- /requestadmin - Admin commands (list/fulfill/reject/addnote)
+
+Request System Features:
+- Users can submit ROM requests with platform, game name, and optional details
+- Limit of 3 pending requests per user
+- Users can view their own requests
+- Users can cancel their pending requests
+- Uses SQLite database to store requests
+
+Admin Features:
+-List all pending requests
+- Fulfill or reject requests
+- Add notes to requests
+- DM notifications to users when their requests are fulfilled/rejected
+
+Dababase Structure:
+- Request ID
+- User information
+- Platform and game details
+- Request status (pending/fulfilled/rejected/cancelled)
+- Timestamps
+- Admin notes and fulfillment details
 
 ## Visable Statistics
 
