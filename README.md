@@ -21,7 +21,6 @@ In Progress
 
 Planned (if possible)
 - Generate and pass EmulatorJS launcher links via command or include in game details after search
-- Docker installation
 - RomM API key usage so user/pass do not have to be passed (if RomM implements creating API key)
 - Better IGDB integration (currently pulles IGDB cover url from RomM db entry for game)
 - More robust request command that searches IGDB per platform and passes along requested game ID
@@ -41,6 +40,12 @@ Planned (if possible)
 
 ## Installation
 
+Docker:
+1. `docker pull idiosync000/romm-comm:latest`
+2. Pass env variables as shown below
+3. Pass `/app/data` in the container to host directory, this is where the request DB and emoji sync status are stored
+
+Non-Docker:
 1. Clone the repository or download the source code
 2. Install required dependencies:
 ```bash
