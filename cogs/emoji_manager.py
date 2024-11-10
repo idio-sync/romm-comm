@@ -40,7 +40,6 @@ class EmojiManager(commands.Cog):
     async def load_emoji_list(self) -> List[Tuple[str, str]]:
         """Load emoji data from the text file."""
         try:
-            # Get the raw content from GitHub using aiohttp
             async with aiohttp.ClientSession() as session:
                 async with session.get(self.emoji_url_list) as response:
                     if response.status != 200:
@@ -55,15 +54,20 @@ class EmojiManager(commands.Cog):
                 if line and not line.startswith('#'):  # Skip empty lines and comments
                     try:
                         name, url = line.split('|')
-                        emoji_list.append((name.strip(), url.strip()))
+                        # Clean the name and ensure consistent formatting
+                        clean_name = name.strip().replace('-', '_').lower()
+                        emoji_list.append((clean_name, url.strip()))
                     except ValueError:
                         print(f"Warning: Invalid line format: {line}")
                         continue
+            
+            print(f"Loaded {len(emoji_list)} emoji definitions")
             return emoji_list
-        
+            
         except Exception as e:
             print(f"Warning: Failed to load emoji list: {str(e)}")
             return []
+
 
     async def upload_emoji(self, guild: discord.Guild, name: str, url: str) -> bool:
         """Upload a single emoji to the server."""
@@ -76,8 +80,11 @@ class EmojiManager(commands.Cog):
                     
                     image_data = await response.read()
 
+            # Clean the emoji name by replacing hyphens with underscores for Discord compatibility
+            clean_name = name.strip().replace('-', '_').lower()
+            
             emoji = await guild.create_custom_emoji(
-                name=name,
+                name=clean_name,
                 image=image_data,
                 reason="Bulk emoji upload on server join"
             )
