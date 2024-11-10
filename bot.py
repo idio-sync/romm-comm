@@ -78,6 +78,8 @@ class Config:
         self.API_TIMEOUT = int(os.getenv('API_TIMEOUT', 10))  # 10 seconds default
         self.USER = os.getenv('USER')
         self.PASS = os.getenv('PASS')
+        requests_env = os.getenv('REQUESTS_ENABLED', 'TRUE').upper()
+        self.REQUESTS_ENABLED = requests_env == 'TRUE'
         
         self.validate()
 
@@ -158,7 +160,7 @@ class RommBot(discord.Bot):
 
     async def load_all_cogs(self):
         """Load all cogs."""
-        cogs_to_load = ['cogs.info', 'cogs.emoji_manager', 'cogs.search', 'cogs.scan']
+        cogs_to_load = ['cogs.emoji_manager', 'cogs.info', 'cogs.search', 'cogs.scan', 'cogs.requests']
         
         # Dependencies for each cog
         cog_dependencies = {
