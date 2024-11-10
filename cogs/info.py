@@ -328,7 +328,7 @@ class Info(commands.Cog):
             embed = discord.Embed(
                 title=f"{self.bot.emoji_dict['switch']}  Switch Shop Connection Guide  {self.bot.emoji_dict['switch_docked']}",
                 description="Follow these steps to configure your Switch for connection to this server.\n"
-                           "/n*Note: This guide assumes you have Tinfoil installed and know how to use its basic functions.*",
+                            "*Note: This guide assumes you have Tinfoil installed and know how to use its basic functions.*",
                 color=discord.Color.blue()
             )
 
