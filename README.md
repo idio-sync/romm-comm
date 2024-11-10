@@ -17,11 +17,11 @@ Current
 
 In Progress
 - Request System: Make and manage ROM requests entirely in Discord
+- RomM User Management: Manage users, automatically create RomM account for users with specific role
 
 Planned (if possible)
 - Generate and pass EmulatorJS launcher links via command
 - Docker installation
-- Linking Discord users with RomM users (creation of Romm users via role?)
 - RomM API key usage so user/pass do not have to be passed (if RomM implements creating API key)
 - Better IGDB integration (currently pulles IGDB cover url from RomM db entry for game)
 - More robust request command that searches IGDB per platform and passes along requested game ID
@@ -70,6 +70,8 @@ PASS=api_password
 DOMAIN=your_website_domain
 SYNC_RATE=3600
 REQUESTS_ENABLED=TRUE
+ENABLE_USER_MANAGER=TRUE
+AUTO_REGISTER_ROLE_ID=romm_users_role_id
 UPDATE_VOICE_NAMES=true
 CHANNEL_ID=your_channel_id
 SHOW_API_SUCCESS=false
@@ -90,9 +92,11 @@ API_TIMEOUT=10
 - `DOMAIN`: Website domain for any download links, can use local ip/port if not exposing RomM to the internet (default: "No website configured")
 - `SYNC_RATE`: How often to sync with API in seconds (default: 3600)
 - `UPDATE_VOICE_NAMES`: Enable/disable voice channel stats (default: true)
-- `REQUESTS_ENABLED` : Enable request system (default: true)
+- `REQUESTS_ENABLED` : Enable request commands (default: true)
+- `ENABLE_USER_MANAGER` : Enables user manager module (default: true)
+- `AUTO_REGISTER_ROLE_ID` : Discord role ID used for linking Discord users to RomM users and registering new RomM users if granted to Discord user (if user manager enabled)
 - `SHOW_API_SUCCESS`: Show API sync result messages in Discord (default: false)
-- `CHANNEL_ID`: Channel ID for API sync result messages notifications to be sent to (if enabled above)
+- `CHANNEL_ID`: Channel ID for API sync result messages notifications to be sent to (if enabled above) and user manager log messages
 - `CACHE_TTL`: Cache time-to-live in seconds (default: 300)
 - `API_TIMEOUT`: API request timeout in seconds (default: 10)
 
@@ -179,6 +183,27 @@ Dababase Structure:
 - Request status (pending/fulfilled/rejected/cancelled)
 - Timestamps
 - Admin notes and fulfillment details
+
+### User Manager
+
+Account Creation:
+- Creates RomM account when role added to Discord user
+- Uses Discord display name for RomM username (_1/2/3 etc. if dupe)
+- Handles existing accounts, asks user if they have a RomM account and promps them 
+- Always creates new accounts as regular users
+- Preserves existing admin accounts
+- Logs when users link to admin accounts
+- Adds warning notifications for admin account links
+
+Role Removal:
+- Deletes RomM user account when role is removed from Discord user
+- Sends DM notification
+- Logs deletion
+- Only affects users created by the bot
+- Checks if user is admin before deletion
+- Preserves admin accounts even if role is removed
+- Logs attempted deletions of admin accounts
+- Notifies server admins of protection
 
 ## Visable Statistics
 
