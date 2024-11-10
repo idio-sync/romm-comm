@@ -13,8 +13,17 @@ class EmojiManager(commands.Cog):
         self.emoji_url_list = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/emoji_urls.txt"
         self.processed_servers_file = os.path.join('resources', 'emoji', 'processed_servers.json')
         self.processed_servers = self.load_processed_servers()
-        self.emojis = {}  # Dictionary for all emojis (once uploaded)
+        self.bot.emoji_dict = {}  # Dictionary for all emojis (once uploaded)
+        bot.loop.create_task(self.initialize_emoji_dict())
 
+    async def initialize_emoji_dict(self):
+        """Initialize emoji dictionary as soon as the bot is ready"""
+        await self.bot.wait_until_ready()
+        if self.bot.guilds:
+            guild = self.bot.guilds[0]
+            self.bot.emoji_dict = {emoji.name: emoji for emoji in guild.emojis}
+            print(f"Initialized emoji dictionary with {len(self.bot.emoji_dict)} emojis")
+    
     def load_processed_servers(self) -> Dict[int, List[str]]:
         """Load the list of servers that have already had emojis uploaded."""
         if os.path.exists(self.processed_servers_file):
@@ -79,12 +88,6 @@ class EmojiManager(commands.Cog):
             print(f"Error uploading emoji {name}: {str(e)}")
             return False
 
-     async def setup_hook(self):
-        # Get the first (and only) guild's emojis when bot starts
-        guild = self.guilds[0]  # Since we only have one server
-        self.emojis = {emoji.name: emoji for emoji in guild.emojis}
-        print(f"Loaded {len(self.emojis)} emojis")
-
     @commands.Cog.listener()
     async def on_guild_join(self, guild: discord.Guild):
         """When the bot joins a new server, upload the emojis if not already done."""
@@ -119,9 +122,26 @@ class EmojiManager(commands.Cog):
         self.processed_servers[guild_id_str] = uploaded_emojis
         self.save_processed_servers()
     
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Initialize emoji dictionary when bot starts"""
+        # Wait a short moment to ensure guild data is available
+        await asyncio.sleep(1)
+        
+        if self.bot.guilds:
+            guild = self.bot.guilds[0]
+            self.bot.emoji_dict = {emoji.name: emoji for emoji in guild.emojis}
+            print("\nEmoji Dictionary Contents:")
+            print(f"Total emojis loaded: {len(self.bot.emoji_dict)}")
+            for name, emoji in self.bot.emoji_dict.items():
+                print(f"Emoji: {name} -> {emoji.id}")
+        else:
+            print("No guilds found when loading emoji dictionary!")
+    
+    @commands.Cog.listener()
     async def on_guild_emojis_update(self, guild, before, after):
         # Update emoji dictionary when emojis change
-        self.emojis = {emoji.name: emoji for emoji in guild.emojis}
+        self.bot.emoji_dict = {emoji.name: emoji for emoji in guild.emojis}
 
     @discord.slash_command(
         name="emoji_upload",
