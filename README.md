@@ -71,6 +71,7 @@ PASS=api_password
 # Optional Settings
 DOMAIN=your_website_domain
 SYNC_RATE=3600
+REQUESTS_ENABLED=TRUE
 UPDATE_VOICE_NAMES=true
 CHANNEL_ID=your_channel_id
 SHOW_API_SUCCESS=false
@@ -91,6 +92,7 @@ API_TIMEOUT=10
 - `DOMAIN`: Website domain for any download links, can use local ip/port if not exposing RomM to the internet (default: "No website configured")
 - `SYNC_RATE`: How often to sync with API in seconds (default: 3600)
 - `UPDATE_VOICE_NAMES`: Enable/disable voice channel stats (default: true)
+- `REQUESTS_ENABLED` : Enable request system (default: true)
 - `SHOW_API_SUCCESS`: Show API sync result messages in Discord (default: false)
 - `CHANNEL_ID`: Channel ID for API sync result messages notifications to be sent to (if enabled above)
 - `CACHE_TTL`: Cache time-to-live in seconds (default: 300)
