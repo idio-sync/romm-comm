@@ -1,0 +1,8 @@
+py-cord
+aiohttp
+python-dotenv
+qrcode
+Pillow
+python-socketio
+requests
+aiosqlite
