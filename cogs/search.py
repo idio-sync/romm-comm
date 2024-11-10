@@ -103,7 +103,13 @@ class ROM_View(discord.ui.View):
                             break
             
             if platform_name:
-                embed.add_field(name="Platform", value=platform_name, inline=True)
+                # Get Search cog instance to use get_platform_with_emoji
+                search_cog = self.bot.get_cog('Search')
+                if search_cog:
+                    platform_display = search_cog.get_platform_with_emoji(platform_name)
+                else:
+                    platform_display = platform_name
+                embed.add_field(name="Platform", value=platform_display, inline=True)
             
             # Add other fields
             if genres := rom_data.get('genres'):
@@ -360,6 +366,111 @@ class ROM_View(discord.ui.View):
 class Search(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.platform_emoji_names = {}  # Will be populated from API data
+        # Map of common platform name variations
+        self.platform_variants = {
+            '3DO Interactive Multiplayer': ['3do'],
+            'Atari 2600': ['2600'],
+            'Atari Jaguar': ['jaguar'],
+            'Dreamcast': ['dreamcast'],
+            'Game Boy': ['gameboy', 'gameboy_pocket'],
+            'Game Boy Advance': ['gameboy_advance', 'gameboy_advance_sp', 'gameboy_micro'],
+            'Game Boy Color': ['gameboy_color'],
+            'N-Gage': ['n_gage'],
+            'Neo Geo AES': ['neogeo_aes'],
+            'Neo Geo Pocket Color': ['neogeo_pocket_color'],
+            'Nintendo 3DS': ['3ds'],
+            'Nintendo 64': ['n64'],
+            'Nintendo DS': ['ds', 'ds_lite'],
+            'Nintendo DSi': ['dsi'],
+            'Nintendo Entertainment System': ['nes'],
+            'Nintendo GameCube': ['gamecube'],
+            'Nintendo Switch': ['switch', 'switch_docked'],
+            'PlayStation': ['ps', 'ps_one'],
+            'PlayStation 2': ['ps2', 'ps2_slim'],
+            'PlayStation 3': ['ps3', 'ps3_slim'],
+            'PlayStation Portable': ['psp', 'psp_go'],
+            'PlayStation Vita': ['vita'],
+            'Sega 32X': ['32x'],
+            'Sega Game Gear': ['game_gear'],
+            'Sega Master System/Mark III': ['master_system'],
+            'Sega Mega Drive/Genesis': ['genesis', 'genesis_2', 'nomad'],
+            'Sega Saturn': ['saturn_2'],
+            'Super Nintendo Entertainment System': ['snes'],
+            'TurboGrafx-16/PC Engine': ['tg_16', 'turboduo', 'turboexpress'],
+            'Wii': ['wii'],
+            'Xbox': ['xbox_og'],
+            'Xbox 360': ['xbox_360'],
+        }
+        bot.loop.create_task(self.initialize_platform_emoji_mappings())
+    
+    async def initialize_platform_emoji_mappings(self):
+        """Initialize platform -> emoji mappings using API data"""
+        await self.bot.wait_until_ready()
+        
+        try:
+            # Get platforms from API
+            raw_platforms = await self.bot.fetch_api_endpoint('platforms')
+            if not raw_platforms:
+                print("Warning: Could not fetch platforms for emoji mapping")
+                return
+                
+            sanitized_platforms = self.bot.sanitize_data(raw_platforms, data_type='platforms')
+            mapped_count = 0
+            print("\nPlatform Emoji Mappings:")
+            
+            for platform in sanitized_platforms:
+                if 'name' in platform:
+                    platform_name = platform['name']
+                    variants = self.platform_variants.get(platform_name, [])
+                    
+                    # Try each variant
+                    mapped = False
+                    for variant in variants:
+                        if variant in self.bot.emoji_dict:
+                            self.platform_emoji_names[platform_name] = variant
+                            print(f"{platform_name} -> {variant}")
+                            mapped = True
+                            mapped_count += 1
+                            break
+                    
+                    # If no variant worked, try simple name
+                    if not mapped:
+                        simple_name = platform_name.lower().replace(' ', '_').replace('-', '_')
+                        if simple_name in self.bot.emoji_dict:
+                            self.platform_emoji_names[platform_name] = simple_name
+                            print(f"{platform_name} -> {simple_name}")
+                            mapped_count += 1
+            
+            print(f"\nSuccessfully mapped {mapped_count} platforms")
+            
+            # Print unmapped platforms
+            unmapped = [p['name'] for p in sanitized_platforms if p['name'] not in self.platform_emoji_names]
+            if unmapped:
+                print("\nUnmapped platforms:")
+                for name in sorted(unmapped):
+                    print(f"- {name}")
+            
+        except Exception as e:
+            print(f"Error initializing platform emoji mappings: {e}")
+    
+    def get_platform_with_emoji(self, platform_name: str) -> str:
+        """Returns platform name with its emoji if available."""
+        if not platform_name or not hasattr(self.bot, 'emoji_dict'):
+            return platform_name
+        
+        # Try to find a matching emoji variant
+        variants = self.platform_variants.get(platform_name, [])
+        for variant in variants:
+            if variant in self.bot.emoji_dict:
+                return f"{platform_name} {self.bot.emoji_dict[variant]}"
+        
+        # If no variant found, try a simple version of the name
+        simple_name = platform_name.lower().replace(' ', '_').replace('-', '_')
+        if simple_name in self.bot.emoji_dict:
+            return f"{platform_name} {self.bot.emoji_dict[simple_name]}"
+        
+        return platform_name
 
     async def platform_autocomplete(self, ctx: discord.AutocompleteContext):
         """Autocomplete function for platform names."""
@@ -378,7 +489,12 @@ class Search(commands.Cog):
         except Exception as e:
             logger.error(f"Error in platform autocomplete: {e}")
         return []
-
+    
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Re-initialize emoji mappings when bot reconnects"""
+        await self.initialize_platform_emoji_mappings()
+    
     @discord.slash_command(name="firmware", description="List firmware files available for a platform")
     async def firmware(self, ctx: discord.ApplicationContext, 
                       platform: discord.Option(str, "Platform to list firmware for", 
@@ -399,7 +515,10 @@ class Search(commands.Cog):
                     break
 
             if not platform_data:
-                platforms_list = "\n".join(f"• {p.get('name', 'Unknown')}" for p in raw_platforms)
+                platforms_list = "\n".join(
+                    f"• {self.get_platform_with_emoji(p.get('name', 'Unknown'))}" 
+                    for p in raw_platforms
+                )
                 await ctx.respond(f"Platform '{platform}' not found. Available platforms:\n{platforms_list}")
                 return
 
@@ -414,7 +533,7 @@ class Search(commands.Cog):
 
             embeds = []
             current_embed = discord.Embed(
-                title=f"Firmware Files for {platform_data.get('name', platform)}",
+                title=f"Firmware Files for {self.get_platform_with_emoji(platform_data.get('name', platform))}",
                 description=f"Found {len(firmware_data)} firmware file(s)",
                 color=discord.Color.blue()
             )
@@ -495,12 +614,15 @@ class Search(commands.Cog):
                         break
                     
                 if not platform_id:
-                    platforms_list = "\n".join(f"• {name}" for name in sorted([p['name'] for p in sanitized_platforms]))
+                    platforms_list = "\n".join(
+                        f"• {self.get_platform_with_emoji(p['name'])}" 
+                        for p in sorted(sanitized_platforms, key=lambda x: x['name'])
+                    )
                     await ctx.respond(f"❌ Platform '{platform}' not found. Available platforms:\n{platforms_list}")
                     return
 
                 if rom_count <= 0:
-                    await ctx.respond(f"❌ No ROMs found for platform '{platform_name}'")
+                    await ctx.respond(f"❌ No ROMs found for platform '{self.get_platform_with_emoji(platform_name)}'")
                     return
 
                 # Try up to 5 times to find a valid ROM for the specific platform
@@ -530,7 +652,7 @@ class Search(commands.Cog):
                             embed = await view.create_rom_embed(rom_data)
 
                             initial_message = await ctx.respond(
-                                f"🎲 Found a random ROM from {platform_name}:",
+                                f"🎲 Found a random ROM from {self.get_platform_with_emoji(platform_name)}:",
                                 embed=embed,
                                 view=view
                             )
@@ -633,7 +755,10 @@ class Search(commands.Cog):
                     break
                     
             if not platform_id:
-                platforms_list = "\n".join(f"• {name}" for name in sorted([p['name'] for p in sanitized_platforms]))
+                platforms_list = "\n".join(
+                    f"• {self.get_platform_with_emoji(p['name'])}" 
+                    for p in sorted(sanitized_platforms, key=lambda x: x['name'])
+                )
                 await ctx.respond(f"❌ Platform '{platform}' not found. Available platforms:\n{platforms_list}")
                 return
 
@@ -690,11 +815,11 @@ class Search(commands.Cog):
             # Create initial message
             if len(search_results) >= 25:
                 initial_content = (
-                    f"Found 25+ ROMs matching '{game}' for platform '{platform_name}'. "
+                    f"Found 25+ ROMs matching '{game}' for platform '{self.get_platform_with_emoji(platform_name)}'. "
                     f"Showing first 25 results.\nPlease refine your search terms for more specific results:"
                 )
             else:
-                initial_content = f"Found {len(search_results)} ROMs matching '{game}' for platform '{platform_name}':"
+                initial_content = f"Found {len(search_results)} ROMs matching '{game}' for platform '{self.get_platform_with_emoji(platform_name)}':"
 
             # Send message with view
             message = await ctx.respond(
