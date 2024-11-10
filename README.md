@@ -16,11 +16,11 @@ Current
 - Caching system, the bot onnly fetches fresh stats if that particular stat has updated since last fetch
 
 In Progress
-- Request System: Make and manage ROM requests entirely in Discord
+- Request System: Make and manage ROM requests entirely in Discord. Currently functional but want to do a usability/formattiong pass.
 - RomM User Management: Manage users, automatically create RomM account for users with specific role
 
 Planned (if possible)
-- Generate and pass EmulatorJS launcher links via command
+- Generate and pass EmulatorJS launcher links via command or include in game details after search
 - Docker installation
 - RomM API key usage so user/pass do not have to be passed (if RomM implements creating API key)
 - Better IGDB integration (currently pulles IGDB cover url from RomM db entry for game)
@@ -51,8 +51,7 @@ pip install py-cord aiohttp python-dotenv qrcode Pillow python-socketio requests
 
 ## RomM Settings
 
-1. If you want browser downloads to function for users without logging in and Switch shop/Qr code downloads
-   to function on consoles, set Add '''DISABLE_DOWNLOAD_ENDPOINT_AUTH=true''' to your RomM environment variables.
+If you want browser downloads to function for users without logging in and Switch shop/Qr code downloads to function on consoles, set Add '''DISABLE_DOWNLOAD_ENDPOINT_AUTH=true''' to your RomM environment variables. Without this setting disabled, the user clicking the download link will have to have a RomM account and log in before downloading.
 
 ## Configuration
 
@@ -164,17 +163,19 @@ Trigger RomM library scan. Options are:
 - /request_admin - Admin commands (list/fulfill/reject/addnote)
 
 Request System Features:
-- Users can submit ROM requests with platform, game name, and optional details
-- Limit of 3 pending requests per user
+- Users can submit ROM requests with platform, game name, and optional details as text
+- Searches for existing ROM names in the RomM database to see if there is already a ROM present with the requested game name to avoid unnecessary requests
+- Limit of 3 pending requests per user, will lilely make this user controlled in the future
+- DM notifications automatically to users when their requests are fulfilled/rejected either automatically after a RomM system scan or manually via admin
 - Users can view their own requests
 - Users can cancel their pending requests
 - Uses SQLite database to store requests
+- Request system is toggleable via env variable or Discord slash command if server admin does not want to use it
 
 Admin Features:
 - List all pending requests
 - Fulfill or reject requests
 - Add notes to requests
-- DM notifications to users when their requests are fulfilled/rejected
 
 Dababase Structure:
 - Request ID
@@ -185,12 +186,17 @@ Dababase Structure:
 - Admin notes and fulfillment details
 
 ### User Manager
+- /sync_users - Sync all users who have auto-register role (Admin only)
+
+General:
+- User Manager is togglable by server admin, if `ENABLE_USER_MANAGER` is set to `FALSE` the module will avoid being loaded entirely and no commands will show in Discord
 
 Account Creation:
-- Creates RomM account when role added to Discord user
+- Creates RomM account when role specified in `AUTO_REGISTER_ROLE_ID` is assigned to Discord user
 - Uses Discord display name for RomM username (_1/2/3 etc. if dupe)
-- Handles existing accounts, asks user if they have a RomM account and promps them 
+- Handles existing accounts, asks user if they have a RomM account and promps them to link accounts before creating new account
 - Always creates new accounts as regular users
+- Generates random password and notifies new user by DM, gives RomM domain info and instructs them to log in and change password
 - Preserves existing admin accounts
 - Logs when users link to admin accounts
 - Adds warning notifications for admin account links
