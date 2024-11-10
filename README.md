@@ -16,7 +16,7 @@ Current
 - Caching system, the bot onnly fetches fresh stats if that particular stat has updated since last fetch
 
 In Progress
-- Request System: Make and manage ROM requests entirely in Discord. 
+- Request System: Make and manage ROM requests entirely in Discord
 
 Planned (if possible)
 - Generate and pass EmulatorJS launcher links via command
