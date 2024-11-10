@@ -162,6 +162,12 @@ Trigger RomM library scan. Options are:
 - /request_status - Users can check the status 
 - /request_admin - Admin commands (list/fulfill/reject/addnote)
 
+![Request](.github/screenshots/Request.png)
+
+![RequestSubmitted](.github/screenshots/RequestSubmitted.png)
+
+![RrequestFulfulledDM](.github/screenshots/RequestFulfilledDM.png)
+
 Request System Features:
 - Users can submit ROM requests with platform, game name, and optional details as text
 - Searches for existing ROM names in the RomM database to see if there is already a ROM present with the requested game name to avoid unnecessary requests
