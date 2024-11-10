@@ -5,34 +5,26 @@ A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) A
 ## Features
 
 Current
-- Near real-time ROM collection statistics in voice channel, bot status and via command
-- Platform-specific ROM searches that provide download link and game/file information as well as a rondom ROM roll
-- Platform based firmware search that lists firmware file information and provides download links
-- RomM scan management that includes the ability to start/stop different types of rom scans and reports back with
-  info about the scan when complete, and also during a scan in progress using a command.
-- Custom game console emoji uploads upon bot installation, use of said emojis in bot responses and stats.
-- QR code generation for 3DS/Vita rom installation via apps like FBI/[FBI Reloaded](https://github.com/TheRealZora/FBI-Reloaded)/[VitaShell](https://github.com/RealYoti/VitaShell) (download endpoint auth must be   disabled on RomM instance).
-- Switch Shop Info command that lists instructions on how to connect to the [Tinfoil](https://tinfoil.io/Download) endpoint
-  of connected RomM server (download endpoint auth must be disabled on RomM instance)
+- Stats: Near real-time ROM collection statistics in voice channel, bot status and via command
+- Search: Platform-specific ROM searches and random ROM roll that provide download link and game/file information
+- Search: Platform based firmware search that lists firmware file information and provides download links
+- Scans: Start/stop different types of RomM scans, report back with info about the scan when complete and also during a scan in progress via command
+- Emojis: Custom game console emoji uploads upon bot installation, use of said emojis in bot responses and stats
+- QR code generation: Install games on 3DS/Vita via QR code with apps like FBI/[FBI Reloaded](https://github.com/TheRealZora/FBI-Reloaded)/[VitaShell](https://github.com/RealYoti/VitaShell) (download endpoint auth must be disabled on RomM instance)
+- Switch Shop Info: Command that lists instructions on how to connect to the [Tinfoil](https://tinfoil.io/Download) endpoint of connected RomM server (download endpoint auth must be disabled on RomM instance)
 - Rate-limited Discord API interactions
 - Caching system, the bot onnly fetches fresh stats if that particular stat has updated since last fetch
 
-In Progress
-
- 
 Planned (if possible)
 - Generate and pass EmulatorJS launcher links via command
 - List collections command
-- RomM file scan progress reporting (via RomM logs?)
-- User count included in stats
-- List users command
 - Docker installation
 - Linking Discord users with RomM users (creation of Romm users via role?)
 - RomM API key usage so user/pass do not have to be passed (if RomM implements creating API key)
-- IGDB integration (currently pulles IGDB cover url from RomM db entry for game)
+- Better IGDB integration (currently pulles IGDB cover url from RomM db entry for game)
 - Request command that searches IGDB per platform and passes along requested game ID
 - Endpoint for request system, possibly as message sent to bot owner (ask RomM to add requests feature?)
-- Look up most downloaded games (via RomM logs?) and provide stats via command
+- Look up most popular games (via RomM logs?) and provide stats via command
 
 ## Requirements
 
@@ -88,7 +80,7 @@ API_TIMEOUT=10
 - `PASS`: API authentication password
 
 #### Optional Settings:
-- `DOMAIN`: Website domain for any download links (default: "No website configured")
+- `DOMAIN`: Website domain for any download links, can use local ip/port if not exposing RomM to the internet (default: "No website configured")
 - `SYNC_RATE`: How often to sync with API in seconds (default: 3600)
 - `UPDATE_VOICE_NAMES`: Enable/disable voice channel stats (default: true)
 - `SHOW_API_SUCCESS`: Show API sync result messages in Discord (default: false)
@@ -100,9 +92,6 @@ API_TIMEOUT=10
 
 ### /refresh
 Manually update API data from RomM.
-
-### /website
-Display the configured website URL. May add more functionality later.
 
 ### /stats
 Show current collection statistics.
@@ -127,6 +116,10 @@ Search for ROMs by platform and game name. Provides:
 
 ![Slash Search](.github/screenshots/SlashSearch.png)
 
+### /random [platfom]*
+- Finds random rom in your collection and displays info outlined in /search command
+- *Platform input is optional, if not set it will grab a random rom from a random platform
+
 ### /firmware [platform]
 List available firmware files for a specific platform. Shows:
 - File names
@@ -136,11 +129,17 @@ List available firmware files for a specific platform. Shows:
 
 ![Slash Firmware](.github/screenshots/SlashFirmware.png)
 
-### /scan [platform] (WIP)
-Trigger RomM library scan for a particular platform. 
-
-### /fullscan (WIP)
-Trigger RomM library scan for all platforms
+### /scan [option]
+Trigger RomM library scan. Options are:
+- [platform] [platform name]: Scan a specific platform
+- [full]: Perform a full system scan
+- [stop]: Stop the current scan
+- [status]: Check current scan status
+- [unidentified]: Scan unidentified ROMs
+- [hashes]: Update ROM hashes
+- [new_platforms]: Scan new platforms only
+- [partial]: Scan ROMs with partial metadata
+- [summary]: View last scan summar
 
 ## Visable Statistics
 
@@ -190,8 +189,3 @@ Implements an efficient caching system:
 - Check API connectivity to RomM
 - Check logs for error messages, I tried to meticulously report errors
 - Verify configuration settings in the env
-
-## Support
-
-1. I'm not promising that development will be super active on my end, so feel free
-   to poke around the code yourself and see what's up and suggest changes
