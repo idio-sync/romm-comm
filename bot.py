@@ -103,6 +103,10 @@ class RommBot(discord.Bot):
         intents = discord.Intents.default()
         intents.message_content = True
         intents.voice_states = True
+        intents.members = True
+        intents.reactions = True
+        intents.dm_messages = True
+        intents.dm_reactions = True
         super().__init__(
             command_prefix="!",  # Add a prefix even if you don't use it
             intents=intents,
@@ -158,13 +162,25 @@ class RommBot(discord.Bot):
             if retry_after:
                 raise commands.CommandOnCooldown(bucket, retry_after, self._cd_bucket.type)
 
-    async def load_all_cogs(self):
+    def load_all_cogs(self):
         """Load all cogs."""
-        cogs_to_load = ['cogs.emoji_manager', 'cogs.info', 'cogs.search', 'cogs.scan', 'cogs.requests']
+        cogs_to_load = [
+            'cogs.emoji_manager', 
+            'cogs.info', 
+            'cogs.search', 
+            'cogs.scan', 
+            'cogs.requests',
+            'cogs.user_manager'
+        ]
         
         # Dependencies for each cog
         cog_dependencies = {
-            'cogs.scan': ['socketio']
+            'cogs.emoji_manager': ['aiohttp'],
+            'cogs.info': [],
+            'cogs.search': ['aiohttp','qrcode'],
+            'cogs.scan': ['socketio'],
+            'cogs.requests': ['aiosqlite'],
+            'cogs.user_manager': ['aiohttp']
         }
 
         for cog in cogs_to_load:
@@ -183,7 +199,9 @@ class RommBot(discord.Bot):
                         logger.error(f"Please install using: pip install {' '.join(missing_deps)}")
                         continue
             
-                self.load_extension(cog)           
+                # Load the cog synchronously
+                self.load_extension(cog)
+                logger.info(f"Successfully loaded {cog}")
             except Exception as e:
                 logger.error(f"Failed to load extension {cog}", exc_info=True)
                 logger.error(f"Error details: {str(e)}")
@@ -193,7 +211,7 @@ class RommBot(discord.Bot):
         logger.info(f'{self.user} has connected to Discord!')
 
         # Load cogs
-        await self.load_all_cogs()
+        self.load_all_cogs()
         loaded_cogs = list(self.cogs.keys())
         logger.info(f"Currently loaded cogs: {loaded_cogs}")
 
