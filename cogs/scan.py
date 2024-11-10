@@ -133,38 +133,48 @@ class Scan(commands.Cog):
                     logger.error("Scan completion received but start time was not set")
                     return
 
-                # Update stats with our tracked values
-                stats['scanned_roms'] = self.scan_progress.get('scanned_roms', 0)
-                self.last_scan_stats = {
-                    **stats,  # Base stats
-                    'total_roms_found': self.scan_progress.get('total_roms', 0),
-                    'duration': str(datetime.now() - self.scan_start_time).split('.')[0]
+                # Calculate duration
+                duration = datetime.now() - self.scan_start_time
+                duration_str = str(duration).split('.')[0]
+
+                # Combine server stats with our tracked progress
+                final_stats = {
+                    'duration': duration_str,
+                    'scanned_platforms': self.scan_progress.get('scanned_platforms', 0),
+                    'added_platforms': self.scan_progress.get('added_platforms', 0),
+                    'scanned_roms': self.scan_progress.get('scanned_roms', 0),
+                    'added_roms': self.scan_progress.get('added_roms', 0),
+                    'scanned_firmware': stats.get('scanned_firmware', 0),
+                    'added_firmware': stats.get('added_firmware', 0)
                 }
 
-                duration_str = self.last_scan_stats['duration']
-                message = (
-                    f"✅ Scan completed in {duration_str}\n\n"
-                    f"📊 Stats:\n"
-                    f"-Duration ⏱️: {stats.get('duration', 'Unknown')}",
+                # Store stats for summary command
+                self.last_scan_stats = {
+                    **final_stats,
+                    'total_roms_found': self.scan_progress.get('total_roms', 0)
+                }
+
+                message = [
+                    f"✅ Scan completed in {duration_str}",
                     "",
-                    "Platforms:",
-                    f"- Platforms Scanned: {stats.get('scanned_platforms', 0)}",
-                    f"- New Platforms Added: {stats.get('added_platforms', 0)}",
-                    #v f"🎮 Platforms with Metadata: {stats.get('metadata_platforms', 0)}",
+                    "**Stats  📊:**",
+                    f"- Duration  ⏱️: {duration_str}",
                     "",
-                    "ROMs:",
-                    # f"📀 Total ROMs Found: {stats.get('total_roms_found', 0)}",
-                    f"- Total ROMs Scanned: {stats.get('scanned_roms', 0)}",
-                    f"- New ROMs Added: {stats.get('added_roms', 0)}",
-                    # f"🏷️ ROMs with Metadata: {stats.get('metadata_roms', 0)}",
+                    "**Platforms  🎮:**",
+                    f"- Platforms Scanned: {final_stats['scanned_platforms']}",
+                    f"- New Platforms Added: {final_stats['added_platforms']}",
                     "",
-                    "Firmware:",
-                    f"- Firmware Scanned: {stats.get('scanned_firmware', 0)}",
-                    f"- New Firmware Added: {stats.get('added_firmware', 0)}"
-                )
+                    "**ROMs  👾:**",
+                    f"- Total ROMs Scanned: {final_stats['scanned_roms']}",
+                    f"- New ROMs Added: {final_stats['added_roms']}",
+                    "",
+                    f"**Firmware  {self.bot.emoji_dict['bios']}:**",
+                    f"- Firmware Scanned: {final_stats['scanned_firmware']}",
+                    f"- New Firmware Added: {final_stats['added_firmware']}"
+                ]
 
                 if self.last_channel:
-                    await self.last_channel.send(message)
+                    await self.last_channel.send('\n'.join(message))
                 
                 # Reset scan state
                 self._reset_scan_state()
@@ -240,7 +250,7 @@ class Scan(commands.Cog):
             "status": "Check current scan status",
             "unidentified": "Scan unidentified ROMs",
             "hashes": "Update ROM hashes",
-            "new": "Scan new platforms only",
+            "new_platforms": "Scan new platforms only",
             "partial": "Scan ROMs with partial metadata",
             "summary": "View last scan summary"
         }
@@ -307,7 +317,7 @@ class Scan(commands.Cog):
             elif command == "hashes":
                 await self._scan_hashes(ctx)
                 
-            elif command == "new":
+            elif command == "new_platforms":
                 await self._scan_new_platforms(ctx)
                 
             elif command == "partial":
@@ -447,10 +457,8 @@ class Scan(commands.Cog):
 
             message.extend([
                 f"- ROMs scanned in Current Platform: {platform_roms}",
-               # f"- Total ROMs Found: {total_roms}",
                 f"- Total ROMs Scanned: {scanned_roms}",
                 f"- New ROMs Added: {added_roms}",
-               # f"- ROMs with Metadata: {metadata_roms}"
             ])
 
             # Add current ROM being processed
@@ -466,12 +474,12 @@ class Scan(commands.Cog):
                     f"- New Platforms Added: {added_platforms}"
                 ])
 
+            # Send the formatted message once
             await ctx.respond('\n'.join(message))
+            
         except Exception as e:
             logger.error(f"Error fetching scan status: {e}", exc_info=True)
             await ctx.respond("❌ Error: Failed to fetch scan status.")
-        
-        await ctx.respond(message)
 
     async def _scan_unidentified(self, ctx: discord.ApplicationContext):
         """Handle unidentified ROMs scan"""
@@ -569,18 +577,18 @@ class Scan(commands.Cog):
             "📊 **Last Scan Summary**",
             f"Duration ⏱️: {stats.get('duration', 'Unknown')}",
             "",
-            "**Platforms:**",
+            "**Platforms  🎮:**",
             f"- Platforms Scanned: {stats.get('scanned_platforms', 0)}",
             f"- New Platforms Added: {stats.get('added_platforms', 0)}",
             f"- Platforms with Metadata: {stats.get('metadata_platforms', 0)}",
             "",
-            "**ROMs:**",
+            "**ROMs  👾:**",
             f"- Total ROMs Found: {stats.get('total_roms_found', 0)}",
             f"- ROMs Scanned: {stats.get('scanned_roms', 0)}",
             f"- New ROMs Added: {stats.get('added_roms', 0)}",
             f"- ROMs with Metadata: {stats.get('metadata_roms', 0)}",
             "",
-            "**Firmware:**",
+            F"**Firmware  {self.bot.emoji_dict['bios']}:**",
             f"- Firmware Scanned: {stats.get('scanned_firmware', 0)}",
             f"- New Firmware Added: {stats.get('added_firmware', 0)}"
         ]
