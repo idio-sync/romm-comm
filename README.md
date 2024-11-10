@@ -20,13 +20,11 @@ In Progress
 
 Planned (if possible)
 - Generate and pass EmulatorJS launcher links via command
-- List collections command
 - Docker installation
 - Linking Discord users with RomM users (creation of Romm users via role?)
 - RomM API key usage so user/pass do not have to be passed (if RomM implements creating API key)
 - Better IGDB integration (currently pulles IGDB cover url from RomM db entry for game)
-- Request command that searches IGDB per platform and passes along requested game ID
-- Endpoint for request system, possibly as message sent to bot owner (ask RomM to add requests feature?)
+- More robust request command that searches IGDB per platform and passes along requested game ID
 - Look up most popular games (via RomM logs?) and provide stats via command
 
 ## Requirements
@@ -155,9 +153,11 @@ Trigger RomM library scan. Options are:
 
 ### Requests
 - /request - Submit a new request
-- /myrequests - View your requests
-- /cancelrequest - Cancel a pending request
-- /requestadmin - Admin commands (list/fulfill/reject/addnote)
+- /my_requests - View your requests
+- /cancel_request - Cancel a pending request
+- /toggle_requests - Administrators can toggle request system on/off
+- /request_status - Users can check the status 
+- /request_admin - Admin commands (list/fulfill/reject/addnote)
 
 Request System Features:
 - Users can submit ROM requests with platform, game name, and optional details
