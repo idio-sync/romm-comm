@@ -11,31 +11,61 @@ class EmojiManager(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.emoji_url_list = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/emoji_urls.txt"
-        self.processed_servers_file = os.path.join('data', 'emoji_processed_servers.json')
+        
+        # Create data directory if it doesn't exist
+        self.data_dir = 'data'
+        os.makedirs(self.data_dir, exist_ok=True)
+        
+        self.processed_servers_file = os.path.join(self.data_dir, 'emoji_processed_servers.json')
         self.processed_servers = self.load_processed_servers()
+        #print(f"Loaded processed servers: {self.processed_servers}")  # Debug print
+        
         self.bot.emoji_dict = {}  # Dictionary for all emojis (once uploaded)
         bot.loop.create_task(self.initialize_emoji_dict())
 
     async def initialize_emoji_dict(self):
         """Initialize emoji dictionary as soon as the bot is ready"""
         await self.bot.wait_until_ready()
-        if self.bot.guilds:
-            guild = self.bot.guilds[0]
-            self.bot.emoji_dict = {emoji.name: emoji for emoji in guild.emojis}
-            print(f"Initialized emoji dictionary with {len(self.bot.emoji_dict)} emojis")
-    
+        try:
+            if self.bot.guilds:
+                guild = self.bot.guilds[0]
+                self.bot.emoji_dict = {emoji.name: emoji for emoji in guild.emojis}
+                #print(f"Initialized emoji dictionary with {len(self.bot.emoji_dict)} emojis")
+                #print("\nEmoji Dictionary Contents:")
+                #for name, emoji in self.bot.emoji_dict.items():
+                    #print(f"Emoji: {name} -> {emoji.id}")
+            else:
+                print("No guilds found during emoji dictionary initialization!")
+        except Exception as e:
+            print(f"Error initializing emoji dictionary: {e}")    
+ 
     def load_processed_servers(self) -> Dict[int, List[str]]:
         """Load the list of servers that have already had emojis uploaded."""
-        if os.path.exists(self.processed_servers_file):
-            with open(self.processed_servers_file, 'r') as f:
-                return json.load(f)
-        return {}
+        try:
+            if os.path.exists(self.processed_servers_file):
+                with open(self.processed_servers_file, 'r') as f:
+                    data = json.load(f)
+                #print(f"Successfully loaded processed servers from {self.processed_servers_file}")  # Debug print
+                return data
+            else:
+                print(f"No existing processed servers file found at {self.processed_servers_file}")  # Debug print
+                return {}
+        except Exception as e:
+            print(f"Error loading processed servers file: {e}")  # Debug print
+            return {}
 
     def save_processed_servers(self):
         """Save the list of processed servers to avoid duplicate uploads."""
-        os.makedirs(os.path.dirname(self.processed_servers_file), exist_ok=True)
-        with open(self.processed_servers_file, 'w') as f:
-            json.dump(self.processed_servers, f)
+        try:
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(self.processed_servers_file), exist_ok=True)
+            
+            with open(self.processed_servers_file, 'w') as f:
+                json.dump(self.processed_servers, f)
+            print(f"Successfully saved processed servers to {self.processed_servers_file}")  # Debug print
+            #print(f"Saved data: {self.processed_servers}")  # Debug print
+        except Exception as e:
+            print(f"Error saving processed servers: {e}")  # Debug print
 
     async def load_emoji_list(self) -> List[Tuple[str, str]]:
         """Load emoji data from the text file."""
@@ -61,8 +91,8 @@ class EmojiManager(commands.Cog):
                         print(f"Warning: Invalid line format: {line}")
                         continue
             
-            print(f"Loaded {len(emoji_list)} emoji definitions")
-            return emoji_list
+            #print(f"Loaded {len(emoji_list)} emoji definitions")
+            #return emoji_list
             
         except Exception as e:
             print(f"Warning: Failed to load emoji list: {str(e)}")
@@ -99,6 +129,8 @@ class EmojiManager(commands.Cog):
     async def on_guild_join(self, guild: discord.Guild):
         """When the bot joins a new server, upload the emojis if not already done."""
         guild_id_str = str(guild.id)
+        print(f"Checking guild {guild.name} (ID: {guild_id_str})")  # Debug print
+        print(f"Current processed servers: {self.processed_servers}")  # Debug print
         
         if guild_id_str in self.processed_servers:
             print(f"Already uploaded emojis to {guild.name}")
@@ -127,6 +159,7 @@ class EmojiManager(commands.Cog):
                 uploaded_emojis.append(name)
 
         self.processed_servers[guild_id_str] = uploaded_emojis
+        print(f"Saving processed servers after upload to {guild.name}")  # Debug print
         self.save_processed_servers()
     
     @commands.Cog.listener()
@@ -138,10 +171,10 @@ class EmojiManager(commands.Cog):
         if self.bot.guilds:
             guild = self.bot.guilds[0]
             self.bot.emoji_dict = {emoji.name: emoji for emoji in guild.emojis}
-            print("\nEmoji Dictionary Contents:")
-            print(f"Total emojis loaded: {len(self.bot.emoji_dict)}")
-            for name, emoji in self.bot.emoji_dict.items():
-                print(f"Emoji: {name} -> {emoji.id}")
+            #print("\nEmoji Dictionary Contents:")
+            #print(f"Total emojis loaded: {len(self.bot.emoji_dict)}")
+            #for name, emoji in self.bot.emoji_dict.items():
+                #print(f"Emoji: {name} -> {emoji.id}")
         else:
             print("No guilds found when loading emoji dictionary!")
     
