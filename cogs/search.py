@@ -409,7 +409,7 @@ class Search(commands.Cog):
                 
             sanitized_platforms = self.bot.sanitize_data(raw_platforms, data_type='platforms')
             mapped_count = 0
-            print("\nPlatform Emoji Mappings:")
+            #print("\nPlatform Emoji Mappings:")
             
             for platform in sanitized_platforms:
                 if 'name' in platform:
@@ -421,7 +421,7 @@ class Search(commands.Cog):
                     for variant in variants:
                         if variant in self.bot.emoji_dict:
                             self.platform_emoji_names[platform_name] = variant
-                            print(f"{platform_name} -> {variant}")
+                            #print(f"{platform_name} -> {variant}")
                             mapped = True
                             mapped_count += 1
                             break
@@ -431,10 +431,10 @@ class Search(commands.Cog):
                         simple_name = platform_name.lower().replace(' ', '_').replace('-', '_')
                         if simple_name in self.bot.emoji_dict:
                             self.platform_emoji_names[platform_name] = simple_name
-                            print(f"{platform_name} -> {simple_name}")
+                            #print(f"{platform_name} -> {simple_name}")
                             mapped_count += 1
             
-            print(f"\nSuccessfully mapped {mapped_count} platforms")
+            print(f"Successfully mapped {mapped_count} platform(s) to custom emoji(s)")
             
             # Print unmapped platforms
             unmapped = [p['name'] for p in sanitized_platforms if p['name'] not in self.platform_emoji_names]
