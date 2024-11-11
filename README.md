@@ -18,6 +18,7 @@ Current
 
 In Progress
 - RomM User Management: Manage users, automatically create RomM account for users with specific role (module currently not enabled)
+- Bot checks for Nitro on the server and if found uploads extended list of emojis 
 
 Planned (if possible)
 - Generate and pass EmulatorJS launcher links via command or include in game details after search
