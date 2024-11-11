@@ -389,8 +389,10 @@ class Search(commands.Cog):
             'Sega Mega Drive/Genesis': ['genesis', 'genesis_2', 'nomad'],
             'Sega Saturn': ['saturn_2'],
             'Super Nintendo Entertainment System': ['snes'],
+            'Switch': ['switch', 'switch_docked']
             'TurboGrafx-16/PC Engine': ['tg_16', 'turboduo', 'turboexpress'],
             'Wii': ['wii'],
+            'Windows': ['pc']
             'Xbox': ['xbox_og'],
             'Xbox 360': ['xbox_360'],
         }
