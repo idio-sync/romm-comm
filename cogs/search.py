@@ -368,6 +368,7 @@ class Search(commands.Cog):
             'Game Boy': ['gameboy', 'gameboy_pocket'],
             'Game Boy Advance': ['gameboy_advance', 'gameboy_advance_sp', 'gameboy_micro'],
             'Game Boy Color': ['gameboy_color'],
+            'Mac': ['mac'], ['mac_imac']
             'N-Gage': ['n_gage'],
             'Neo Geo AES': ['neogeo_aes'],
             'Neo Geo Pocket Color': ['neogeo_pocket_color'],
