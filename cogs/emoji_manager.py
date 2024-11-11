@@ -11,6 +11,7 @@ class EmojiManager(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.emoji_url_list = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/emoji_urls.txt"
+        self.extended_emoji_url = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/emoji_urls_extended.txt"
         
         # Create data directory if it doesn't exist
         self.data_dir = 'data'
@@ -67,11 +68,15 @@ class EmojiManager(commands.Cog):
         except Exception as e:
             print(f"Error saving processed servers: {e}")  # Debug print
 
-    async def load_emoji_list(self) -> List[Tuple[str, str]]:
-        """Load emoji data from the text file."""
+    async def load_emoji_list(self, guild: discord.Guild = None) -> List[Tuple[str, str]]:
+        """Load emoji data from appropriate text file based on server's Nitro status."""
         try:
+            # Determine which URL to use based on server's emoji limit
+            emoji_url = self.extended_emoji_url if self.is_nitro_server(guild) else self.standard_emoji_url
+            print(f"Using {'extended' if self.is_nitro_server(guild) else 'standard'} emoji list for {guild.name}")
+            
             async with aiohttp.ClientSession() as session:
-                async with session.get(self.emoji_url_list) as response:
+                async with session.get(emoji_url) as response:
                     if response.status != 200:
                         print(f"Warning: Failed to fetch emoji list: {response.status}")
                         return []
@@ -91,14 +96,30 @@ class EmojiManager(commands.Cog):
                         print(f"Warning: Invalid line format: {line}")
                         continue
             
-            #print(f"Loaded {len(emoji_list)} emoji definitions")
-            #return emoji_list
+            print(f"Loaded {len(emoji_list)} emoji definitions")
+            
+            # If it's not a Nitro server, ensure we don't exceed the limit
+            if not self.is_nitro_server(guild) and len(emoji_list) > 50:
+                print(f"Trimming emoji list to 50 for non-Nitro server {guild.name}")
+                emoji_list = emoji_list[:50]
+            
+            return emoji_list
             
         except Exception as e:
             print(f"Warning: Failed to load emoji list: {str(e)}")
             return []
 
-
+    def is_nitro_server(self, guild: discord.Guild) -> bool:
+        """Check if a server has Nitro boost level that allows more than 50 emojis."""
+        if not guild:
+            return False
+            
+        # Get the server's emoji limit based on boost level
+        emoji_limit = guild.emoji_limit
+        
+        # Standard servers have a limit of 50
+        return emoji_limit > 50
+        
     async def upload_emoji(self, guild: discord.Guild, name: str, url: str) -> bool:
         """Upload a single emoji to the server."""
         try:
@@ -129,18 +150,29 @@ class EmojiManager(commands.Cog):
     async def on_guild_join(self, guild: discord.Guild):
         """When the bot joins a new server, upload the emojis if not already done."""
         guild_id_str = str(guild.id)
-        print(f"Checking guild {guild.name} (ID: {guild_id_str})")  # Debug print
-        print(f"Current processed servers: {self.processed_servers}")  # Debug print
+        
+        print(f"Joined new guild: {guild.name} (ID: {guild_id_str})")
+        print(f"Server has Nitro status: {self.is_nitro_server(guild)}")
+        print(f"Emoji limit: {guild.emoji_limit}")
         
         if guild_id_str in self.processed_servers:
-            print(f"Already uploaded emojis to {guild.name}")
-            return
+            # If server's Nitro status has changed, we might want to update emojis
+            current_nitro_status = self.is_nitro_server(guild)
+            stored_nitro_status = self.processed_servers[guild_id_str].get('nitro_status', False)
+            
+            if current_nitro_status != stored_nitro_status:
+                print(f"Nitro status changed for {guild.name}. Updating emojis...")
+                del self.processed_servers[guild_id_str]
+                self.save_processed_servers()
+            else:
+                print(f"Already uploaded emojis to {guild.name}")
+                return
 
         if not guild.me.guild_permissions.manage_emojis:
             print(f"Missing emoji permissions in {guild.name}")
             return
 
-        emoji_list = await self.load_emoji_list()
+        emoji_list = await self.load_emoji_list(guild)
         if not emoji_list:
             return
 
@@ -158,8 +190,11 @@ class EmojiManager(commands.Cog):
             if await self.upload_emoji(guild, name, url):
                 uploaded_emojis.append(name)
 
-        self.processed_servers[guild_id_str] = uploaded_emojis
-        print(f"Saving processed servers after upload to {guild.name}")  # Debug print
+        # Store both uploaded emojis and Nitro status
+        self.processed_servers[guild_id_str] = {
+            'emojis': uploaded_emojis,
+            'nitro_status': self.is_nitro_server(guild)
+        }
         self.save_processed_servers()
     
     @commands.Cog.listener()
@@ -188,9 +223,8 @@ class EmojiManager(commands.Cog):
         description="Force upload the bot's custom emojis to current server (owner only)"
     )
     @commands.has_permissions(manage_emojis=True)
-    @commands.is_owner()  # This ensures only the bot owner can use it
+    @commands.is_owner()
     async def emoji_upload(self, ctx):
-        """Force upload emojis to the current server, even if they've been uploaded before. WILL CREATE DUPLICATES"""
         await ctx.defer()
         
         try:
