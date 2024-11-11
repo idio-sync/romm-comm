@@ -169,7 +169,7 @@ class RommBot(discord.Bot):
             'cogs.info', 
             'cogs.search', 
             'cogs.scan', 
-          # 'cogs.user_manager', Disable for now
+            'cogs.user_manager', Disable for now
             'cogs.requests'
         ]
         
