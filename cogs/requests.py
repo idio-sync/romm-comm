@@ -165,7 +165,7 @@ class Request(commands.Cog):
             return []
 
     @commands.has_permissions(administrator=True)
-    @discord.slash_command(name="toggle_requests", description="Enable or disable the request system")
+    @discord.slash_command(name="toggle_requests", description="Enable or disable the request system (admin only)")
     async def toggle_requests(
         self,
         ctx: discord.ApplicationContext,
