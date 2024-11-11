@@ -171,7 +171,7 @@ Trigger RomM library scan. Options are:
 - [hashes]: Update ROM hashes
 - [new_platforms]: Scan new platforms only
 - [partial]: Scan ROMs with partial metadata
-- [summary]: View last scan summar
+- [summary]: View last scan summary
 
 ![Slash Scan](.github/screenshots/SlashScanStatus.png)
 
