@@ -195,7 +195,7 @@ Request System Features:
 - Users can submit ROM requests with platform, game name, and optional details as text
 - Searches for existing ROM names in the RomM database to see if there is already a ROM present with the requested game name to avoid unnecessary requests
 - Limit of 3 pending requests per user, will lilely make this user controlled in the future
-- DM notifications automatically to users when their requests are fulfilled/rejected either automatically after a RomM system scan or manually via admin
+- DM notifications to users when their requests are fulfilled/rejected either automatically after a RomM system scan or manually via admin
 - Users can view their own requests
 - Users can cancel their pending requests
 - Uses SQLite database to store requests
