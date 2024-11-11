@@ -107,8 +107,7 @@ API_TIMEOUT=10
 ## Visable Statistics
 
 Voice Channel Stat Display
-- If enabled (`UPDATE_VOICE_NAMES=true`), the bot creates voice channels displaying
-  platform, rom, save, savestate, and screenshot count as well as RomM storage use size
+- If enabled (`UPDATE_VOICE_NAMES=true`), the bot creates voice channels displaying platform, rom, save, savestate, screenshot and RomM user count as well as RomM storage use size
 - Only updates if stats change upon API refresh
 - Right now it creates new channels and deletes the old, will soon edit instead
 - I'm planning on making emoji's customizable and each VC toggalable individually
