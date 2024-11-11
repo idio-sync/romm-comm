@@ -3,9 +3,10 @@
 # Non Nitro servers have a limit of 50 custom emoji uploads but the bot can store 2,000 uploaded to the dev portal.
 # Use /force_emoji_upload in Discord to force a reupload.
 
+# This is the default list of emojis with all variants
+
 # valid URL example: emoji_name|url
 # happy_face|https://example.com/happy.png
-
 
 # Platforms
 2600|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/2600.png
@@ -15,19 +16,14 @@
 bios|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/bios.png
 dos|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/dos.png
 ds|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ds.png
-ds_lite|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ds_lite.png
 dsi|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/dsi.png
 dreamcast|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/dreamcast.png
 game_gear|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/game_gear.png
 gameboy|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/gameboy.png
 gameboy_advance|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/gameboy_advance.png
-gameboy_advance_sp|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/gameboy_advance_sp.png
 gameboy_color|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/gameboy_color.png
-gameboy_micro|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/gameboy_micro.png
-gameboy_pocket|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/gameboy_pocket.png
 gamecube|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/gamecube.png
 genesis|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/genesis.png
-genesis_2|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/genesis_2.png
 jaguar|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/jaguar.png
 mac|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/mac.png
 master_system|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/master_system.png
@@ -36,27 +32,35 @@ n64|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backe
 neogeo_aes|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/neogeo_aes.png
 neogeo_pocket_color|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/neogeo_pocket_color.png
 nes|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/nes.png
-nomad|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/nomad.png
 pc|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/pc.png
 ps|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ps.png
 ps2|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ps2.png
-ps2_slim|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ps2_slim.png
 ps3|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ps3.png
-ps3_slim|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ps3_slim.png
-ps_one|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ps_one.png
 psp|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/psp.png
-psp_go|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/psp_go.png
 saturn_2|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/saturn_2.png
 snes|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/snes.png
 switch|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/switch.png
-switch_docked|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/switch_docked.png
 tg_16|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/tg-16.png
-turboduo|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/turboduo.png
-turboexpress|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/turboexpress.png
 vita|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/vita.png
 wii|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/wii.png
 xbox_360|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/xbox_360.png
 xbox_og|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/xbox_og.png
+
+# Variants (disabled)
+#ds_lite|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ds_lite.png
+#mac-90s|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/mac_imac.png
+#gameboy_advance_sp|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/gameboy_advance_sp.png
+#gameboy_micro|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/gameboy_micro.png
+#gameboy_pocket|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/gameboy_pocket.png
+#genesis_2|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/genesis_2.png
+#nomad|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/nomad.png
+#ps_one|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ps_one.png
+#ps2_slim|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ps2_slim.png
+#ps3_slim|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ps3_slim.png
+#psp_go|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/psp_go.png
+#switch_docked|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/switch_docked.png
+#turboduo|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/turboduo.png
+#turboexpress|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/turboexpress.png
 
 # Utilities
 qr_code|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/qr_code.gif
