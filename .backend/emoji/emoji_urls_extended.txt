@@ -47,6 +47,7 @@ master_system|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/m
 msx|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/msx.png
 n_gage|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/n-gage.png
 n64|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/n64.png
+n64_dd|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/n64_dd.png
 neogeo_aes|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/neogeo_aes.png
 neogeo_cd|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/neogeo_cd.png
 neogeo_pocket|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/neo_geo_pocket.png
@@ -66,14 +67,18 @@ sega_cd|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.b
 snes|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/snes.png
 switch|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/switch.png
 tg_16|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/tg_16.png
+tg_16_cd|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/tg_16_cd.png
+vectrex|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/vectrex.png
 virtual_boy|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/virtual_boy.png
 vita|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/vita.png
+vmu|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/vmu.png
 wii|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/wii.png
 wii_u|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/wii_u.png
 win_3x|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/win_3x.png
 win_9x|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/win_9x.png
 win_nt|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/win_nt.png
 wonderswan|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/wonderswan.png
+x68000|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/x68000.png
 xbox_360|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/xbox_360.png
 xbox_og|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/xbox_og.png
 zx_spectrum|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/zx_spectrum.png
