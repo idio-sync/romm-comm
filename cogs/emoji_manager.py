@@ -13,8 +13,8 @@ logger = logging.getLogger('romm_bot')
 class EmojiManager(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.emoji_url_list = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/emoji_urls.txt"
-        self.emoji_url_list_extended = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/emoji_urls_extended.txt"
+        self.emoji_url_list = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/emoji_urls.txt"
+        self.emoji_url_list_extended = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/emoji_urls_extended.txt"
         
         # Create data directory if it doesn't exist
         self.data_dir = 'data'
