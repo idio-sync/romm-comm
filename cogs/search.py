@@ -380,13 +380,16 @@ class Search(commands.Cog):
             'Game Boy Advance': ['gameboy_advance', 'gameboy_advance_sp', 'gameboy_micro'],
             'Game Boy Color': ['gameboy_color'],
             'J2ME': ['cell_java'],
-            'Mac': ['mac'], ['mac_imac'],
+            'Mac': ['mac', 'mac_imac'],
+            'MSX': ['msx'],
             'N-Gage': ['n_gage'],
             'Neo Geo AES': ['neogeo_aes'],
-            'Neo Geo Pocket':['neo_geo_pocket'],
+            'Neo Geo CD': ['neogeo_cd'],
+            'Neo Geo Pocket':['neogeo_pocket'],
             'Neo Geo Pocket Color': ['neogeo_pocket_color'],
             'Nintendo 3DS': ['3ds'],
             'Nintendo 64': ['n64'],
+            'Nintendo 64Dd': ['n64_dd'],
             'Nintendo DS': ['ds', 'ds_lite'],
             'Nintendo DSi': ['dsi'],
             'Nintendo Entertainment System': ['nes'],
@@ -394,6 +397,7 @@ class Search(commands.Cog):
             'Nintendo Switch': ['switch', 'switch_docked'],
             'PC-8800 Series': ['pc_88'],
             'PC-9800 Series': ['pc_98'],
+            'Philips CD-i': ['cd_i'],
             'PlayStation': ['ps', 'ps_one'],
             'PlayStation 2': ['ps2', 'ps2_slim'],
             'PlayStation 3': ['ps3', 'ps3_slim'],
@@ -406,12 +410,19 @@ class Search(commands.Cog):
             'Sega Master System/Mark III': ['master_system'],
             'Sega Mega Drive/Genesis': ['genesis', 'genesis_2', 'nomad'],
             'Sega Saturn': ['saturn_2'],
+            'Sharp X68000': ['x68000'],
+            'Sinclair Zxs': ['zx_spectrum'],
             'Super Nintendo Entertainment System': ['snes'],
-            'Switch': ['switch', 'switch_docked']
+            'Switch': {'emoji_names': ['switch', 'switch_docked'], 'fallback': '🎮'},
+            'Turbografx-16/PC Engine CD': ['tg_16_cd'],
             'TurboGrafx-16/PC Engine': ['tg_16', 'turboduo', 'turboexpress'],
+            'Vectrex': ['vectrex'],
             'Virtual Boy': ['virtual_boy'],
+            'Visual Memory Unit / Visual Memory System': ['vmu'],
             'Wii': ['wii'],
+            'Win3X': ['win_3x_gui'],
             'Windows': ['pc', 'win_9x'],
+            'WonderSwan': ['wonderswan'],
             'Xbox': ['xbox_og'],
             'Xbox 360': ['xbox_360'],
         }
@@ -472,18 +483,19 @@ class Search(commands.Cog):
         if not platform_name or not hasattr(self.bot, 'emoji_dict'):
             return platform_name
         
-        # Try to find a matching emoji variant
-        variants = self.platform_variants.get(platform_name, [])
-        for variant in variants:
+        # Get the variant info
+        variant_info = self.platform_variants.get(platform_name, {
+            'emoji_names': [platform_name.lower().replace(' ', '_').replace('-', '_')],
+            'fallback': '🎮'  # Default fallback
+        })
+        
+        # Try to find a matching custom emoji
+        for variant in variant_info['emoji_names']:
             if variant in self.bot.emoji_dict:
                 return f"{platform_name} {self.bot.emoji_dict[variant]}"
         
-        # If no variant found, try a simple version of the name
-        simple_name = platform_name.lower().replace(' ', '_').replace('-', '_')
-        if simple_name in self.bot.emoji_dict:
-            return f"{platform_name} {self.bot.emoji_dict[simple_name]}"
-        
-        return platform_name
+        # If no custom emoji found, use the fallback
+        return f"{platform_name} {variant_info['fallback']}"
 
     async def platform_autocomplete(self, ctx: discord.AutocompleteContext):
         """Autocomplete function for platform names."""
