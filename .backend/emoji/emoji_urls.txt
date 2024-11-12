@@ -45,9 +45,9 @@ wii_u|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.bac
 xbox_360|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/xbox_360.png
 xbox_og|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/xbox_og.png
 zx_spectrum|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/zx_spectrum.png
-bios|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/bios.png                      # Utility
-qr_code|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/qr_code.gif                # Utility
-vhs|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/vhs.png                        # Utility
+bios|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/bios.png
+qr_code|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/qr_code.gif
+vhs|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/vhs.png
 
 # This is the default list of platform emojis with no variants
 
