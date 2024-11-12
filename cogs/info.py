@@ -19,6 +19,8 @@ class Info(commands.Cog):
         self.bot = bot
         self.stat_channels = {}
         self.last_stats = {}  # Store previous stats for comparison
+        self.has_switch = False
+        bot.loop.create_task(self.check_switch_platform())
      
     async def get_or_create_category(self, guild: discord.Guild, category_name: str) -> discord.CategoryChannel:
         """Get or create a category in the guild."""
@@ -134,6 +136,33 @@ class Info(commands.Cog):
                 )
         except Exception as e:
             logger.error(f"Failed to update presence: {e}")
+    
+    async def check_switch_platform(self):
+        """Check if Switch is available in platforms"""
+        await self.bot.wait_until_ready()
+        try:
+            # Get platforms from API
+            raw_platforms = await self.bot.fetch_api_endpoint('platforms')
+            if raw_platforms:
+                platforms_data = self.bot.sanitize_data(raw_platforms, data_type='platforms')
+                # Check if Switch exists in platforms
+                self.has_switch = any(
+                    platform['name'].lower() in ['nintendo switch', 'switch'] 
+                    for platform in platforms_data
+                )
+                logger.info(f"Switch platform {'found' if self.has_switch else 'not found'} in platform list")
+        except Exception as e:
+            logger.error(f"Error checking Switch platform: {e}")
+            self.has_switch = False
+            
+    async def cog_slash_command_check(self, ctx: discord.ApplicationContext) -> bool:
+        """This runs before any slash command in this cog"""
+        # If it's the switch_shop_info command and Switch isn't available, block it
+        if ctx.command.name == 'switch_shop_info' and not self.has_switch:
+            await ctx.respond("❌ Switch platform is not available on this RomM server", ephemeral=True)
+            return False
+        return True
+
     
     # Listener
     @commands.Cog.listener()
@@ -325,10 +354,12 @@ class Info(commands.Cog):
     async def switch_shop_info(self, ctx):
         """Display Switch shop connection setup instructions."""      
         try:
+            # Get emojis with fallbacks
+                       
             embed = discord.Embed(
-                title=f"{self.bot.emoji_dict['switch']}  Switch Shop Connection Guide  {self.bot.emoji_dict['switch_docked']}",
+                title=f"{self.bot.emoji_dict['switch']}  Switch Shop Connection Guide  {self.bot.emoji_dict['switch']}",
                 description="Follow these steps to configure your Switch for connection to this server.\n"
-                            "*Note: This guide assumes you have Tinfoil installed and know how to use its basic functions.*",
+                            "\n*Note: This guide assumes you have Tinfoil installed and know how to use its basic functions.*",
                 color=discord.Color.blue()
             )
 
@@ -377,15 +408,20 @@ class Info(commands.Cog):
 
             embed.add_field(
                 name="Accessing Content",
-                value="Your RomM content will now be available in:\n"
-                      "• The `New Games` tab in Tinfoil\n"
-                      "• The `File Browser` section you just configured",
+                value=(
+                    f" Your RomM content will now be available in:\n"
+                    "• The `New Games` tab in Tinfoil\n"
+                    "• The `File Browser` section you just configured"
+                ),
                 inline=False
             )
 
             # Add footer with note
             embed.set_footer(
-                text="Need help? Check the RomM documentation or ask for support on GitHub/Discord"
+                text=(
+                    f"Need help? Check the RomM documentation "
+                    "or ask for support on GitHub/Discord"
+                )
             )
 
             await ctx.respond(embed=embed)

@@ -169,8 +169,8 @@ class RommBot(discord.Bot):
             'cogs.info', 
             'cogs.search', 
             'cogs.scan', 
-          # 'cogs.user_manager', Disable for now
-            'cogs.requests'
+            'cogs.requests',
+          # 'cogs.user_manager'
         ]
         
         # Dependencies for each cog
