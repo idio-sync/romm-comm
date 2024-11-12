@@ -10,8 +10,8 @@ import requests
 class EmojiManager(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.emoji_url_list = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/emoji_urls.txt"
-        self.extended_emoji_url = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/emoji_urls_extended.txt"
+        self.emoji_url_list = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/emoji_urls.txt"
+        self.extended_emoji_url = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/emoji_urls_extended.txt"
         
         # Create data directory if it doesn't exist
         self.data_dir = 'data'
@@ -42,72 +42,59 @@ class EmojiManager(commands.Cog):
  
     def load_processed_servers(self) -> Dict[int, List[str]]:
         """Load the list of servers that have already had emojis uploaded."""
-        try:
-            if os.path.exists(self.processed_servers_file):
-                with open(self.processed_servers_file, 'r') as f:
-                    data = json.load(f)
-                #print(f"Successfully loaded processed servers from {self.processed_servers_file}")  # Debug print
-                return data
-            else:
-                print(f"No existing processed servers file found at {self.processed_servers_file}")  # Debug print
-                return {}
-        except Exception as e:
-            print(f"Error loading processed servers file: {e}")  # Debug print
-            return {}
+        if os.path.exists(self.processed_servers_file):
+            with open(self.processed_servers_file, 'r') as f:
+                return json.load(f)
+        return {}
 
     def save_processed_servers(self):
         """Save the list of processed servers to avoid duplicate uploads."""
-        try:
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(self.processed_servers_file), exist_ok=True)
-            
-            with open(self.processed_servers_file, 'w') as f:
-                json.dump(self.processed_servers, f)
-            print(f"Successfully saved processed servers to {self.processed_servers_file}")  # Debug print
-            #print(f"Saved data: {self.processed_servers}")  # Debug print
-        except Exception as e:
-            print(f"Error saving processed servers: {e}")  # Debug print
+        os.makedirs(os.path.dirname(self.processed_servers_file), exist_ok=True)
+        with open(self.processed_servers_file, 'w') as f:
+            json.dump(self.processed_servers, f)
 
     async def load_emoji_list(self, guild: discord.Guild = None) -> List[Tuple[str, str]]:
-        """Load emoji data from appropriate text file based on server's Nitro status."""
-        try:
-            # Determine which URL to use based on server's emoji limit
-            emoji_url = self.extended_emoji_url if self.is_nitro_server(guild) else self.standard_emoji_url
-            print(f"Using {'extended' if self.is_nitro_server(guild) else 'standard'} emoji list for {guild.name}")
+            """Load emoji data from appropriate text file based on server's Nitro status."""
+            try:
+                # Determine which URL to use based on server's emoji limit
+                emoji_url = self.emoji_url_list_extended if self.is_nitro_server(guild) else self.emoji_url_list
+                print(f"Using {'extended' if self.is_nitro_server(guild) else 'standard'} emoji list for {guild.name}")
+                print(f"Selected URL: {emoji_url}")
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(emoji_url) as response:
+                        if response.status != 200:
+                            print(f"Warning: Failed to fetch emoji list: {response.status}")
+                            return []
+                        content = await response.text()
             
-            async with aiohttp.ClientSession() as session:
-                async with session.get(emoji_url) as response:
-                    if response.status != 200:
-                        print(f"Warning: Failed to fetch emoji list: {response.status}")
-                        return []
-                    content = await response.text()
-        
-            # Parse the content into emoji pairs
-            emoji_list = []
-            for line in content.splitlines():
-                line = line.strip()
-                if line and not line.startswith('#'):  # Skip empty lines and comments
-                    try:
-                        name, url = line.split('|')
-                        # Clean the name and ensure consistent formatting
-                        clean_name = name.strip().replace('-', '_').lower()
-                        emoji_list.append((clean_name, url.strip()))
-                    except ValueError:
-                        print(f"Warning: Invalid line format: {line}")
-                        continue
-            
-            print(f"Loaded {len(emoji_list)} emoji definitions")
-            
-            # If it's not a Nitro server, ensure we don't exceed the limit
-            if not self.is_nitro_server(guild) and len(emoji_list) > 50:
-                print(f"Trimming emoji list to 50 for non-Nitro server {guild.name}")
-                emoji_list = emoji_list[:50]
-            
-            return emoji_list
-            
-        except Exception as e:
-            print(f"Warning: Failed to load emoji list: {str(e)}")
-            return []
+                # Parse the content into emoji pairs
+                emoji_list = []
+                for line in content.splitlines():
+                    line = line.strip()
+                    if line and not line.startswith('#'):  # Skip empty lines and comments
+                        try:
+                            name, url = line.split('|')
+                            # Clean the name and ensure consistent formatting
+                            clean_name = name.strip().replace('-', '_').lower()
+                            emoji_list.append((clean_name, url.strip()))
+                        except ValueError:
+                            print(f"Warning: Invalid line format: {line}")
+                            continue
+                
+                print(f"Loaded {len(emoji_list)} emoji definitions")
+                
+                # If it's not a Nitro server, ensure we don't exceed the limit
+                if not self.is_nitro_server(guild) and len(emoji_list) > 50:
+                    print(f"Trimming emoji list to 50 for non-Nitro server {guild.name}")
+                    emoji_list = emoji_list[:50]
+                
+                return emoji_list
+                
+            except Exception as e:
+                print(f"Warning: Failed to load emoji list: {str(e)}")
+                return []
+
 
     def is_nitro_server(self, guild: discord.Guild) -> bool:
         """Check if a server has Nitro boost level that allows more than 50 emojis."""
@@ -156,17 +143,21 @@ class EmojiManager(commands.Cog):
         print(f"Emoji limit: {guild.emoji_limit}")
         
         if guild_id_str in self.processed_servers:
-            # If server's Nitro status has changed, we might want to update emojis
-            current_nitro_status = self.is_nitro_server(guild)
-            stored_nitro_status = self.processed_servers[guild_id_str].get('nitro_status', False)
-            
-            if current_nitro_status != stored_nitro_status:
-                print(f"Nitro status changed for {guild.name}. Updating emojis...")
+            if isinstance(self.processed_servers[guild_id_str], dict):
+                # New format with nitro status
+                stored_nitro_status = self.processed_servers[guild_id_str].get('nitro_status', False)
+                current_nitro_status = self.is_nitro_server(guild)
+                if current_nitro_status != stored_nitro_status:
+                    print(f"Nitro status changed for {guild.name}. Updating emojis...")
+                    del self.processed_servers[guild_id_str]
+                    self.save_processed_servers()
+                else:
+                    print(f"Already uploaded emojis to {guild.name}")
+                    return
+            else:
+                # Old format, update it
                 del self.processed_servers[guild_id_str]
                 self.save_processed_servers()
-            else:
-                print(f"Already uploaded emojis to {guild.name}")
-                return
 
         if not guild.me.guild_permissions.manage_emojis:
             print(f"Missing emoji permissions in {guild.name}")
