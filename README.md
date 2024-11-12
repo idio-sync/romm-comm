@@ -11,6 +11,7 @@ Current
 - Scans: Start/stop different types of RomM scans, report back with info about the scan when complete and also during a scan in progress via command
 - Request System: Make and manage ROM requests entirely in Discord, currently functional in a simple capacity but want to expand
 - Emojis: Custom game console emoji uploads upon bot installation, use of said emojis in bot responses and stats
+- Emojis: Bot checks for Nitro on the server and if found uploads extended list of emojis, if the bot detects Nitro removed it deverts back to the standard list
 - QR code generation: Install games on 3DS/Vita via QR code with apps like FBI/[FBI Reloaded](https://github.com/TheRealZora/FBI-Reloaded)/[VitaShell](https://github.com/RealYoti/VitaShell) (download endpoint auth must be disabled on RomM instance)
 - Switch Shop Info: Command that lists instructions on how to connect to the [Tinfoil](https://tinfoil.io/Download) endpoint of connected RomM server (download endpoint auth must be disabled on RomM instance)
 - Rate-limited Discord API interactions
@@ -18,7 +19,6 @@ Current
 
 In Progress
 - RomM User Management: Manage users, automatically create RomM account for users with specific role (module currently not enabled)
-- Bot checks for Nitro on the server and if found uploads extended list of emojis 
 
 Planned (if possible)
 - Generate and pass EmulatorJS launcher links via command or include in game details after search
@@ -120,6 +120,19 @@ Bot "Now Playing" ROM count
 - Updates whenever API data is refreshed via timer or manually
 
 ![Bot Status](.github/screenshots/BotStatus.png)
+
+## Emojis
+
+Automatic Emoji management. Provides:
+- Upon first boot or joining Discord server (if bot booted before joining) a list of 50 custom emojis is grabbed and uploaded to the server
+- Emojis appear automatically next to platform names across bot responses if matching emoji is on the server
+- Nitro awareness - bot can detect if Nitro is present on the server and if found uploads extended list of emojis (mostly more obscure consoles and variants)
+- If the bot detects Nitro is removed it reverts back to the standard list of 50, so none of the more commonly used emojis are deleted when the limit decreases
+
+![Nitro](.github/screenshots/Nitro.png)
+
+![3ds](.backend/emoji/3ds.png) ![arcade](.backend/emoji/arcade.png) ![dos](.backend/emoji/dos.png) ![dreamcast](.backend/emoji/dreamcast.png) ![xbox_og](.backend/emoji/xbox_og.png) 
+![wii](.backend/emoji/wii.png) ![ps](.backend/emoji/ps.png) ![psp](.backend/emoji/psp.png) ![ps2](.backend/emoji/ps2.png) ![snes](.backend/emoji/snes.png), etc
 
 ## Available Commands
 
