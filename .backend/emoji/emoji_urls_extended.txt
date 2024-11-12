@@ -17,10 +17,12 @@ amiga|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.bac
 amstrad|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/amstrad.png
 android|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/android.png
 apple_II|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/apple_II.png
+arcade|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/arcade.png
 c64|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/c64.png
 cd32|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/cd32.png
 cdi|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/cd_i.png
 cell_java|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/cell_java.png
+colecovision|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/colecovision.png
 dos|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/dos.png
 ds|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ds.png
 dsi|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/dsi.png
