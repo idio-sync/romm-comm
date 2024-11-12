@@ -62,7 +62,7 @@ saturn_2|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.
 sega_cd|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/sega_cd.png
 snes|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/snes.png
 switch|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/switch.png
-tg_16|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/tg-16.png
+tg_16|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/tg_16.png
 virtual_boy|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/test/.backend/emoji/virtual_boy.png
 vita|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/vita.png
 wii|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/wii.png
