@@ -352,84 +352,83 @@ class Info(commands.Cog):
         description="Instructions for connecting your Switch to this server"
     )
     async def switch_shop_info(self, ctx):
-    """Display Switch shop connection setup instructions."""      
-    try:
-        # Get emojis with fallbacks
-        switch_emoji = getattr(self.bot.emoji_dict.get('switch', ''), 'mention', '🎮')
-       
-        embed = discord.Embed(
-            title=f"{switch_emoji}  Switch Shop Connection Guide  {switch_emoji}",
-            description="Follow these steps to configure your Switch for connection to this server.\n"
-                        "*Note: This guide assumes you have Tinfoil installed and know how to use its basic functions.*",
-            color=discord.Color.blue()
-        )
-
-        # Add steps as separate fields
-        embed.add_field(
-            name="Step 1: Access File Browser",
-            value="Open Tinfoil and navigate to File Browser",
-            inline=False
-        )
-
-        embed.add_field(
-            name="Step 2: Access Settings",
-            value="Scroll over to the selection and press `-` to access the new menu",
-            inline=False
-        )
-
-        # Connection settings in a formatted table
-        connection_settings = (
-            "**Protocol:** `https`\n"
-            f"**Host:** `{self.bot.config.DOMAIN}`\n"
-            "**Port:** `443`\n"
-            "**Path:** `/api/tinfoil/feed`\n"
-            "**Username:** `Your RomM username`\n"
-            "**Password:** `Your RomM password`\n"
-            "**Title:** `Your choice (free text)`\n"
-            "**Enabled:** `Yes`"
-        )
-        embed.add_field(
-            name="Step 3: Enter Connection Settings",
-            value=connection_settings,
-            inline=False
-        )
-
-        embed.add_field(
-            name="Step 4: Save Configuration",
-            value="Press `X` to save your settings",
-            inline=False
-        )
-
-        embed.add_field(
-            name="Step 5: Restart Tinfoil",
-            value="Close and reopen Tinfoil to scan TitleIDs\n"
-                  "*If configured correctly, you'll see the custom message:* `RomM Switch Library`",
-            inline=False
-        )
-
-        embed.add_field(
-            name="Accessing Content",
-            value=(
-                f"{switch_emoji} Your RomM content will now be available in:\n"
-                "• The `New Games` tab in Tinfoil\n"
-                "• The `File Browser` section you just configured"
-            ),
-            inline=False
-        )
-
-        # Add footer with note
-        embed.set_footer(
-            text=(
-                f"Need help? Check the RomM documentation "
-                "or ask for support on GitHub/Discord"
+        """Display Switch shop connection setup instructions."""      
+        try:
+            # Get emojis with fallbacks
+                       
+            embed = discord.Embed(
+                title=f"{self.bot.emoji_dict['switch']}  Switch Shop Connection Guide  {self.bot.emoji_dict['switch']}",
+                description="Follow these steps to configure your Switch for connection to this server.\n"
+                            "\n*Note: This guide assumes you have Tinfoil installed and know how to use its basic functions.*",
+                color=discord.Color.blue()
             )
-        )
 
-        await ctx.respond(embed=embed)
+            # Add steps as separate fields
+            embed.add_field(
+                name="Step 1: Access File Browser",
+                value="Open Tinfoil and navigate to File Browser",
+                inline=False
+            )
 
-    except Exception as e:
-        logger.error(f"Error in switch shop connection info command: {e}", exc_info=True)
-        await ctx.respond("❌ An error occurred while displaying Switch shop connection info")
+            embed.add_field(
+                name="Step 2: Access Settings",
+                value="Scroll over to the selection and press `-` to access the new menu",
+                inline=False
+            )
+
+            # Connection settings in a formatted table
+            connection_settings = (
+                "**Protocol:** `https`\n"
+                f"**Host:** `{self.bot.config.DOMAIN}`\n"
+                "**Port:** `443`\n"
+                "**Path:** `/api/tinfoil/feed`\n"
+                "**Username:** `Your RomM username`\n"
+                "**Password:** `Your RomM password`\n"
+                "**Title:** `Your choice (free text)`\n"
+                "**Enabled:** `Yes`"
+            )
+            embed.add_field(
+                name="Step 3: Enter Connection Settings",
+                value=connection_settings,
+                inline=False
+            )
+
+            embed.add_field(
+                name="Step 4: Save Configuration",
+                value="Press `X` to save your settings",
+                inline=False
+            )
+
+            embed.add_field(
+                name="Step 5: Restart Tinfoil",
+                value="Close and reopen Tinfoil to scan TitleIDs\n"
+                      "*If configured correctly, you'll see the custom message:* `RomM Switch Library`",
+                inline=False
+            )
+
+            embed.add_field(
+                name="Accessing Content",
+                value=(
+                    f" Your RomM content will now be available in:\n"
+                    "• The `New Games` tab in Tinfoil\n"
+                    "• The `File Browser` section you just configured"
+                ),
+                inline=False
+            )
+
+            # Add footer with note
+            embed.set_footer(
+                text=(
+                    f"Need help? Check the RomM documentation "
+                    "or ask for support on GitHub/Discord"
+                )
+            )
+
+            await ctx.respond(embed=embed)
+
+        except Exception as e:
+            logger.error(f"Error in switch shop connection info command: {e}", exc_info=True)
+            await ctx.respond("❌ An error occurred while displaying Switch shop connection info")
      
 #    # Website
 #    @discord.slash_command(
