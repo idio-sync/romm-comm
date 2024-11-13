@@ -74,7 +74,7 @@ class Config:
         self.SYNC_RATE = int(os.getenv('SYNC_RATE', 3600))
         self.UPDATE_VOICE_NAMES = os.getenv('UPDATE_VOICE_NAMES', 'true').lower() == 'true'
         self.SHOW_API_SUCCESS = os.getenv('SHOW_API_SUCCESS', 'false').lower() == 'true'
-        self.CACHE_TTL = int(os.getenv('CACHE_TTL', 300))  # 5 minutes default
+        self.CACHE_TTL = int(os.getenv('CACHE_TTL', 3900))  # 65 minutes, slightly longer than the SYNC_RATE
         self.API_TIMEOUT = int(os.getenv('API_TIMEOUT', 10))  # 10 seconds default
         self.USER = os.getenv('USER')
         self.PASS = os.getenv('PASS')
