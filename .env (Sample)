@@ -16,5 +16,5 @@ AUTO_REGISTER_ROLE_ID=romm_users_role_id  # Role ID that you want to assign user
 SHOW_API_SUCCESS=FALSE                    # Bot will send a message to channel below with status of API updates (mainly for debugging connection issues to Romm)
 CHANNEL_ID=YOURCHANNELID                  # Where the bot will post API updates (if enabled above)
 SYNC_RATE=3600                            # How often to sync with API in seconds (default: 3600)
-CACHE_TTL=3900                            # Cache time-to-live in seconds, set over an hour in case there is a delay in teh automatic refresh (default: 3900)
+CACHE_TTL=3900                            # Cache time-to-live in seconds, set over an hour in case there is a delay in the automatic refresh (default: 3900)
 API_TIMEOUT=10                            # API request timeout in seconds (default: 10)
