@@ -413,7 +413,7 @@ class Search(commands.Cog):
             'Sharp X68000': ['x68000'],
             'Sinclair Zxs': ['zx_spectrum'],
             'Super Nintendo Entertainment System': ['snes'],
-            'Switch': {'emoji_names': ['switch', 'switch_docked'],
+            'Switch': ['switch', 'switch_docked'],
             'Turbografx-16/PC Engine CD': ['tg_16_cd'],
             'TurboGrafx-16/PC Engine': ['tg_16', 'turboduo', 'turboexpress'],
             'Vectrex': ['vectrex'],
@@ -482,20 +482,22 @@ class Search(commands.Cog):
         """Returns platform name with its emoji if available."""
         if not platform_name or not hasattr(self.bot, 'emoji_dict'):
             return platform_name
-        
-        # Get the variant info
-        variant_info = self.platform_variants.get(platform_name, {
-            'emoji_names': [platform_name.lower().replace(' ', '_').replace('-', '_')],
-            'fallback': '🎮'  # Default fallback
-        })
-        
+
+        # Get the variant names - platform_variants returns a list
+        variant_names = self.platform_variants.get(platform_name, [platform_name.lower().replace(' ', '_').replace('-', '_')])
+
+        # If variant_names is a list (which it should be), use it directly
+        # If somehow it's not a list, wrap it in a list
+        variants_to_check = variant_names if isinstance(variant_names, list) else [variant_names]
+
         # Try to find a matching custom emoji
-        for variant in variant_info['emoji_names']:
+        for variant in variants_to_check:
             if variant in self.bot.emoji_dict:
                 return f"{platform_name} {self.bot.emoji_dict[variant]}"
-        
+
         # If no custom emoji found, use the fallback
-        return f"{platform_name} {variant_info['fallback']}"
+        return f"{platform_name} 🎮"
+        
 
     async def platform_autocomplete(self, ctx: discord.AutocompleteContext):
         """Autocomplete function for platform names."""
