@@ -413,7 +413,7 @@ class Search(commands.Cog):
             'Sharp X68000': ['x68000'],
             'Sinclair Zxs': ['zx_spectrum'],
             'Super Nintendo Entertainment System': ['snes'],
-            'Switch': {'emoji_names': ['switch', 'switch_docked'], 'fallback': '🎮'},
+            'Switch': {'emoji_names': ['switch', 'switch_docked'],
             'Turbografx-16/PC Engine CD': ['tg_16_cd'],
             'TurboGrafx-16/PC Engine': ['tg_16', 'turboduo', 'turboexpress'],
             'Vectrex': ['vectrex'],
