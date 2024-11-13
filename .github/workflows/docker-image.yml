@@ -10,7 +10,7 @@ on:
 env:
   DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
   DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-  IMAGE_NAME: your-docker-username/your-image-name
+  IMAGE_NAME: idiosync000/romm-comm
 
 jobs:
   build-and-push:
@@ -31,7 +31,8 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v4
         with:
-          context: .
+          context: ./docker
+          file: ./docker/Dockerfile
           push: true
           tags: |
             ${{ env.IMAGE_NAME }}:latest
