@@ -1,32 +1,41 @@
-name: Build and Push Docker Image
+name: Push Docker Image to Docker Hub
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-  workflow_dispatch:
+    branches:
+      - main
 
 jobs:
-  build-and-push:
+  push_to_docker_hub:
+    name: Push Docker Image to Docker Hub
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        id: checkout_code
+        uses: actions/checkout@v3
 
-      - name: Login to DockerHub
+      - name: Login to Docker Hub
+        id: login_docker_hub
         uses: docker/login-action@v3
         with:
-          username: idiosync000
+          username: ${{ secrets.DOCKERHUB_USER }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      
+      - name: Echo Docker Hub Username
+        run: echo ${{ secrets.DOCKERHUB_USER }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Echo GitHub SHA
+        run: echo $GITHUB_SHA
 
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: ./docker
-          file: ./docker/Dockerfile
-          push: true
-          tags: idiosync000/romm-comm:latest
+      - name: Build Docker image
+        id: build_image
+        run: |
+          docker build "$GITHUB_WORKSPACE" -t ${{ secrets.DOCKERHUB_USER }}/romm-comm:latest --label dockerfile-path="Dockerfile"
+      - name: Push Docker image
+        run: docker push ${{ secrets.DOCKERHUB_USER }}/romm-comm:latest
+
+      - name: Logout from Docker Hub
+        run: docker logout
+
+      - name: End
+        run: echo "Docker image pushed to Docker Hub successfully"
