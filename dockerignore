@@ -34,3 +34,8 @@ coverage.xml
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+#
+.env (Sample)
+.github/
+/backend/
