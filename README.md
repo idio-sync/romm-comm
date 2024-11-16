@@ -7,6 +7,7 @@ A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) A
 Current
 - Stats: Near real-time ROM collection statistics in voice channel, bot status and via command
 - Search: Platform-specific ROM searches and random ROM roll that provide download link and game/file information
+- Search: Support for multi-file games - user can select one, some or all files to download
 - Search: Platform based firmware search that lists firmware file information and provides download links
 - Scans: Start/stop different types of RomM scans, report back with info about the scan when complete and also during a scan in progress via command
 - Request System: Make and manage ROM requests entirely in Discord, currently functional in a simple capacity but want to expand
