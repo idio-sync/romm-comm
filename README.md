@@ -161,7 +161,7 @@ Search for ROMs by platform and game name. Provides:
 - Cover images when available (if RomM's game entry is properly matched to an IGDB entry)
 - React with the :qr_code: emoji and the bot will respond with a QR code for 3DS/Vita dowloads
 
-![Slash Search](.github/screenshots/SlashSearch.png)
+![Slash Search](.github/screenshots/SingleFile.png)
 
 ### /random [platfom]*
 - Finds random rom in your collection and displays info outlined in /search command
