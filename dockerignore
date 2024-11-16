@@ -38,5 +38,5 @@ Thumbs.db
 #
 .env (Sample)
 .github/
-/backend/
+backend/
 README.md
