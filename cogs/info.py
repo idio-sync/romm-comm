@@ -430,59 +430,5 @@ class Info(commands.Cog):
             logger.error(f"Error in switch shop connection info command: {e}", exc_info=True)
             await ctx.respond("❌ An error occurred while displaying Switch shop connection info")
      
-#    # Website
-#    @discord.slash_command(
-#        name="website",
-#        description="Get the RomM instance URL"
-#    )
-#    async def website(self, ctx):
-#        """Website information command."""
-#        await ctx.respond(
-#            embed=discord.Embed(
-#                title="Website Information",
-#                description=self.bot.config.DOMAIN,
-#                color=discord.Color.blue()
-#        ))
-#        pass
-
-#   @discord.slash_command(
-#        name="sync",
-#        description="Manually sync bot commands (Owner only)"
-#    )
-#    @commands.is_owner()  # This ensures only the bot owner can use it
-#    async def sync(self, ctx):
-#       """Manually sync slash commands."""
-#        try:
-#            await ctx.defer(ephemeral=True)  # Show thinking state and make response private
-#            
-#            logger.info("Manual command sync")
-#            await self.bot.sync_commands()
-#            
-#            embed = discord.Embed(
-#                title="✅ Command Sync Successful",
-#                description="All slash commands have been synced to Discord.",
-#                color=discord.Color.green()
-#            )
-#            
-#            await ctx.respond(embed=embed, ephemeral=True)
-#            
-#        except discord.HTTPException as e:
-#            if e.code == 429:  # Rate limit error
-#                retry_after = e.retry_after if hasattr(e, 'retry_after') else 3600
-#                embed = discord.Embed(
-#                    title="⚠️ Rate Limited",
-#                    description=f"Command sync is rate limited. Please try again in {retry_after:.1f} seconds.",
-#                    color=discord.Color.orange()
-#                )
-#            else:
-#                embed = discord.Embed(
-#                    title="❌ Sync Failed",
-#                    description=f"Error: {str(e)}",
-#                    color=discord.Color.red()
-#                )
-#            
-#            await ctx.respond(embed=embed, ephemeral=True)
-#            logger.error(f"Sync command error: {e}")
-
 def setup(bot):
     bot.add_cog(Info(bot))
