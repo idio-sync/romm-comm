@@ -12,6 +12,7 @@ import aiohttp
 from io import BytesIO
 import asyncio
 import time
+from urllib.parse import quote
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -30,11 +31,11 @@ class ROM_View(discord.ui.View):
         self.author_id = author_id
         self.platform_name = platform_name
         self.message = initial_message
-        self._selected_rom = None  # Initialize selected_rom
-        
-        # Create select menu
+        self._selected_rom = None
+
+        # Create ROM select menu only
         self.select = discord.ui.Select(
-            placeholder="Choose a ROM to view details",
+            placeholder="Select result to view details",
             custom_id="rom_select"
         )
         
@@ -42,7 +43,13 @@ class ROM_View(discord.ui.View):
         for rom in search_results[:25]:
             display_name = rom['name'][:75] if len(rom['name']) > 75 else rom['name']
             file_name = rom.get('file_name', 'Unknown filename')
-            file_size = self.format_file_size(rom.get('file_size_bytes'))
+            
+            # Get correct size for dropdown
+            size_bytes = rom.get('file_size_bytes', 0)
+            if not size_bytes and rom.get('files'):
+                # For multi-file ROMs, sum the sizes
+                size_bytes = sum(f.get('size_bytes', 0) for f in rom['files'])
+            file_size = self.format_file_size(size_bytes)
             
             truncated_filename = (file_name[:47] + '...') if len(file_name) > 50 else file_name
             
@@ -70,7 +77,6 @@ class ROM_View(discord.ui.View):
         return f"{size_value:.2f} {units[unit_index]}"
 
     async def create_rom_embed(self, rom_data: Dict) -> discord.Embed:
-        """Create an embed for ROM details"""
         try:
             file_name = rom_data.get('file_name', 'unknown_file').replace(' ', '%20')
             download_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_data['id']}/content/{file_name}"
@@ -103,7 +109,6 @@ class ROM_View(discord.ui.View):
                             break
             
             if platform_name:
-                # Get Search cog instance to use get_platform_with_emoji
                 search_cog = self.bot.get_cog('Search')
                 if search_cog:
                     platform_display = search_cog.get_platform_with_emoji(platform_name)
@@ -111,10 +116,14 @@ class ROM_View(discord.ui.View):
                     platform_display = platform_name
                 embed.add_field(name="Platform", value=platform_display, inline=True)
             
-            # Add other fields
+            # Add other metadata fields
             if genres := rom_data.get('genres'):
-                genre_list = ", ".join(genres) if isinstance(genres, list) else genres
-                embed.add_field(name="Genres", value=genre_list, inline=True)
+                if isinstance(genres, list):
+                    genre_list = genres[:2]  # Take only first two genres
+                    genre_display = ", ".join(genre_list)
+                else:
+                    genre_display = str(genres)
+                embed.add_field(name="Genres", value=genre_display, inline=True)
             
             if release_date := rom_data.get('first_release_date'):
                 try:
@@ -125,43 +134,190 @@ class ROM_View(discord.ui.View):
                     logger.error(f"Error formatting date: {e}")
             
             if summary := rom_data.get('summary'):
-                if len(summary) > 200:
-                    summary = summary[:197] + "..."
-                embed.add_field(name="Summary", value=summary, inline=False)
+                trimmed_summary = self.trim_summary_to_lines(summary, max_lines=3)
+                if trimmed_summary:
+                    embed.add_field(name="Summary", value=trimmed_summary, inline=False)
             
             if companies := rom_data.get('companies'):
-                companies_str = ", ".join(companies) if isinstance(companies, list) else str(companies)
-                if companies_str:
-                    embed.add_field(name="Companies", value=companies_str, inline=False)
-            
-            # Download link with size
-            file_size = self.format_file_size(rom_data.get('file_size_bytes'))
-            embed.add_field(
-                name=f"Download ({file_size})",
-                value=f"[{rom_data.get('file_name', 'Download')}]({download_url})",
-                inline=False
-            )
-            
-            # Hash values
-            hashes = []
-            if crc := rom_data.get('crc_hash'):
-                if md5 := rom_data.get('md5_hash'):
-                    hashes.append(f"**CRC:** {crc} **MD5:** {md5}")
+                if isinstance(companies, list):
+                    company_list = companies[:2]  # Take only first two companies
+                    companies_str = ", ".join(company_list)
                 else:
-                    hashes.append(f"**CRC:** {crc}")
-            elif md5 := rom_data.get('md5_hash'):
-                hashes.append(f"**MD5:** {md5}")
-            if sha1 := rom_data.get('sha1_hash'):
-                hashes.append(f"**SHA1:** {sha1}")
+                    companies_str = str(companies)
+                if companies_str:
+                    embed.add_field(name="Companies", value=companies_str, inline=True)
+            
+            links = [
+                f"[Romm]({romm_url})",
+                f"[IGDB]({igdb_url})"
+            ]
+            embed.add_field(name="Links", value=" • ".join(links), inline=True)
+            
+            # File information
+            if rom_data.get('multi') and rom_data.get('files'):
+                files = rom_data.get('files', [])
+                total_size = sum(f.get('size_bytes', 0) if f.get('size_bytes', 0) else f.get('size', 0) for f in files)
+                files_info = []
+                total_length = 0
+                files_shown = 0
+                total_files = len(files)
+                max_length = 800  # Leave buffer for Discord's limit
 
-            if hashes:
-                embed.add_field(name="Hash Values", value="\n".join(hashes), inline=False)
+                def would_exceed_limit(current_text: str, new_line: str) -> bool:
+                    """Check if adding a new line would exceed Discord's limit"""
+                    potential_total = len('\n'.join(current_text + [new_line]))
+                    return potential_total > max_length
+                
+                # Sort files based on count
+                if len(files) > 10:
+                    sorted_files = sorted(
+                        files, 
+                        key=lambda x: x.get('size_bytes', 0) if x.get('size_bytes', 0) else x.get('size', 0), 
+                        reverse=True
+                    )[:10]
+                else:
+                    sorted_files = sorted(
+                        files,
+                        key=lambda x: x.get('filename', '').lower()
+                    )
+
+                # Process each file
+                for file_info in sorted_files:
+                    # Get file size
+                    size_bytes = file_info.get('size_bytes', 0)
+                    if not size_bytes and 'size' in file_info:
+                        size_bytes = file_info.get('size', 0)
+                    size_str = self.format_file_size(size_bytes)
+
+                    # Create file line
+                    file_line = f"• {file_info['filename']} ({size_str})"
+                    line_length = len(file_line) + 1  # +1 for newline
+                    
+                    if total_length + line_length > max_length:
+                        files_info.append("...")
+                        break
+                    
+                    # Add file line
+                    files_info.append(file_line)
+                    total_length += line_length
+                    files_shown += 1  # Increment counter when file is actually added
+                 
+                    # Get hash information
+                    # hashes = []
+                    # if crc := file_info.get('crc_hash'):
+                    #    hashes.append(f"CRC: {crc}")
+                    # if md5 := file_info.get('md5_hash'):
+                    #    hashes.append(f"MD5: {md5}")
+                    # if sha1 := file_info.get('sha1_hash'):
+                    #    hashes.append(f"SHA1: {sha1}")
+
+                    # Add hash line if we have hashes and room
+                    # if hashes:
+                    #    hash_line = "  " + " | ".join(hashes)
+                    #    if not would_exceed_limit(files_info, hash_line):
+                    #        files_info.append(hash_line)
+
+                    
+                # Create field name
+                field_name = f"Files (Total: {self.format_file_size(total_size)}"
+                if len(files) > files_shown:
+                    field_name += f" - Showing {files_shown} of {(total_files)} files)"
+                else:
+                    field_name += ")"
+
+                 # Verify final length
+                final_text = "\n".join(files_info)
+                if len(final_text) > 1024:
+                    # If somehow still too long, truncate and show fewer files
+                    files_info = files_info[:len(files_info)//2]
+                    if files_info[-1] != "...":
+                        files_info.append("...")
+                    final_text = "\n".join(files_info)
+                    files_shown = sum(1 for line in files_info if line.startswith("•"))
+                    
+                    # Update field name with new count
+                    field_name = f"Files (Total: {self.format_file_size(total_size)}"
+                    if len(files) > files_shown:
+                        field_name += f" - Showing {files_shown} of {len(files)} files)"
+                    else:
+                        field_name += ")"
+                
+                # Add field to embed
+                embed.add_field(
+                    name=field_name,
+                    value="\n".join(files_info),
+                    inline=False
+                )
+            else:
+                 # Single file display
+                file_size = self.format_file_size(rom_data.get('file_size_bytes', 0))
+                file_name = rom_data.get('file_name', 'unknown_file')
+                
+                # Add filename and hash values to embed
+                file_info = [f"• {file_name}"]
+                
+                embed.add_field(
+                    name=f"File ({file_size})",
+                    value="\n".join(file_info),
+                    inline=False
+                )
+                
+                # Hash values for single file
+                # hashes = []
+                # if crc := rom_data.get('crc_hash'):
+                #    hashes.append(f"**CRC:** {crc}")
+                # if md5 := rom_data.get('md5_hash'):
+                #    hashes.append(f"**MD5:** {md5}")
+                # if sha1 := rom_data.get('sha1_hash'):
+                #    hashes.append(f"**SHA1:** {sha1}")
+
+                # if hashes:
+                #    embed.add_field(name="Hash Values", value=" | ".join(hashes), inline=False)
                 
             return embed
         except Exception as e:
             logger.error(f"Error creating ROM embed: {e}")
             raise
 
+    def trim_summary_to_lines(self, summary: str, max_lines: int = 3, chars_per_line: int = 60) -> str:
+        """Trim summary text to specified number of lines"""
+        if not summary:
+            return ""
+            
+        # Split existing newlines first
+        lines = summary.split('\n')
+        if len(lines) > max_lines:
+            lines = lines[:max_lines]
+            summary = '\n'.join(lines)
+            if len(lines) == max_lines:
+                summary += "..."
+            return summary
+            
+        # If we have fewer physical lines, check length-based wrapping
+        current_line = 1
+        current_length = 0
+        result = []
+        words = summary.replace('\n', ' ').split(' ')
+        
+        for word in words:
+            # Check if adding this word would start a new line
+            if current_length + len(word) + 1 > chars_per_line:
+                current_line += 1
+                current_length = len(word)
+                # If this would exceed our max lines, stop here
+                if current_line > max_lines:
+                    result.append('...')
+                    break
+                result.append(word)
+            else:
+                current_length += len(word) + 1
+                result.append(word)
+                
+            if current_line > max_lines:
+                break
+                
+        return ' '.join(result)
+    
     async def generate_qr(self, url: str) -> discord.File:
         """Generate QR code for download URL"""
         try:
@@ -185,6 +341,248 @@ class ROM_View(discord.ui.View):
             logger.error(f"Error generating QR code: {e}")
             return None
 
+    async def update_file_select(self, rom_data: Dict):
+        """Update the file selection menu with available files"""
+        try:
+            # Remove existing file components if they exist
+            components_to_remove = []
+            for item in self.children:
+                if isinstance(item, (discord.ui.Button, discord.ui.Select)) and item != self.select:
+                    components_to_remove.append(item)
+            
+            for item in components_to_remove:
+                self.remove_item(item)
+
+            # Initialize filename map as instance variable
+            self.filename_map = {}
+
+            if rom_data.get('multi') and rom_data.get('files'):
+                files = rom_data.get('files', [])
+                if not files:
+                    return
+                
+                # Sort files based on count
+                if len(files) > 10:
+                    sorted_files = sorted(
+                        files, 
+                        key=lambda x: x.get('size_bytes', 0) if x.get('size_bytes', 0) else x.get('size', 0), 
+                        reverse=True
+                    )[:10]
+                else:
+                    sorted_files = sorted(
+                        files,
+                        key=lambda x: x.get('filename', '').lower()
+                    )
+                
+                # Create file select with appropriate max_values
+                self.file_select = discord.ui.Select(
+                    placeholder="Select files to download",
+                    custom_id="file_select",
+                    min_values=1,
+                    max_values=min(len(sorted_files), 25)
+                )
+                
+                # Add file options using shortened values
+                for i, file_info in enumerate(sorted_files):
+                    # Get size from file info
+                    size_bytes = file_info.get('size_bytes', 0)
+                    if not size_bytes and 'size' in file_info:
+                        size_bytes = file_info.get('size', 0)
+                    size = self.format_file_size(size_bytes)
+                    
+                    # Create shortened value and map it to full filename
+                    short_value = f"file_{i}"
+                    self.filename_map[short_value] = file_info['filename']
+                    
+                    self.file_select.add_option(
+                        label=file_info['filename'][:75],
+                        value=short_value,  # Use shortened value
+                        description=f"Size: {size}"
+                    )
+                
+                self.file_select.callback = self.file_select_callback
+                self.add_item(self.file_select)
+
+                # Add download buttons as URL buttons
+                file_name = quote(rom_data.get('file_name', 'unknown_file'))
+                base_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_data['id']}/content/{file_name}"
+
+                # Download Selected button starts disabled
+                self.download_selected = discord.ui.Button(
+                    label="Download Selected",
+                    style=discord.ButtonStyle.link,
+                    url=base_url,
+                    disabled=True
+                )
+                self.add_item(self.download_selected)
+
+                # Download All button
+                self.download_all = discord.ui.Button(
+                    label="Download All",
+                    style=discord.ButtonStyle.link,
+                    url=base_url
+                )
+                self.add_item(self.download_all)
+
+            else:
+                # Single file download button
+                file_name = quote(rom_data.get('file_name', 'unknown_file'))
+                file_size = self.format_file_size(rom_data.get('file_size_bytes', 0))
+                download_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_data['id']}/content/{file_name}"
+                
+                self.download_all = discord.ui.Button(
+                    label=f"Download ({file_size})",
+                    style=discord.ButtonStyle.link,
+                    url=download_url
+                )
+                self.add_item(self.download_all)
+
+        except Exception as e:
+            logger.error(f"Error updating file select: {e}")
+            logger.error(f"ROM data: {rom_data}")
+            raise
+
+
+    async def file_select_callback(self, interaction: discord.Interaction):
+        """Handle file selection"""
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This selection isn't for you!", ephemeral=True)
+            return
+
+        try:
+            selected_short_values = interaction.data['values']
+            logger.debug(f"Selected short values: {selected_short_values}")
+            logger.debug(f"Filename map: {self.filename_map}")
+            
+            if selected_short_values and hasattr(self, 'filename_map'):
+                # Convert short values back to full filenames
+                selected_file_names = [self.filename_map[short_value] for short_value in selected_short_values]
+                
+                # Create the URL based on number of files
+                base_file_name = self._selected_rom.get('file_name', 'unknown_file')
+                encoded_base_name = quote(base_file_name)
+                base_url = f"{self.bot.config.DOMAIN}/api/roms/{self._selected_rom['id']}/content/{encoded_base_name}"
+                
+                if len(selected_file_names) == 1:
+                    # For single file, encode the filename
+                    encoded_file = quote(selected_file_names[0])
+                    download_url = f"{base_url}?files={encoded_file}"
+                else:
+                    # For multiple files, pass each file as a separate query parameter
+                    file_params = "&".join(f"files={quote(f)}" for f in selected_file_names)
+                    download_url = f"{base_url}?{file_params}"
+                
+                logger.debug(f"Generated download URL: {download_url}")
+                
+                # Remove old download buttons
+                for item in self.children[:]:
+                    if isinstance(item, discord.ui.Button):
+                        self.remove_item(item)
+                
+                # Add new download selected button with updated URL
+                self.download_selected = discord.ui.Button(
+                    label="Download Selected",
+                    style=discord.ButtonStyle.link,
+                    url=download_url,
+                    disabled=False
+                )
+                self.add_item(self.download_selected)
+
+                # Re-add download all button
+                all_file_name = quote(self._selected_rom.get('file_name', 'unknown_file'))
+                download_all_url = f"{self.bot.config.DOMAIN}/api/roms/{self._selected_rom['id']}/content/{all_file_name}"
+                self.download_all = discord.ui.Button(
+                    label="Download All",
+                    style=discord.ButtonStyle.link,
+                    url=download_all_url
+                )
+                self.add_item(self.download_all)
+                
+                await interaction.response.edit_message(view=self)
+            else:
+                # Disable download selected button if no files selected
+                for item in self.children[:]:
+                    if isinstance(item, discord.ui.Button) and item.label == "Download Selected":
+                        item.disabled = True
+                await interaction.response.edit_message(view=self)
+                
+        except Exception as e:
+            logger.error(f"Error in file select callback: {e}")
+            logger.error(f"Selected values: {selected_short_values}")
+            try:
+                await interaction.response.defer(ephemeral=True)
+                await interaction.followup.send("An error occurred while processing your selection", ephemeral=True)
+            except discord.errors.InteractionResponded:
+                await interaction.followup.send("An error occurred while processing your selection", ephemeral=True)
+
+    async def download_selected_callback(self, interaction: discord.Interaction):
+        """Handle downloading selected files"""
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This button isn't for you!", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        
+        if not self._selected_rom:
+            await interaction.followup.send("Please select a ROM first!", ephemeral=True)
+            return
+
+        # Get selected values from the select menu
+        selected_values = []
+        for child in self.children:
+            if isinstance(child, discord.ui.Select) and child.custom_id == "file_select":
+                selected_values = child.values
+                break
+
+        if not selected_values:
+            await interaction.followup.send("Please select files to download!", ephemeral=True)
+            return
+        
+        file_name = self._selected_rom.get('file_name', 'unknown_file').replace(' ', '%20')
+        download_url = f"{self.bot.config.DOMAIN}/api/roms/{self._selected_rom['id']}/content/{file_name}?files={','.join(selected_values)}"
+        
+        await interaction.followup.send(
+            f"Download link for selected files:\n{download_url}",
+            ephemeral=True
+        )
+
+    def get_download_url(self, rom_id: int, file_name: str, selected_files: Optional[List[str]] = None) -> str:
+        """Helper method to generate properly encoded download URLs"""
+        try:
+            base_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_id}/content/{quote(file_name)}"
+            
+            if selected_files:
+                # Double encode: first each filename, then the entire parameter
+                encoded_files = [quote(f) for f in selected_files]
+                files_param = quote(','.join(encoded_files))
+                return f"{base_url}?files={files_param}"
+            
+            return base_url
+            
+        except Exception as e:
+            logger.error(f"Error generating download URL: {e}")
+            return ""
+    
+    async def download_all_callback(self, interaction: discord.Interaction):
+        """Handle downloading all files"""
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This button isn't for you!", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        
+        if not self._selected_rom:
+            await interaction.followup.send("Please select a ROM first!", ephemeral=True)
+            return
+
+        file_name = self._selected_rom.get('file_name', 'unknown_file').replace(' ', '%20')
+        download_url = f"{self.bot.config.DOMAIN}/api/roms/{self._selected_rom['id']}/content/{file_name}"
+        
+        await interaction.followup.send(
+            f"Download link for all files:\n{download_url}",
+            ephemeral=True
+        )
+
     async def handle_qr_trigger(self, interaction: discord.Interaction, trigger_type: str):
         """Handle QR code generation and sending"""
         try:
@@ -205,7 +603,6 @@ class ROM_View(discord.ui.View):
                 
             qr_file = await self.generate_qr(download_url)
             if qr_file:
-                # Create an embed for the QR code
                 embed = discord.Embed(
                     title=f"📱 QR Code for {selected_rom['name']}",
                     description=f"Triggered by {trigger_type}",
@@ -221,7 +618,7 @@ class ROM_View(discord.ui.View):
                 await interaction.channel.send("❌ Failed to generate QR code")
         except Exception as e:
             logger.error(f"Error handling QR code request: {e}")
-            await interaction.channel.send("❌ An error occurred while generating the QR code")  # Removed ephemeral
+            await interaction.channel.send("❌ An error occurred while generating the QR code")
 
     async def start_watching_triggers(self, interaction: discord.Interaction):
         """Start watching for QR code triggers"""
@@ -320,15 +717,47 @@ class ROM_View(discord.ui.View):
             
         await self.start_watching_triggers(interaction)
 
+    def message_check(self, m):
+        """Check if a message is a valid QR trigger"""
+        if not m.reference or not hasattr(m.reference, 'cached_message'):
+            return False
+            
+        referenced_message = m.reference.cached_message
+        if not referenced_message:
+            return False
+            
+        return (
+            any(keyword in m.content.lower() for keyword in {'qr'}) and
+            referenced_message.author.id == self.bot.user.id and
+            referenced_message.embeds and
+            self.message.embeds and
+            referenced_message.embeds[0].title == self.message.embeds[0].title
+        )
+        
+    def reaction_check(self, reaction, user):
+        """Check if a reaction is a valid QR trigger"""
+        valid_emojis = {'qr_code', '📱', 'qr'}
+        return (
+            user.id == self.author_id and
+            reaction.message.embeds and
+            self.message.embeds and
+            reaction.message.embeds[0].title == self.message.embeds[0].title and
+            (getattr(reaction.emoji, 'name', str(reaction.emoji)).lower() in valid_emojis)
+        )    
+    
+    
     async def select_callback(self, interaction: discord.Interaction):
         """Handle ROM selection"""
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("This selection menu isn't for you!", ephemeral=True)
             return
+            
         await interaction.response.defer()
+        
         try:
             selected_rom_id = int(interaction.data['values'][0])
             selected_rom = next((rom for rom in self.search_results if rom['id'] == selected_rom_id), None)
+            
             if selected_rom:
                 try:
                     detailed_rom = await self.bot.fetch_api_endpoint(f'roms/{selected_rom_id}')
@@ -337,24 +766,35 @@ class ROM_View(discord.ui.View):
                 except Exception as e:
                     logger.error(f"Error fetching detailed ROM data: {e}")
                 
+                self._selected_rom = selected_rom
                 embed = await self.create_rom_embed(selected_rom)
+                
+                # Remove all file-related components first
+                components_to_remove = []
+                for item in self.children[:]:
+                    if isinstance(item, (discord.ui.Button, discord.ui.Select)) and item != self.select:
+                        components_to_remove.append(item)
+                
+                for item in components_to_remove:
+                    self.remove_item(item)
+                
+                # Update file components for both single and multi-file ROMs
+                await self.update_file_select(selected_rom)
+                
                 edited_message = await interaction.message.edit(
                     content=interaction.message.content,
                     embed=embed,
                     view=self
                 )
                 
-                # Store both the edited message and selected ROM
                 self.message = edited_message
-                self._selected_rom = selected_rom  # Store the selected ROM
-                
-                # Don't start watching for QR triggers here since the search command already does it
+                await self.watch_for_qr_triggers(interaction)
             else:
                 await interaction.followup.send("❌ Error retrieving ROM details", ephemeral=True)
         except Exception as e:
             logger.error(f"Error in select callback: {e}")
             await interaction.followup.send("❌ An error occurred while processing your selection", ephemeral=True)
-
+                
 class Search(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -656,7 +1096,7 @@ class Search(commands.Cog):
                 max_attempts = 5
                 for attempt in range(max_attempts):
                     try:
-                        # Get all ROMs for the platform
+                        # Get ROMs for platform
                         all_roms = await self.bot.fetch_api_endpoint(
                             f'roms?platform_id={platform_id}&limit={rom_count}'
                         )
@@ -665,18 +1105,17 @@ class Search(commands.Cog):
                             # Select a random ROM from the list
                             rom_data = random.choice(all_roms)
                             
-                            # Fetch detailed ROM data if available
-                            try:
-                                detailed_rom = await self.bot.fetch_api_endpoint(f'roms/{rom_data["id"]}')
-                                if detailed_rom:
-                                    rom_data.update(detailed_rom)
-                            except Exception as e:
-                                logger.error(f"Error fetching detailed ROM data: {e}")
+                            # Get full ROM data
+                            detailed_rom = await self.bot.fetch_api_endpoint(f'roms/{rom_data["id"]}')
+                            if detailed_rom:
+                                rom_data = detailed_rom
                             
-                            # Create ROM view without select menu
+                            # Create view with explicit ROM data
                             view = ROM_View(self.bot, [rom_data], ctx.author.id, platform_name)
                             view.remove_item(view.select)
+                            view._selected_rom = rom_data
                             embed = await view.create_rom_embed(rom_data)
+                            await view.update_file_select(rom_data)
 
                             initial_message = await ctx.respond(
                                 f"🎲 Found a random ROM from {self.get_platform_with_emoji(platform_name)}:",
@@ -688,7 +1127,7 @@ class Search(commands.Cog):
                                 initial_message = await initial_message.original_response()
                             
                             view.message = initial_message
-                            await view.watch_for_qr_triggers(ctx.interaction)
+                            self.bot.loop.create_task(view.watch_for_qr_triggers(ctx.interaction))
                             return
 
                     except Exception as e:
@@ -698,7 +1137,7 @@ class Search(commands.Cog):
                     await asyncio.sleep(1)
 
             else:
-                # Original random logic for any platform
+                # Random from full collection
                 stats_data = self.bot.cache.get('stats')
                 if not stats_data or 'Roms' not in stats_data:
                     await ctx.respond("❌ Unable to fetch collection data")
@@ -716,7 +1155,7 @@ class Search(commands.Cog):
                     rom_data = await self.bot.fetch_api_endpoint(f'roms/{random_rom_id}')
                 
                     if rom_data and isinstance(rom_data, dict) and rom_data.get('id'):
-                        # Get platform name
+                        # Get platform name if available
                         platform_name = None
                         if platform_id := rom_data.get('platform_id'):
                             platforms_data = self.bot.cache.get('platforms')
@@ -726,28 +1165,30 @@ class Search(commands.Cog):
                                         platform_name = p.get('name')
                                         break
 
-                        # Create ROM view without select menu
+                        # Create view with explicit ROM data
                         view = ROM_View(self.bot, [rom_data], ctx.author.id, platform_name)
                         view.remove_item(view.select)
+                        view._selected_rom = rom_data
                         embed = await view.create_rom_embed(rom_data)
+                        await view.update_file_select(rom_data)
 
                         initial_message = await ctx.respond(
-                            f"🎲 Found a random ROM" + (f" from {platform_name}" if platform_name else "") + ":",
+                            f"🎲 Found a random ROM" + (f" from {self.get_platform_with_emoji(platform_name)}" if platform_name else "") + ":",
                             embed=embed,
                             view=view
                         )
-    
+
                         if isinstance(initial_message, discord.Interaction):
                             initial_message = await initial_message.original_response()
-                    
+                        
                         view.message = initial_message
-                        await view.watch_for_qr_triggers(ctx.interaction)
+                        self.bot.loop.create_task(view.watch_for_qr_triggers(ctx.interaction))
                         return
 
                     logger.info(f"Random ROM attempt {attempt + 1} with ID {random_rom_id} failed")
                     await asyncio.sleep(1)
 
-            # If we tried max_attempts times and couldn't find a valid ROM
+            # If all attempts failed
             await ctx.respond("❌ Failed to find a valid random ROM. Please try again.")
 
         except Exception as e:
@@ -864,9 +1305,6 @@ class Search(commands.Cog):
             # Store message reference
             view.message = initial_message
             
-            # Use watch_for_qr_triggers like random command
-            await view.watch_for_qr_triggers(ctx.interaction)
-
         except Exception as e:
             logger.error(f"Error in search command: {e}", exc_info=True)
             await ctx.respond("❌ An error occurred while searching for ROMs")
