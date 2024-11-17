@@ -19,7 +19,7 @@ Current
 - Caching system, the bot onnly fetches fresh stats if that particular stat has updated since last fetch
 
 In Progress
-- RomM User Management: Manage users, automatically create RomM account for users with specific role (module currently not enabled)
+- RomM User Management: Manage users, automatically create RomM account for users with specific role (module currently not enabled, possibly affected by reported Romm bug)
 
 Planned (if possible)
 - Generate and pass EmulatorJS launcher links via command or include in game details after search
@@ -228,32 +228,6 @@ Dababase Structure:
 - Request status (pending/fulfilled/rejected/cancelled)
 - Timestamps
 - Admin notes and fulfillment details
-
-### User Manager
-- /sync_users - Sync all users who have auto-register role (Admin only)
-
-General:
-- User Manager is togglable by server admin, if `ENABLE_USER_MANAGER` is set to `FALSE` the module will avoid being loaded entirely and no commands will show in Discord
-
-Account Creation:
-- Creates RomM account when role specified in `AUTO_REGISTER_ROLE_ID` is assigned to Discord user
-- Uses Discord display name for RomM username (_1/2/3 etc. if dupe)
-- Handles existing accounts, asks user if they have a RomM account and promps them to link accounts before creating new account
-- Always creates new accounts as regular users
-- Generates random password and notifies new user by DM, gives RomM domain info and instructs them to log in and change password
-- Preserves existing admin accounts
-- Logs when users link to admin accounts
-- Adds warning notifications for admin account links
-
-Role Removal:
-- Deletes RomM user account when role is removed from Discord user
-- Sends DM notification
-- Logs deletion
-- Only affects users created by the bot
-- Checks if user is admin before deletion
-- Preserves admin accounts even if role is removed
-- Logs attempted deletions of admin accounts
-- Notifies server admins of protection
 
 ## Error Handling
 
