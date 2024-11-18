@@ -25,7 +25,6 @@ Planned (if possible)
 - Generate and pass EmulatorJS launcher links via command or include in game details after search
 - RomM API key usage so user/pass do not have to be passed (if RomM implements creating API key)
 - Better IGDB integration (currently pulles IGDB cover url from RomM db entry for game)
-- More robust request command that searches IGDB per platform and passes along requested game ID
 - Look up most popular games (via RomM logs?) and provide stats via command
 
 ## Requirements
@@ -103,7 +102,7 @@ API_TIMEOUT=10
 - `AUTO_REGISTER_ROLE_ID` : Discord role ID used for linking Discord users to RomM users and registering new RomM users if granted to Discord user (if user manager enabled)
 - `SHOW_API_SUCCESS`: Show API sync result messages in Discord (default: false)
 - `CHANNEL_ID`: Channel ID for API sync result and user manager notifications to be sent to (if enabled above) and user manager log messages
-- `CACHE_TTL`: Cache time-to-live in seconds (default: 300)
+- `CACHE_TTL`: Cache time-to-live in seconds (default: 3900)
 - `API_TIMEOUT`: API request timeout in seconds (default: 10)
 
 ## Visable Statistics
@@ -111,8 +110,7 @@ API_TIMEOUT=10
 Voice Channel Stat Display
 - If enabled (`UPDATE_VOICE_NAMES=true`), the bot creates voice channels displaying platform, rom, save, savestate, screenshot and RomM user count as well as RomM storage use size
 - Only updates if stats change upon API refresh
-- Right now it creates new channels and deletes the old, will soon edit instead
-- I'm planning on making emoji's customizable and each VC toggalable individually
+- Creates new channels and deletes the old to guarantee no duplicate channels
 
 ![VC Stats](.github/screenshots/VCStats.png)
 
@@ -156,7 +154,6 @@ Search for ROMs by platform and game name. Provides:
 - Platform selection autofill (pulled from RomM's internal list of avalable platforms)
 - File names
 - File sizes
-- Hash details (CRC, MD5, SHA1)
 - Download links pointing to your public URL or IP if configured
 - Cover images when available (if RomM's game entry is properly matched to an IGDB entry)
 - React with the :qr_code: emoji and the bot will respond with a QR code for 3DS/Vita dowloads
@@ -209,12 +206,12 @@ Trigger RomM library scan. Options are:
 Request System Features:
 - Users can submit ROM requests with platform, game name, and optional details as text
 - Searches for existing ROM names in the RomM database to see if there is already a ROM present with the requested game name to avoid unnecessary requests
-- Limit of 3 pending requests per user, will lilely make this user controlled in the future
+- Limit of 5 pending requests per user, so requests do not get overwhelming
 - DM notifications to users when their requests are fulfilled/rejected either automatically after a RomM system scan or manually via admin
 - Users can view their own requests
 - Users can cancel their pending requests
 - Uses SQLite database to store requests
-- Request system is toggleable via env variable or Discord slash command if server admin does not want to use it
+- Request system is toggleable via env variable if server admin does not want to use it
 
 Admin Features:
 - List all pending requests
