@@ -19,11 +19,10 @@ Current
 - Caching system, the bot onnly fetches fresh stats if that particular stat has updated since last fetch
 
 In Progress
-- RomM User Management: Manage users, automatically create RomM account for users with specific role (module currently not enabled, possibly affected by reported Romm bug)
+- RomM User Management: Manage users, automatically create RomM account for users with specific role (module currently not enabled due to RomM bug, fix is pending)
 
 Planned (if possible)
-- Generate and pass EmulatorJS launcher links via command or include in game details after search
-- RomM API key usage so user/pass do not have to be passed (if RomM implements creating API key)
+- Generate and pass EmulatorJS launcher links in game details after search
 - Better IGDB integration (currently pulles IGDB cover url from RomM db entry for game)
 - Look up most popular games (via RomM logs?) and provide stats via command
 
