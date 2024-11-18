@@ -23,8 +23,11 @@ In Progress
 
 Planned (if possible)
 - Generate and pass EmulatorJS launcher links in game details after search
-- Better IGDB integration (currently pulles IGDB cover url from RomM db entry for game)
+- Better IGDB integration (currently just pulls IGDB cover url from RomM db entry for game)
+- Requests dashboard webpage, not sure if this feature will get enough usage to justify
 - Look up most popular games (via RomM logs?) and provide stats via command
+- More collection information commands (IGDB have/miss, report missing, etc)
+- Alternative chat client integrations (Matrix, Telegram, Slack)
 
 ## Requirements
 
