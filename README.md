@@ -100,7 +100,7 @@ API_TIMEOUT=10
 - `REQUESTS_ENABLED` : Enable request commands (default: true)
 - `ENABLE_USER_MANAGER` : Enables user manager module (default: true)
 - `AUTO_REGISTER_ROLE_ID` : Discord role ID used for linking Discord users to RomM users and registering new RomM users if granted to Discord user (if user manager enabled)
-- `SHOW_API_SUCCESS`: Show API sync result messages in Discord (default: false)
+- `SHOW_API_SUCCESS`: Show API sync results and error messages in Discord (default: false)
 - `CHANNEL_ID`: Channel ID for API sync result and user manager notifications to be sent to (if enabled above) and user manager log messages
 - `CACHE_TTL`: Cache time-to-live in seconds (default: 3900)
 - `API_TIMEOUT`: API request timeout in seconds (default: 10)
