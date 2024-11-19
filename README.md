@@ -193,8 +193,6 @@ Trigger RomM library scan. Options are:
 - /request - Submit a new request
 - /my_requests - View your requests
 - /cancel_request - Cancel a pending request
-- /toggle_requests - Administrators can toggle request system on/off
-- /request_status - Users can check the status 
 - /request_admin - Admin commands (list/fulfill/reject/addnote)
 
 ![Request](.github/screenshots/Request.png)
