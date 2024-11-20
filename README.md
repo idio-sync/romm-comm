@@ -10,7 +10,7 @@ Current
 - Search: Support for multi-file games - user can select one, some or all files to download
 - Search: Platform based firmware search that lists firmware file information and provides download links
 - Scans: Start/stop different types of RomM scans, report back with info about the scan when complete and also during a scan in progress via command
-- Request System: Make and manage ROM requests entirely in Discord, currently functional in a simple capacity but want to expand
+- Request System: Make and manage ROM requests entirely in Discord, now enriched with IGDB metadata
 - Emojis: Custom game console emoji uploads upon bot installation, use of said emojis in bot responses and stats
 - Emojis: Bot checks for Nitro on the server and if found uploads extended list of emojis, if the bot detects Nitro removed it deverts back to the standard list
 - QR code generation: Install games on 3DS/Vita via QR code with apps like FBI/[FBI Reloaded](https://github.com/TheRealZora/FBI-Reloaded)/[VitaShell](https://github.com/RealYoti/VitaShell) (download endpoint auth must be disabled on RomM instance)
@@ -23,7 +23,6 @@ In Progress
 
 Planned (if possible)
 - Generate and pass EmulatorJS launcher links in game details after search
-- Better IGDB integration (currently just pulls IGDB cover url from RomM db entry for game)
 - Requests dashboard webpage, not sure if this feature will get enough usage to justify
 - Look up most popular games (via RomM logs?) and provide stats via command
 - More collection information commands (IGDB have/miss, report missing, etc)
@@ -100,6 +99,8 @@ API_TIMEOUT=10
 - `SYNC_RATE`: How often to sync with API in seconds (default: 3600)
 - `UPDATE_VOICE_NAMES`: Enable/disable voice channel stats (default: true)
 - `REQUESTS_ENABLED` : Enable request commands (default: true)
+- `IGDB_CLIENT_ID` : IGDB login info for requests metadata
+- `IGDB_CLIENT_SECRET` : IGDB login info for requests metadata
 - `ENABLE_USER_MANAGER` : Enables user manager module (default: true)
 - `AUTO_REGISTER_ROLE_ID` : Discord role ID used for linking Discord users to RomM users and registering new RomM users if granted to Discord user (if user manager enabled)
 - `SHOW_API_SUCCESS`: Show API sync results and error messages in Discord (default: false)
@@ -206,6 +207,7 @@ Trigger RomM library scan. Options are:
 Request System Features:
 - Users can submit ROM requests with platform, game name, and optional details as text
 - Searches for existing ROM names in the RomM database to see if there is already a ROM present with the requested game name to avoid unnecessary requests
+- Matches request with IGDB entry if possible, if IGDB match is not found user can still submit "Platform, Game" request
 - Limit of 5 pending requests per user, so requests do not get overwhelming
 - DM notifications to users when their requests are fulfilled/rejected either automatically after a RomM system scan or manually via admin
 - Users can view their own requests
@@ -214,7 +216,7 @@ Request System Features:
 - Request system is toggleable via env variable if server admin does not want to use it
 
 Admin Features:
-- List all pending requests
+- List all pending requests with game and requester info
 - Fulfill or reject requests
 - Add notes to requests
 
