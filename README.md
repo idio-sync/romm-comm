@@ -198,7 +198,7 @@ Trigger RomM library scan. Options are:
 - /cancel_request - Cancel a pending request
 - /request_admin - Admin commands (list/fulfill/reject/addnote)
 
-![Request](.github/screenshots/Request.png)
+![Request](.github/screenshots/RequestSubmitted.png)
 
 ![RequestSubmitted](.github/screenshots/AlreadyPresent.png)
 
