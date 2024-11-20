@@ -76,6 +76,8 @@ PASS=api_password
 DOMAIN=your_website_domain
 SYNC_RATE=3600
 REQUESTS_ENABLED=TRUE
+IGDB_CLIENT_ID=your_client_id
+IGDB_CLIENT_SECRET=your_client_secret
 ENABLE_USER_MANAGER=TRUE
 AUTO_REGISTER_ROLE_ID=romm_users_role_id
 UPDATE_VOICE_NAMES=true
@@ -99,8 +101,8 @@ API_TIMEOUT=10
 - `SYNC_RATE`: How often to sync with API in seconds (default: 3600)
 - `UPDATE_VOICE_NAMES`: Enable/disable voice channel stats (default: true)
 - `REQUESTS_ENABLED` : Enable request commands (default: true)
-- `IGDB_CLIENT_ID` : IGDB login info for requests metadata
-- `IGDB_CLIENT_SECRET` : IGDB login info for requests metadata
+- `IGDB_CLIENT_ID` : IGDB login info for requests metadata (can be the same one used in RomM)
+- `IGDB_CLIENT_SECRET` : IGDB login info for requests metadata (can be the same one used in RomM)
 - `ENABLE_USER_MANAGER` : Enables user manager module (default: true)
 - `AUTO_REGISTER_ROLE_ID` : Discord role ID used for linking Discord users to RomM users and registering new RomM users if granted to Discord user (if user manager enabled)
 - `SHOW_API_SUCCESS`: Show API sync results and error messages in Discord (default: false)
