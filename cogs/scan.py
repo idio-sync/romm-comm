@@ -51,6 +51,7 @@ class Scan(commands.Cog):
         self.scan_progress: Dict[str, Any] = {}
         self.is_scanning: bool = False
         self.last_scan_stats: Dict[str, Any] = {}
+        self.new_games: List[Dict[str, str]] = []
         self.setup_socket_handlers()
 
         logging.getLogger('socketio').setLevel(logging.WARNING)
@@ -120,6 +121,12 @@ class Scan(commands.Cog):
                     
                     if data.get('is_new', False):
                         self.scan_progress['added_roms'] = self.scan_progress.get('added_roms', 0) + 1
+                        # Add new game to the tracking list
+                        self.new_games.append({
+                            'platform': self.scan_progress.get('current_platform', 'Unknown'),
+                            'name': rom_name,
+                            'file_name': data.get('file_name', '')
+                        })
                     if data.get('has_metadata', False):
                         self.scan_progress['metadata_roms'] = self.scan_progress.get('metadata_roms', 0) + 1
             except Exception as e:
@@ -175,6 +182,11 @@ class Scan(commands.Cog):
 
                 if self.last_channel:
                     await self.last_channel.send('\n'.join(message))
+
+                # If there are new games, dispatch the batch event
+                if self.new_games:
+                    logger.info(f"Dispatching batch_scan_complete with {len(self.new_games)} new games")
+                    await self.bot.dispatch('batch_scan_complete', self.new_games)
                 
                 # Reset scan state
                 self._reset_scan_state()
@@ -194,6 +206,7 @@ class Scan(commands.Cog):
             'scanned_roms': 0
         }
         self.is_scanning = False
+        self.new_games = []  # Reset new games list
 
     async def _handle_connection_error(self, error: str):
         """Handle connection errors and notify the user"""
@@ -379,11 +392,13 @@ class Scan(commands.Cog):
                 "apis": ["igdb", "moby"]
             }
             
+            self.new_games = []
             await self.sio.emit('scan', options)
             await ctx.respond("🔍 Started single platform scan")
             
         except Exception as e:
             self.is_scanning = False
+            self.new_games = []  
             raise
 
     async def _scan_full(self, ctx: discord.ApplicationContext):
@@ -393,6 +408,7 @@ class Scan(commands.Cog):
         self.last_channel = ctx.channel
         self.scan_start_time = datetime.now()
         self.is_scanning = True
+        self.new_games = []
 
         # Initialize scan progress for full scan
         self.scan_progress = {
@@ -602,6 +618,7 @@ class Scan(commands.Cog):
                 await self.sio.disconnect()
             except Exception as e:
                 logger.error(f"Error disconnecting socket: {e}")
+        self.new_games = []
 
 def setup(bot):
     bot.add_cog(Scan(bot))
