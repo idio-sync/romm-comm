@@ -71,10 +71,10 @@ class Config:
         self.CHANNEL_ID = os.getenv('CHANNEL_ID')
         self.API_BASE_URL = os.getenv('API_URL', '').rstrip('/')
         self.DOMAIN = os.getenv('DOMAIN', 'No website configured')
-        self.SYNC_RATE = int(os.getenv('SYNC_RATE', 3600))
+        self.SYNC_RATE = int(os.getenv('SYNC_RATE', 3600)) # 1 hour default
         self.UPDATE_VOICE_NAMES = os.getenv('UPDATE_VOICE_NAMES', 'true').lower() == 'true'
         self.SHOW_API_SUCCESS = os.getenv('SHOW_API_SUCCESS', 'false').lower() == 'true'
-        self.CACHE_TTL = int(os.getenv('CACHE_TTL', 3900))  # 65 minutes, slightly longer than the SYNC_RATE
+        self.CACHE_TTL = int(os.getenv('CACHE_TTL', 3900))  # 65 minutes default
         self.API_TIMEOUT = int(os.getenv('API_TIMEOUT', 10))  # 10 seconds default
         self.USER = os.getenv('USER')
         self.PASS = os.getenv('PASS')
@@ -170,7 +170,7 @@ class RommBot(discord.Bot):
             'cogs.search', 
             'cogs.scan', 
             'cogs.requests',
-          # 'cogs.user_manager'
+            'cogs.user_manager'
         ]
         
         # Dependencies for each cog
@@ -180,7 +180,7 @@ class RommBot(discord.Bot):
             'cogs.search': ['aiohttp','qrcode'],
             'cogs.scan': ['socketio'],
             'cogs.requests': ['aiosqlite'],
-            'cogs.user_manager': ['aiohttp']
+            'cogs.user_manager': ['aiohttp','aiosqlite']
         }
 
         for cog in cogs_to_load:
@@ -201,7 +201,7 @@ class RommBot(discord.Bot):
             
                 # Load the cog synchronously
                 self.load_extension(cog)
-                logger.info(f"Successfully loaded {cog}")
+              # logger.info(f"Successfully loaded {cog}")
             except Exception as e:
                 logger.error(f"Failed to load extension {cog}", exc_info=True)
                 logger.error(f"Error details: {str(e)}")
