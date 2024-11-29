@@ -20,6 +20,7 @@ class AsyncUserDatabaseManager:
     def __init__(self, db_path: str = "data/users.db"):
         self.db_path = db_path
         self._ensure_db_directory()
+        self._initialized = False
         
     def _ensure_db_directory(self):
         """Ensure the data directory exists"""
@@ -27,9 +28,11 @@ class AsyncUserDatabaseManager:
 
     async def initialize(self):
         """Initialize the database with required tables"""
+        if self._initialized:
+            return
+            
         try:
             async with aiosqlite.connect(self.db_path) as db:
-                # Create table for Discord to RomM user mapping
                 await db.execute("""
                     CREATE TABLE IF NOT EXISTS user_links (
                         discord_id INTEGER PRIMARY KEY,
@@ -39,15 +42,21 @@ class AsyncUserDatabaseManager:
                     )
                 """)
                 await db.commit()
+                self._initialized = True
                 logger.info("Database initialized successfully")
         except Exception as e:
             logger.error(f"Error initializing database: {e}", exc_info=True)
             raise
+            
+    async def _ensure_initialized(self):
+        """Ensure database is initialized before operations"""
+        if not self._initialized:
+            await self.initialize()
 
     async def add_user_link(self, discord_id: int, romm_username: str, romm_id: int) -> bool:
         """Add a new Discord to RomM user link"""
         try:
-            await self.initialize()  # Ensure table exists
+            await self._ensure_initialized()
             async with aiosqlite.connect(self.db_path) as db:
                 await db.execute(
                     "INSERT OR REPLACE INTO user_links (discord_id, romm_username, romm_id) VALUES (?, ?, ?)",
@@ -83,7 +92,7 @@ class AsyncUserDatabaseManager:
     async def delete_user_link(self, discord_id: int) -> bool:
         """Delete a Discord to RomM user link"""
         try:
-            await self.initialize()  # Ensure table exists
+            await self._ensure_initialized()
             async with aiosqlite.connect(self.db_path) as db:
                 await db.execute("DELETE FROM user_links WHERE discord_id = ?", (discord_id,))
                 await db.commit()
