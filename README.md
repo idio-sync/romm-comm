@@ -20,13 +20,13 @@ Current
 - Caching system, the bot onnly fetches fresh stats if that particular stat has updated since last fetch
 
 In Progress
+- Alternative chat client integrations (Matrix, Telegram, Slack), no eta for now
 
 Planned (if possible)
 - Generate and pass EmulatorJS launcher links in game details after search
 - Requests dashboard webpage, not sure if this feature will get enough usage to justify
 - Look up most popular games (via RomM logs?) and provide stats via command
 - More collection information commands (IGDB have/miss, report missing, etc)
-- Alternative chat client integrations (Matrix, Telegram, Slack)
 
 ## Requirements
 
