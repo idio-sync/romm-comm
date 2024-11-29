@@ -842,7 +842,7 @@ class Search(commands.Cog):
             'PlayStation': ['ps', 'ps_one'],
             'PlayStation 2': ['ps2', 'ps2_slim'],
             'PlayStation 3': ['ps3', 'ps3_slim'],
-            'Playstation 4': ['ps4'],
+            'PlayStation 4': ['ps4'],
             'PlayStation Portable': ['psp', 'psp_go'],
             'PlayStation Vita': ['vita'],
             'Pokémon mini': ['pokemon_mini'],
