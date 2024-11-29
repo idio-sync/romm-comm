@@ -61,6 +61,7 @@ pokemon_mini|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/ma
 ps|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ps.png
 ps2|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ps2.png
 ps3|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ps3.png
+ps4|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ps4.png
 psp|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/psp.png
 saturn_2|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/saturn_2.png
 sega_cd|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/sega_cd.png
