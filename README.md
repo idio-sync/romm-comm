@@ -253,9 +253,9 @@ Role Removal:
 - Logs attempted deletions of admin accounts
 - Notifies server admins of protection
 
-[UserManagerMessages](.github/screenshots/UserManagerMessages.png)
+![UserManagerMessages](.github/screenshots/UserManagerMessages.png)
 
-[UserNotification](.github/screenshots/UserNotification.png)
+![UserNotification](.github/screenshots/UserNotification.png)
 
 ## Error Handling
 
