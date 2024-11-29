@@ -14,12 +14,12 @@ Current
 - Emojis: Custom game console emoji uploads upon bot installation, use of said emojis in bot responses and stats
 - Emojis: Bot checks for Nitro on the server and if found uploads extended list of emojis, if the bot detects Nitro removed it deverts back to the standard list
 - QR code generation: Install games on 3DS/Vita via QR code with apps like FBI/[FBI Reloaded](https://github.com/TheRealZora/FBI-Reloaded)/[VitaShell](https://github.com/RealYoti/VitaShell) (download endpoint auth must be disabled on RomM instance)
+- RomM User Management: Manage users, automatically create RomM account for users with specific role and remove RomM accont upon role removal
 - Switch Shop Info: Command that lists instructions on how to connect to the [Tinfoil](https://tinfoil.io/Download) endpoint of connected RomM server (download endpoint auth must be disabled on RomM instance)
 - Rate-limited Discord API interactions
 - Caching system, the bot onnly fetches fresh stats if that particular stat has updated since last fetch
 
 In Progress
-- RomM User Management: Manage users, automatically create RomM account for users with specific role (module currently not enabled due to RomM bug, fix is pending)
 
 Planned (if possible)
 - Generate and pass EmulatorJS launcher links in game details after search
@@ -227,6 +227,35 @@ Dababase Structure:
 - Request status (pending/fulfilled/rejected/cancelled)
 - Timestamps
 - Admin notes and fulfillment details
+
+### User Manager
+- /sync_users - Sync all users who have auto-register role (Admin only)
+
+General:
+- User Manager is togglable by server admin, if `ENABLE_USER_MANAGER` is set to `FALSE` the module will avoid being loaded entirely and no commands will show in Discord
+
+Account Creation:
+- Creates RomM account when role specified in `AUTO_REGISTER_ROLE_ID` is assigned to Discord user
+- Uses Discord display name for RomM username (_1/2/3 etc. if dupe)
+- Handles existing accounts, asks user if they have a RomM account and promps them to link accounts before creating new account
+- Always creates new accounts as regular users with 'viewer' permissions in RomM
+- Generates random password and notifies new user by DM, gives RomM domain info and instructs them to log in and change password
+- Preserves existing admin accounts
+- Adds warning notifications for admin account links
+
+Role Removal:
+- Deletes RomM user account when role is removed from Discord user
+- Sends DM notification
+- Logs deletion
+- Only affects users created by the bot
+- Checks if user is admin before deletion
+- Preserves admin accounts even if role is removed
+- Logs attempted deletions of admin accounts
+- Notifies server admins of protection
+
+[UserManagerMessages](.github/screenshots/UserManagerMessages.png)
+
+[UserNotification](.github/screenshots/UserNotification.png)
 
 ## Error Handling
 
