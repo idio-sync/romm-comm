@@ -1,0 +1,27 @@
+services:
+  romm-comm:
+    image: idiosync000/romm-comm:latest
+    container_name: romm-comm
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+    environment:
+      # Required Settings
+      - TOKEN=your_discord_bot_token
+      - GUILD=your_guild_id
+      - API_URL=your_api_base_url
+      - USER=api_username
+      - PASS=api_password
+      # Optional Settings
+      - DOMAIN=your_website_domain
+      - SYNC_RATE=3600
+      - REQUESTS_ENABLED=TRUE
+      - IGDB_CLIENT_ID=your_client_id
+      - IGDB_CLIENT_SECRET=your_client_secret
+      - ENABLE_USER_MANAGER=TRUE
+      - AUTO_REGISTER_ROLE_ID=romm_users_role_id
+      - UPDATE_VOICE_NAMES=false
+      - CHANNEL_ID=your_channel_id
+      - SHOW_API_SUCCESS=false
+      - CACHE_TTL=3900
+      - API_TIMEOUT=10
