@@ -55,6 +55,7 @@ pip install py-cord aiohttp python-dotenv qrcode Pillow python-socketio requests
 ```
 ## Discord Bot Token Creation
 - See https://docs.pycord.dev/en/stable/discord.html
+- Enable "privileged gateway intents" in the bot settings
 
 ## RomM Settings
 
