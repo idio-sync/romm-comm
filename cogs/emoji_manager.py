@@ -25,8 +25,8 @@ class EmojiManager(commands.Cog):
         #print(f"Loaded processed servers: {self.processed_servers}")  # Debug print
         
         self.bot.emoji_dict = {}  # Dictionary for all emojis (once uploaded)
-        bot.loop.create_task(self.initialize_emoji_dict())
-        bot.loop.create_task(self.check_emojis_on_boot())
+        self.init_task = bot.loop.create_task(self.initialize_emoji_dict())
+        self.boot_check_task = bot.loop.create_task(self.check_emojis_on_boot())
 
     async def initialize_emoji_dict(self):
         """Initialize emoji dictionary as soon as the bot is ready"""
@@ -47,93 +47,72 @@ class EmojiManager(commands.Cog):
     async def handle_nitro_change(self, guild: discord.Guild, had_nitro: bool, has_nitro: bool):
         """Handle emoji changes when a server's Nitro status changes."""
         logger.info(f"Nitro status change for {guild.name}: {had_nitro} -> {has_nitro}")
+        guild_id_str = str(guild.id)
         
-        if had_nitro and not has_nitro:
-            # Server lost Nitro - need to remove excess emojis
-            logger.info(f"Server lost Nitro status. Adjusting emojis for {guild.name}")
+        try:
+            # Try to find a suitable channel for notification
+            notification_channel = await self.find_notification_channel(guild)
             
-            try:
-                # Try to find a suitable channel to send notification
-                notification_channel = None
-                # First try to find a bot commands channel
-                for channel in guild.text_channels:
-                    if any(name in channel.name.lower() for name in ['bot', 'command', 'bot-command', 'bot-spam']):
-                        notification_channel = channel
-                        break
-                
-                # If no bot channel found, try system channel
-                if not notification_channel:
-                    notification_channel = guild.system_channel
-                
-                # If still no channel, try to find the first channel we can send to
-                if not notification_channel:
-                    for channel in guild.text_channels:
-                        if channel.permissions_for(guild.me).send_messages:
-                            notification_channel = channel
-                            break
+            if had_nitro and not has_nitro:
+                logger.info(f"Server lost Nitro status. Adjusting emojis for {guild.name}")
                 
                 if notification_channel:
-                    # Send initial notification
                     notify_msg = await notification_channel.send(
                         embed=discord.Embed(
                             title="⚠️ Server Nitro Status Change Detected",
                             description=(
-                                "This server's Nitro status has changed, requiring emoji adjustments.\n"
-                                "Some custom emojis will need to be removed to meet Discord's limit of 50 emojis for non-Nitro servers.\n"
-                                "Starting emoji adjustment process..."
+                                "This server's Nitro status has changed. Adjusting emojis to fit within Discord's limit of 50 emojis for non-Nitro servers."
                             ),
                             color=discord.Color.yellow()
                         )
                     )
-            except Exception as e:
-                logger.error(f"Failed to send initial notification: {e}")
-                notify_msg = None
-            
-            # Load the standard (non-Nitro) emoji list
-            standard_emoji_list = await self.load_emoji_list(guild)  # This will automatically limit to 50
-            standard_emoji_names = {name for name, _ in standard_emoji_list}
-            
-            # Get current emojis
-            current_emojis = guild.emojis
-            to_remove = []
-            to_keep = []
-            
-            # Prioritize keeping emojis that are in our standard list
-            for emoji in current_emojis:
-                if emoji.name in standard_emoji_names:
-                    to_keep.append(emoji)
-                else:
-                    to_remove.append(emoji)
-            
-            # If we still have too many emojis even after keeping only standard ones
-            while len(to_keep) > 50:
-                to_remove.append(to_keep.pop())
-            
-            # Remove excess emojis
-            removed_emojis = []
-            failed_removals = []
-            
-            for emoji in to_remove:
-                try:
-                    await emoji.delete(reason="Server lost Nitro status - removing excess emojis")
-                    removed_emojis.append(emoji.name)
-                    await asyncio.sleep(1.2)  # Rate limiting protection
-                except Exception as e:
-                    logger.error(f"Error removing emoji {emoji.name}: {e}")
-                    failed_removals.append(emoji.name)
-            
-            logger.info(f"Removed {len(removed_emojis)} excess emojis from {guild.name}")
-            
-            # Send completion notification
-            if notification_channel:
-                try:
-                    # Create a detailed embed
+                
+                # Load the standard (non-Nitro) emoji list
+                standard_emoji_list = await self.load_emoji_list(guild)
+                standard_emoji_names = {name for name, _ in standard_emoji_list}
+                
+                # Get current emojis
+                current_emojis = guild.emojis
+                to_remove = []
+                to_keep = []
+                
+                # Prioritize keeping emojis that are in our standard list
+                for emoji in current_emojis:
+                    if emoji.name in standard_emoji_names:
+                        to_keep.append(emoji)
+                    else:
+                        to_remove.append(emoji)
+                
+                # Remove excess emojis
+                removed_emojis = []
+                failed_removals = []
+                
+                for emoji in to_remove:
+                    try:
+                        await emoji.delete(reason="Server lost Nitro status - removing excess emojis")
+                        removed_emojis.append(emoji.name)
+                        await asyncio.sleep(1.2)
+                    except Exception as e:
+                        logger.error(f"Error removing emoji {emoji.name}: {e}")
+                        failed_removals.append(emoji.name)
+                
+                logger.info(f"Removed {len(removed_emojis)} excess emojis from {guild.name}")
+                
+                # Update stored data
+                self.processed_servers[guild_id_str] = {
+                    'emojis': [emoji.name for emoji in guild.emojis],
+                    'nitro_status': has_nitro,
+                    'emoji_limit': guild.emoji_limit
+                }
+                self.save_processed_servers()
+                
+                # Send completion notification for removals if any happened
+                if notification_channel and (removed_emojis or failed_removals):
                     embed = discord.Embed(
                         title="🔄 Emoji Adjustment Complete",
                         color=discord.Color.blue()
                     )
                     
-                    # Add summary
                     embed.add_field(
                         name="Summary",
                         value=(
@@ -144,7 +123,6 @@ class EmojiManager(commands.Cog):
                         inline=False
                     )
                     
-                    # Add removed emojis list if any were removed
                     if removed_emojis:
                         removed_list = ", ".join(removed_emojis[:20])
                         if len(removed_emojis) > 20:
@@ -155,7 +133,6 @@ class EmojiManager(commands.Cog):
                             inline=False
                         )
                     
-                    # Add failed removals if any
                     if failed_removals:
                         failed_list = ", ".join(failed_removals)
                         embed.add_field(
@@ -164,27 +141,20 @@ class EmojiManager(commands.Cog):
                             inline=False
                         )
                     
-                    # Add note about standard emojis
-                    embed.add_field(
-                        name="Note",
-                        value=(
-                            "The most essential emojis have been kept within Discord's 50 emoji limit for non-Nitro servers. "
-                            "To get more emoji slots, the server will need to be boosted to Level 1 or higher."
-                        ),
-                        inline=False
-                    )
-                    
-                    # Update the original message if it exists, otherwise send new
-                    if notify_msg:
-                        await notify_msg.edit(embed=embed)
-                    else:
-                        await notification_channel.send(embed=embed)
-                    
-                except Exception as e:
-                    logger.error(f"Failed to send completion notification: {e}")
-        
-        # Update emojis for new status
-        await self.process_guild_emojis(guild)
+                    try:
+                        if 'notify_msg' in locals():
+                            await notify_msg.edit(embed=embed)
+                        else:
+                            await notification_channel.send(embed=embed)
+                    except Exception as e:
+                        logger.error(f"Failed to send completion notification: {e}")
+            
+            # Always try to upload standard emojis after a status change
+            logger.info(f"Uploading standard emojis for {guild.name}")
+            await self.process_guild_emojis(guild, skip_nitro_check=True)
+            
+        except Exception as e:
+            logger.error(f"Error in handle_nitro_change: {e}")
     
     async def check_emojis_on_boot(self):
         """Check and upload emojis when bot starts."""
@@ -196,24 +166,31 @@ class EmojiManager(commands.Cog):
                 guild_id_str = str(guild.id)
                 needs_upload = False
                 
-                # Check if this guild has been processed
-                if guild_id_str not in self.processed_servers:
-                    logger.info(f"Guild {guild.name} not in processed servers")
+                # Always check if emojis are actually present
+                if len(guild.emojis) == 0:
+                    logger.info(f"No emojis found in {guild.name}, forcing upload")
                     needs_upload = True
                 else:
-                    # Check if we need to update due to Nitro status change
-                    if isinstance(self.processed_servers[guild_id_str], dict):
-                        stored_nitro_status = self.processed_servers[guild_id_str].get('nitro_status', False)
-                        current_nitro_status = self.is_nitro_server(guild)
-                        if current_nitro_status != stored_nitro_status:
-                            logger.info(f"Nitro status changed for {guild.name}")
-                            needs_upload = True
-                    else:
-                        # Old format, needs update
+                    # Check if this guild has been processed
+                    if guild_id_str not in self.processed_servers:
+                        logger.info(f"Guild {guild.name} not in processed servers")
                         needs_upload = True
+                    else:
+                        # Check if we need to update due to Nitro status change
+                        if isinstance(self.processed_servers[guild_id_str], dict):
+                            stored_nitro_status = self.processed_servers[guild_id_str].get('nitro_status', False)
+                            current_nitro_status = self.is_nitro_server(guild)
+                            stored_emoji_limit = self.processed_servers[guild_id_str].get('emoji_limit', 50)
+                            current_emoji_limit = guild.emoji_limit
+                            
+                            if current_nitro_status != stored_nitro_status or current_emoji_limit != stored_emoji_limit:
+                                logger.info(f"Nitro status or limit changed for {guild.name}")
+                                needs_upload = True
+                        else:
+                            # Old format, needs update
+                            needs_upload = True
 
-                # Check if emojis are actually missing
-                if not needs_upload and guild.emojis:
+                    # Check if any expected emojis are missing
                     expected_emojis = await self.load_emoji_list(guild)
                     existing_emoji_names = {e.name for e in guild.emojis}
                     missing_emojis = [name for name, _ in expected_emojis if name not in existing_emoji_names]
@@ -223,17 +200,31 @@ class EmojiManager(commands.Cog):
 
                 if needs_upload:
                     logger.info(f"Uploading emojis to {guild.name} on boot")
-                    await self.process_guild_emojis(guild)
+                    try:
+                        # Force a clean slate for upload
+                        if guild_id_str in self.processed_servers:
+                            del self.processed_servers[guild_id_str]
+                            self.save_processed_servers()
+                        
+                        # Process guild emojis with skip_nitro_check to avoid loops
+                        await self.process_guild_emojis(guild, skip_nitro_check=True)
+                        
+                        # Update emoji dictionary after upload
+                        for emoji in guild.emojis:
+                            self.bot.emoji_dict[emoji.name] = emoji
+                            
+                    except Exception as e:
+                        logger.error(f"Error uploading emojis to {guild.name} on boot: {e}")
                 else:
                     logger.info(f"Emojis already present in {guild.name}")
-                    # Update emoji dictionary
+                    # Update emoji dictionary with existing emojis
                     for emoji in guild.emojis:
                         self.bot.emoji_dict[emoji.name] = emoji
 
         except Exception as e:
             logger.error(f"Error checking emojis on boot: {e}", exc_info=True)
     
-    async def process_guild_emojis(self, guild: discord.Guild):
+    async def process_guild_emojis(self, guild: discord.Guild, skip_nitro_check: bool = False):
         """Process emoji uploads for a guild."""
         if not guild.me.guild_permissions.manage_emojis:
             logger.warning(f"Missing emoji permissions in {guild.name}")
@@ -244,144 +235,115 @@ class EmojiManager(commands.Cog):
             current_nitro_status = self.is_nitro_server(guild)
             current_emoji_limit = guild.emoji_limit
             
-            # Check for Nitro status or emoji limit change
-            needs_update = False
-            if guild_id_str in self.processed_servers:
+            # Check for Nitro status change only if not skipping
+            if not skip_nitro_check and guild_id_str in self.processed_servers:
                 stored_data = self.processed_servers[guild_id_str]
                 if isinstance(stored_data, dict):
                     stored_nitro_status = stored_data.get('nitro_status', False)
                     stored_emoji_limit = stored_data.get('emoji_limit', 50)
                     
-                    # Detect changes in either Nitro status or emoji limit
                     if stored_nitro_status != current_nitro_status or stored_emoji_limit != current_emoji_limit:
-                        logger.info(f"Server status change for {guild.name}:")
-                        logger.info(f"Nitro status: {stored_nitro_status} -> {current_nitro_status}")
-                        logger.info(f"Emoji limit: {stored_emoji_limit} -> {current_emoji_limit}")
-                        
-                        # If the limit increased, we can just add more emojis
-                        if current_emoji_limit > stored_emoji_limit:
-                            logger.info(f"Server {guild.name} emoji limit increased. Adding more emojis.")
-                            needs_update = True
-                        # If the limit decreased, we need to handle removal
-                        elif current_emoji_limit < stored_emoji_limit:
-                            await self.handle_nitro_change(
-                                guild,
-                                had_nitro=stored_nitro_status,
-                                has_nitro=current_nitro_status
+                        await self.handle_nitro_change(
+                            guild,
+                            had_nitro=stored_nitro_status,
+                            has_nitro=current_nitro_status
+                        )
+                        return True
+
+            # Load emoji list for current server status
+            emoji_list = await self.load_emoji_list(guild)
+            if not emoji_list:
+                return False
+
+            # Get current emojis and their names
+            current_emoji_names = {e.name: e for e in guild.emojis}
+            missing_emojis = []
+            
+            # Check which emojis are missing
+            for name, url in emoji_list:
+                if name not in current_emoji_names:
+                    missing_emojis.append((name, url))
+
+            if missing_emojis:
+                slots_available = guild.emoji_limit - len(current_emoji_names)
+                if slots_available > 0:
+                    notification_channel = await self.find_notification_channel(guild)
+                    notify_msg = None
+
+                    if notification_channel and len(missing_emojis) > 5:
+                        notify_msg = await notification_channel.send(
+                            embed=discord.Embed(
+                                title="🔄 Uploading Missing Emojis",
+                                description=f"Found {len(missing_emojis)} missing emojis. Starting upload process...",
+                                color=discord.Color.blue()
                             )
-                            return True
+                        )
 
-            if needs_update or guild_id_str not in self.processed_servers:
-                emoji_list = await self.load_emoji_list(guild)
-                if not emoji_list:
-                    return False
+                    uploaded_emojis = []
+                    failed_uploads = []
 
-                # Get current emojis and their names
-                current_emoji_names = {e.name: e for e in guild.emojis}
-                missing_emojis = []
-                
-                # Check which emojis are missing
-                for name, url in emoji_list:
-                    if name not in current_emoji_names:
-                        missing_emojis.append((name, url))
+                    for name, url in missing_emojis[:slots_available]:
+                        if len(guild.emojis) >= guild.emoji_limit:
+                            break
 
-                if missing_emojis:
-                    slots_available = guild.emoji_limit - len(current_emoji_names)
-                    if slots_available > 0:
-                        # Try to find a suitable channel for notification
-                        notification_channel = None
-                        for channel in guild.text_channels:
-                            if channel.permissions_for(guild.me).send_messages:
-                                if any(name in channel.name.lower() for name in ['bot', 'command', 'bot-spam']):
-                                    notification_channel = channel
-                                    break
-                        if not notification_channel:
-                            notification_channel = guild.system_channel or next(
-                                (c for c in guild.text_channels if c.permissions_for(guild.me).send_messages), 
-                                None
-                            )
+                        if uploaded_emojis:
+                            await asyncio.sleep(1.5)
 
-                        if notification_channel:
-                            notify_msg = await notification_channel.send(
-                                embed=discord.Embed(
-                                    title="🔼 Server Emoji Limit Increased",
-                                    description=(
-                                        f"This server now has {slots_available} additional emoji slots available!\n"
-                                        f"Adding {min(len(missing_emojis), slots_available)} new emojis..."
-                                    ),
-                                    color=discord.Color.green()
-                                )
-                            )
-
-                        uploaded_emojis = []
-                        failed_uploads = []
-
-                        for name, url in missing_emojis[:slots_available]:
-                            if len(guild.emojis) >= guild.emoji_limit:
-                                break
-
-                            if uploaded_emojis:
-                                await asyncio.sleep(1.5)
-
-                            try:
-                                if await self.upload_emoji(guild, name, url):
-                                    uploaded_emojis.append(name)
-                                    # Update emoji dictionary with new emoji
-                                    for emoji in guild.emojis:
-                                        if emoji.name == name:
-                                            self.bot.emoji_dict[name] = emoji
-                                            break
-                                else:
-                                    failed_uploads.append(name)
-                            except Exception as e:
-                                logger.error(f"Error uploading emoji {name}: {e}")
+                        try:
+                            if await self.upload_emoji(guild, name, url):
+                                uploaded_emojis.append(name)
+                                # Update emoji dictionary with new emoji
+                                for emoji in guild.emojis:
+                                    if emoji.name == name:
+                                        self.bot.emoji_dict[name] = emoji
+                                        break
+                            else:
                                 failed_uploads.append(name)
+                        except Exception as e:
+                            logger.error(f"Error uploading emoji {name}: {e}")
+                            failed_uploads.append(name)
 
-                        if notification_channel:
-                            embed = discord.Embed(
-                                title="✅ New Emoji Upload Complete",
-                                description=(
-                                    f"Successfully uploaded {len(uploaded_emojis)} new emojis."
-                                ),
-                                color=discord.Color.green()
+                    if notification_channel and len(missing_emojis) > 5:
+                        embed = discord.Embed(
+                            title="✅ Emoji Upload Complete",
+                            description=f"Successfully uploaded {len(uploaded_emojis)} new emojis.",
+                            color=discord.Color.green()
+                        )
+                        
+                        if uploaded_emojis:
+                            uploaded_list = ", ".join(uploaded_emojis[:20])
+                            if len(uploaded_emojis) > 20:
+                                uploaded_list += f" and {len(uploaded_emojis) - 20} more"
+                            embed.add_field(
+                                name="Uploaded Emojis",
+                                value=uploaded_list,
+                                inline=False
                             )
-                            
-                            if uploaded_emojis:
-                                uploaded_list = ", ".join(uploaded_emojis[:20])
-                                if len(uploaded_emojis) > 20:
-                                    uploaded_list += f" and {len(uploaded_emojis) - 20} more"
-                                embed.add_field(
-                                    name="Uploaded Emojis",
-                                    value=uploaded_list,
-                                    inline=False
-                                )
-                            
-                            if failed_uploads:
-                                failed_list = ", ".join(failed_uploads)
-                                embed.add_field(
-                                    name="⚠️ Failed Uploads",
-                                    value=failed_list,
-                                    inline=False
-                                )
+                        
+                        if failed_uploads:
+                            failed_list = ", ".join(failed_uploads)
+                            embed.add_field(
+                                name="⚠️ Failed Uploads",
+                                value=failed_list,
+                                inline=False
+                            )
 
-                            embed.set_footer(text="Server emoji slots are now up to date with its boost level!")
+                        try:
+                            if notify_msg:
+                                await notify_msg.edit(embed=embed)
+                            else:
+                                await notification_channel.send(embed=embed)
+                        except Exception as e:
+                            logger.error(f"Failed to send completion notification: {e}")
 
-                            try:
-                                if 'notify_msg' in locals():
-                                    await notify_msg.edit(embed=embed)
-                                else:
-                                    await notification_channel.send(embed=embed)
-                            except Exception as e:
-                                logger.error(f"Failed to send completion notification: {e}")
-
-                # Update processed servers record with both nitro status and emoji limit
-                self.processed_servers[guild_id_str] = {
-                    'emojis': list(current_emoji_names.keys()) + uploaded_emojis if 'uploaded_emojis' in locals() else list(current_emoji_names.keys()),
-                    'nitro_status': current_nitro_status,
-                    'emoji_limit': current_emoji_limit  # Store the current emoji limit
-                }
-                self.save_processed_servers()
-
+            # Update processed servers record
+            self.processed_servers[guild_id_str] = {
+                'emojis': list(current_emoji_names.keys()) + (uploaded_emojis if 'uploaded_emojis' in locals() else []),
+                'nitro_status': current_nitro_status,
+                'emoji_limit': current_emoji_limit
+            }
+            self.save_processed_servers()
+            
             return True
 
         except Exception as e:
@@ -395,6 +357,22 @@ class EmojiManager(commands.Cog):
                 return json.load(f)
         return {}
 
+    async def find_notification_channel(self, guild: discord.Guild):
+        """Find a suitable channel for notifications."""
+        for channel in guild.text_channels:
+            if any(name in channel.name.lower() for name in ['bot', 'command', 'bot-command', 'bot-spam']):
+                if channel.permissions_for(guild.me).send_messages:
+                    return channel
+        
+        if guild.system_channel and guild.system_channel.permissions_for(guild.me).send_messages:
+            return guild.system_channel
+        
+        for channel in guild.text_channels:
+            if channel.permissions_for(guild.me).send_messages:
+                return channel
+    
+        return None
+    
     def save_processed_servers(self):
         """Save the list of processed servers to avoid duplicate uploads."""
         os.makedirs(os.path.dirname(self.processed_servers_file), exist_ok=True)
