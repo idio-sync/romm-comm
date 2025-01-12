@@ -21,8 +21,11 @@ Current
 
 In Progress
 - Alternative chat client integrations (Matrix, Telegram, Slack), no eta for now
+- Handling of renamed platforms (introduced in Romm 3.7)
+- Pass info of logged downloads from Romm
 
 Planned (if possible)
+- Prowlarr integration for requests
 - Generate and pass EmulatorJS launcher links in game details after search
 - Requests dashboard webpage, not sure if this feature will get enough usage to justify
 - Look up most popular games (via RomM logs?) and provide stats via command
