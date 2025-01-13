@@ -17,6 +17,7 @@ class DownloadMonitor(commands.Cog):
         self.db_path = 'data/downloads.db'
         self.ensure_data_directory()
         self.init_task = asyncio.create_task(self.init_db())
+        self.docker_client = docker.from_env()
 
     def ensure_data_directory(self):
         """Ensure the data directory exists"""
@@ -215,56 +216,57 @@ class DownloadMonitor(commands.Cog):
         await ctx.respond(embed=embed)
 
     async def start_monitoring(self):
-        """Start monitoring downloads"""
-        await self.init_db()  # Initialize database
+        """Start monitoring downloads via Docker API"""
+        await self.init_db()
         
-        try:
-            process = await asyncio.create_subprocess_shell(
-                'docker logs -f romm',
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-
-            while True:
-                line = await process.stdout.readline()
-                if not line:
-                    break
-
-                line = line.decode('utf-8').strip()
+        while True:
+            try:
+                container = self.docker_client.containers.get('romm')
                 
-                if "[RomM][rom]" in line and "is downloading" in line:
-                    match = self.download_pattern.search(line)
-                    if match:
-                        username = match.group(1)
-                        rom_name = match.group(2)
+                # Stream the logs
+                for log in container.logs(stream=True, follow=True, tail=0):
+                    try:
+                        line = log.decode('utf-8').strip()
                         
-                        # Log to database
-                        await self.log_download(username, rom_name)
-                        
-                        embed = discord.Embed(
-                            title="🎮 New Download",
-                            description=f"**{rom_name}**",
-                            color=discord.Color.blue(),
-                            timestamp=datetime.now()
-                        )
-                        embed.add_field(
-                            name="User",
-                            value=username,
-                            inline=True
-                        )
-                        
-                        channel = self.bot.get_channel(self.bot.config.CHANNEL_ID)
-                        if channel:
-                            try:
-                                await channel.send(embed=embed)
-                                logger.info(f"Download notification sent for {rom_name}")
-                            except Exception as e:
-                                logger.error(f"Failed to send download notification: {e}")
-
-        except Exception as e:
-            logger.error(f"Error in download monitoring: {e}")
-            await asyncio.sleep(30)
-            self.monitor_task = asyncio.create_task(self.start_monitoring())
+                        if "[RomM][rom]" in line and "is downloading" in line:
+                            match = self.download_pattern.search(line)
+                            if match:
+                                username = match.group(1)
+                                rom_name = match.group(2)
+                                
+                                # Log to database
+                                await self.log_download(username, rom_name)
+                                
+                                embed = discord.Embed(
+                                    title="🎮 New Download",
+                                    description=f"**{rom_name}**",
+                                    color=discord.Color.blue(),
+                                    timestamp=datetime.now()
+                                )
+                                embed.add_field(
+                                    name="User",
+                                    value=username,
+                                    inline=True
+                                )
+                                
+                                channel = self.bot.get_channel(self.bot.config.CHANNEL_ID)
+                                if channel:
+                                    await channel.send(embed=embed)
+                                    logger.info(f"Download notification sent for {rom_name}")
+                    except Exception as e:
+                        logger.error(f"Error processing log line: {e}")
+                        continue
+                                
+            except docker.errors.NotFound:
+                logger.error("Romm container not found. Retrying in 30 seconds...")
+                await asyncio.sleep(30)
+            except docker.errors.APIError as e:
+                logger.error(f"Docker API error: {e}")
+                await asyncio.sleep(30)
+            except Exception as e:
+                logger.error(f"Unexpected error in monitor: {e}")
+                await asyncio.sleep(30)
+                continue
 
     @commands.Cog.listener()
     async def on_ready(self):
