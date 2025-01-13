@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import asyncio
 import logging
 import aiosqlite
+import docker
 import os
 
 logger = logging.getLogger('romm_bot.download_monitor')
