@@ -147,7 +147,7 @@ class DownloadMonitor(commands.Cog):
                         print(f"Connected to container {romm_container.name} ({container_id})")
                         
                         # Docker API endpoint for logs
-                        url = f"http://localhost/containers/{container_id}/logs"
+                        url = f"http://unix/containers/{container_id}/logs"
                         params = {
                             "follow": "true",
                             "stdout": "true",
