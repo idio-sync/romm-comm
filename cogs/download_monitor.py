@@ -216,6 +216,19 @@ class DownloadMonitor(commands.Cog):
 
         await ctx.respond(embed=embed)
 
+    async def log_download(self, username: str, rom_name: str):
+    """Log a download to the database"""
+    try:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                'INSERT INTO downloads (username, rom_name, timestamp) VALUES (?, ?, ?)',
+                (username, rom_name, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+            )
+            await db.commit()
+            logger.info(f"Successfully logged download to database: {username} - {rom_name}")
+    except Exception as e:
+        logger.error(f"Error logging download to database: {e}")
+    
     async def start_monitoring(self):
         """Start monitoring downloads via Docker API"""
         await self.init_db()
@@ -223,6 +236,7 @@ class DownloadMonitor(commands.Cog):
         while True:
             try:
                 container = self.docker_client.containers.get('romm')
+                logger.info("Successfully connected to romm container for log analysis")
                 
                 # Stream the logs
                 for log in container.logs(stream=True, follow=True, tail=0):
