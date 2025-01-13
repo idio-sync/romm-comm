@@ -232,22 +232,23 @@ class DownloadMonitor(commands.Cog):
     async def start_monitoring(self):
         """Start monitoring downloads via Docker API"""
         await self.init_db()
+        logger.info("Starting download monitoring...")
         
         while True:
             try:
-                container = self.docker_client.containers.get('romm')
-                logger.info("Successfully connected to romm container for log analysis")
-                
-                # Stream the logs
-                for log in container.logs(stream=True, follow=True, tail=0):
+                # Get romm container
+                romm_container = self.docker_client.containers.get('romm')
+                # Stream logs with timestamps
+                for log in romm_container.logs(stream=True, follow=True, timestamps=True):
                     try:
                         line = log.decode('utf-8').strip()
-                        
+                            
                         if "[RomM][rom]" in line and "is downloading" in line:
                             match = self.download_pattern.search(line)
                             if match:
                                 username = match.group(1)
                                 rom_name = match.group(2)
+                                logger.info(f"Download detected - User: {username}, ROM: {rom_name}")
                                 
                                 # Log to database
                                 await self.log_download(username, rom_name)
@@ -268,10 +269,11 @@ class DownloadMonitor(commands.Cog):
                                 if channel:
                                     await channel.send(embed=embed)
                                     logger.info(f"Download notification sent for {rom_name}")
+                                    
                     except Exception as e:
                         logger.error(f"Error processing log line: {e}")
                         continue
-                                
+                        
             except docker.errors.NotFound:
                 logger.error("Romm container not found. Retrying in 30 seconds...")
                 await asyncio.sleep(30)
@@ -281,7 +283,6 @@ class DownloadMonitor(commands.Cog):
             except Exception as e:
                 logger.error(f"Unexpected error in monitor: {e}")
                 await asyncio.sleep(30)
-                continue
 
     @commands.Cog.listener()
     async def on_ready(self):
