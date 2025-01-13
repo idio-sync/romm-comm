@@ -16,6 +16,7 @@ class DownloadMonitor(commands.Cog):
         self.monitor_task = None
         self.db_path = 'data/downloads.db'
         self.ensure_data_directory()
+        self.init_task = asyncio.create_task(self.init_db())
 
     def ensure_data_directory(self):
         """Ensure the data directory exists"""
@@ -23,16 +24,21 @@ class DownloadMonitor(commands.Cog):
 
     async def init_db(self):
         """Initialize the SQLite database"""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute('''
-                CREATE TABLE IF NOT EXISTS downloads (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT NOT NULL,
-                    rom_name TEXT NOT NULL,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            await db.commit()
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute('''
+                    CREATE TABLE IF NOT EXISTS downloads (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        username TEXT NOT NULL,
+                        rom_name TEXT NOT NULL,
+                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
+                await db.commit()
+                logger.info("Database initialized successfully")
+        except Exception as e:
+            logger.error(f"Error initializing database: {e}")
+            raise
 
     async def log_download(self, username: str, rom_name: str):
         """Log a download to the database"""
@@ -127,6 +133,14 @@ class DownloadMonitor(commands.Cog):
         days: discord.Option(int, "Number of days to show stats for", required=True, min_value=1, max_value=365),
         username: discord.Option(str, "Username to show stats for", required=False)
     ):
+        # Wait for database initialization before proceeding
+        try:
+            await self.init_task
+        except Exception as e:
+            await ctx.respond("Error accessing database. Please try again later.")
+            logger.error(f"Database initialization error in download_stats: {e}")
+            return
+            
         await ctx.defer()  # Defer reply since this might take a moment
 
         stats = await self.get_stats(days, username)
@@ -266,4 +280,5 @@ class DownloadMonitor(commands.Cog):
             logger.info("Download monitor stopped")
 
 def setup(bot):
-    bot.add_cog(DownloadMonitor(bot))
+    cog = DownloadMonitor(bot)
+    bot.add_cog(cog)
