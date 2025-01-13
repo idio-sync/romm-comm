@@ -37,7 +37,6 @@ class DownloadMonitor(commands.Cog):
                     )
                 ''')
                 await db.commit()
-                logger.info("Database initialized successfully")
         except Exception as e:
             logger.error(f"Error initializing database: {e}")
             raise
@@ -226,36 +225,30 @@ class DownloadMonitor(commands.Cog):
         await self.init_db()
         logger.info("Starting download monitoring...")
         
-        # Update pattern to match exact format from logs
-        self.download_pattern = re.compile(r'\[RomM\]\[rom\]\[([^\]]+)\] User (\w+) is downloading (.+)')
+        # Updated pattern to match exact format
+        self.download_pattern = re.compile(r'INFO:\s+\[RomM\]\[rom\]\[([^\]]+)\] User (\w+) is downloading (.+)')
         
         while True:
             try:
                 romm_container = self.docker_client.containers.get('romm')
                 logger.info("Connected to romm container, starting log monitoring...")
                 
-                for log in romm_container.logs(stream=True, follow=True):
-                    try:
-                        line = log.decode('utf-8').strip()
-                        logger.debug(f"Received log line: {line}")  # Log every line for debugging
-                        
-                        if "[RomM][rom]" in line:
-                            logger.info(f"Found RomM log entry: {line}")  # Log when we find a RomM entry
+                # Use asyncio to handle the log stream
+                while True:
+                    async def process_logs():
+                        for log in romm_container.logs(stream=True, follow=True, tail=0):
+                            line = log.decode('utf-8').strip()
                             
-                            match = self.download_pattern.search(line)
-                            if match:
-                                timestamp, username, rom_name = match.groups()
-                                logger.info(f"Matched download - Time: {timestamp}, User: {username}, ROM: {rom_name}")
-                                
-                                # Log to database
-                                try:
+                            if "INFO:    [RomM][rom]" in line and "is downloading" in line:
+                                match = self.download_pattern.search(line)
+                                if match:
+                                    timestamp, username, rom_name = match.groups()
+                                    logger.info(f"Download detected - User: {username}, ROM: {rom_name}")
+                                    
+                                    # Log to database
                                     await self.log_download(username, rom_name)
-                                    logger.info("Successfully logged to database")
-                                except Exception as db_error:
-                                    logger.error(f"Database error: {db_error}")
-                                
-                                # Create and send embed
-                                try:
+                                    
+                                    # Create embed
                                     embed = discord.Embed(
                                         title="🎮 New Download",
                                         description=f"**{rom_name}**",
@@ -268,26 +261,19 @@ class DownloadMonitor(commands.Cog):
                                         inline=True
                                     )
                                     
+                                    # Send to Discord
                                     channel = self.bot.get_channel(self.bot.config.CHANNEL_ID)
                                     if channel:
                                         await channel.send(embed=embed)
-                                        logger.info(f"Notification sent to channel {self.bot.config.CHANNEL_ID}")
-                                    else:
-                                        logger.error(f"Channel not found: {self.bot.config.CHANNEL_ID}")
-                                except Exception as discord_error:
-                                    logger.error(f"Discord error: {discord_error}")
-                            else:
-                                logger.warning(f"Found RomM entry but pattern didn't match: {line}")
-                                    
-                    except Exception as e:
-                        logger.error(f"Error processing log line: {e}")
-                        continue
-                        
+                                        logger.info(f"Download notification sent for {rom_name}")
+    
+                    # Run the log processing in a way that doesn't block the event loop
+                    await asyncio.get_event_loop().run_in_executor(None, process_logs)
+                    
             except Exception as e:
                 logger.error(f"Monitor error: {e}")
                 await asyncio.sleep(30)
-                continue
-
+            
     @commands.Cog.listener()
     async def on_ready(self):
         """Start monitoring when the bot is ready."""
