@@ -170,7 +170,8 @@ class RommBot(discord.Bot):
             'cogs.search', 
             'cogs.scan', 
             'cogs.requests',
-            'cogs.user_manager'
+            'cogs.user_manager',
+            'cogs.download_monitor'
         ]
         
         # Dependencies for each cog
@@ -180,7 +181,8 @@ class RommBot(discord.Bot):
             'cogs.search': ['aiohttp','qrcode'],
             'cogs.scan': ['socketio'],
             'cogs.requests': ['aiosqlite'],
-            'cogs.user_manager': ['aiohttp','aiosqlite']
+            'cogs.user_manager': ['aiohttp','aiosqlite'],
+            'cogs.download_monitor': ['aiosqlite']
         }
 
         for cog in cogs_to_load:
