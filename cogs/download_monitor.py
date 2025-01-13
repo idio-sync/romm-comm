@@ -42,15 +42,6 @@ class DownloadMonitor(commands.Cog):
             logger.error(f"Error initializing database: {e}")
             raise
 
-    async def log_download(self, username: str, rom_name: str):
-        """Log a download to the database"""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                'INSERT INTO downloads (username, rom_name, timestamp) VALUES (?, ?, ?)',
-                (username, rom_name, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-            )
-            await db.commit()
-
     async def get_stats(self, days: int, username: str = None):
         """Get download statistics for the specified period"""
         cutoff_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
@@ -220,69 +211,82 @@ class DownloadMonitor(commands.Cog):
         """Log a download to the database"""
         try:
             async with aiosqlite.connect(self.db_path) as db:
-                await db.execute(
-                    'INSERT INTO downloads (username, rom_name, timestamp) VALUES (?, ?, ?)',
-                    (username, rom_name, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-                )
+                await db.execute('''
+                    INSERT INTO downloads (username, rom_name, timestamp) 
+                    VALUES (?, ?, ?)
+                ''', (username, rom_name, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
                 await db.commit()
-                logger.info(f"Successfully logged download to database: {username} - {rom_name}")
+                logger.info(f"Download logged to database - User: {username}, ROM: {rom_name}")
         except Exception as e:
-            logger.error(f"Error logging download to database: {e}")
+            logger.error(f"Database error in log_download: {e}")
+            raise
     
     async def start_monitoring(self):
         """Start monitoring downloads via Docker API"""
         await self.init_db()
         logger.info("Starting download monitoring...")
         
+        # Update pattern to match exact format from logs
+        self.download_pattern = re.compile(r'\[RomM\]\[rom\]\[([^\]]+)\] User (\w+) is downloading (.+)')
+        
         while True:
             try:
-                # Get romm container
                 romm_container = self.docker_client.containers.get('romm')
-                # Stream logs with timestamps
-                for log in romm_container.logs(stream=True, follow=True, timestamps=True):
+                logger.info("Connected to romm container, starting log monitoring...")
+                
+                for log in romm_container.logs(stream=True, follow=True):
                     try:
                         line = log.decode('utf-8').strip()
+                        logger.debug(f"Received log line: {line}")  # Log every line for debugging
+                        
+                        if "[RomM][rom]" in line:
+                            logger.info(f"Found RomM log entry: {line}")  # Log when we find a RomM entry
                             
-                        if "[RomM][rom]" in line and "is downloading" in line:
                             match = self.download_pattern.search(line)
                             if match:
-                                username = match.group(1)
-                                rom_name = match.group(2)
-                                logger.info(f"Download detected - User: {username}, ROM: {rom_name}")
+                                timestamp, username, rom_name = match.groups()
+                                logger.info(f"Matched download - Time: {timestamp}, User: {username}, ROM: {rom_name}")
                                 
                                 # Log to database
-                                await self.log_download(username, rom_name)
+                                try:
+                                    await self.log_download(username, rom_name)
+                                    logger.info("Successfully logged to database")
+                                except Exception as db_error:
+                                    logger.error(f"Database error: {db_error}")
                                 
-                                embed = discord.Embed(
-                                    title="🎮 New Download",
-                                    description=f"**{rom_name}**",
-                                    color=discord.Color.blue(),
-                                    timestamp=datetime.now()
-                                )
-                                embed.add_field(
-                                    name="User",
-                                    value=username,
-                                    inline=True
-                                )
-                                
-                                channel = self.bot.get_channel(self.bot.config.CHANNEL_ID)
-                                if channel:
-                                    await channel.send(embed=embed)
-                                    logger.info(f"Download notification sent for {rom_name}")
+                                # Create and send embed
+                                try:
+                                    embed = discord.Embed(
+                                        title="🎮 New Download",
+                                        description=f"**{rom_name}**",
+                                        color=discord.Color.blue(),
+                                        timestamp=datetime.now()
+                                    )
+                                    embed.add_field(
+                                        name="User",
+                                        value=username,
+                                        inline=True
+                                    )
+                                    
+                                    channel = self.bot.get_channel(self.bot.config.CHANNEL_ID)
+                                    if channel:
+                                        await channel.send(embed=embed)
+                                        logger.info(f"Notification sent to channel {self.bot.config.CHANNEL_ID}")
+                                    else:
+                                        logger.error(f"Channel not found: {self.bot.config.CHANNEL_ID}")
+                                except Exception as discord_error:
+                                    logger.error(f"Discord error: {discord_error}")
+                            else:
+                                logger.warning(f"Found RomM entry but pattern didn't match: {line}")
                                     
                     except Exception as e:
                         logger.error(f"Error processing log line: {e}")
                         continue
                         
-            except docker.errors.NotFound:
-                logger.error("Romm container not found. Retrying in 30 seconds...")
-                await asyncio.sleep(30)
-            except docker.errors.APIError as e:
-                logger.error(f"Docker API error: {e}")
-                await asyncio.sleep(30)
             except Exception as e:
-                logger.error(f"Unexpected error in monitor: {e}")
+                logger.error(f"Monitor error: {e}")
                 await asyncio.sleep(30)
+                continue
 
     @commands.Cog.listener()
     async def on_ready(self):
