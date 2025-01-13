@@ -7,6 +7,8 @@ import logging
 import aiosqlite
 import os
 import docker
+import aiohttp
+import json
 
 logger = logging.getLogger('romm_bot.download_monitor')
 
@@ -130,80 +132,63 @@ class DownloadMonitor(commands.Cog):
             }
 
     async def start_monitoring(self):
-        """Start monitoring downloads"""
+        """Start monitoring downloads in real-time"""
         await self.init_db()
         logger.info("Starting download monitoring...")
-        print("Starting download monitoring...")  # Console print
-    
+            
         while True:
             try:
-                # Get container synchronously
-                romm_container = self.docker_client.containers.get('romm')
-                logger.info(f"Connected to container: {romm_container.name}")
-                print(f"Connected to container: {romm_container.name}")
+                # Connect to Docker socket directly
+                async with aiohttp.UnixConnector(path="/var/run/docker.sock") as connector:
+                    async with aiohttp.ClientSession(connector=connector) as session:
+                        romm_container = self.docker_client.containers.get('romm')
+                        container_id = romm_container.id
+                        
+                        print(f"Connected to container {romm_container.name} ({container_id})")
+                        
+                        # Docker API endpoint for logs
+                        url = f"http://localhost/containers/{container_id}/logs"
+                        params = {
+                            "follow": "true",
+                            "stdout": "true",
+                            "stderr": "true",
+                            "timestamps": "true"
+                        }
+                        
+                        async with session.get(url, params=params) as response:
+                            print("Log stream started...")
+                            async for line in response.content:
+                                # Docker multiplexes streams, so we need to strip the header
+                                if len(line) > 8:  # Docker log header is 8 bytes
+                                    line = line[8:].decode('utf-8').strip()
+                                    print(f"Log received: {line}")
+                                    
+                                    if "INFO:    [RomM][rom]" in line and "is downloading" in line:
+                                        print(f"Found download: {line}")
+                                        match = self.download_pattern.search(line)
+                                        if match:
+                                            timestamp, username, rom_name = match.groups()
+                                            print(f"Matched download - User: {username}, ROM: {rom_name}")
     
-                def handle_logs():
-                    """Synchronous function to handle log streaming"""
-                    try:
-                        # Test getting a single recent log first
-                        recent = romm_container.logs(tail=1).decode()
-                        print(f"Last log line: {recent}")
+                                            # Log to database
+                                            await self.log_download(username, rom_name)
     
-                        # Start streaming logs
-                        log_generator = romm_container.logs(
-                            stream=True, 
-                            follow=True, 
-                            tail=0,
-                            stdout=True,
-                            stderr=True
-                        )
-    
-                        print("Starting log stream...")
-                        for log in log_generator:
-                            line = log.decode('utf-8').strip()
-                            print(f"Log received: {line}")  # Print every line
-    
-                            if "INFO:    [RomM][rom]" in line:
-                                print(f"Found RomM log: {line}")
-                                if "is downloading" in line:
-                                    print("Found download entry")
-                                    return line  # Return the line for async processing
-                    except Exception as e:
-                        print(f"Error in handle_logs: {e}")
-                        return None
-    
-                while True:
-                    # Run log handling in executor
-                    download_line = await self.bot.loop.run_in_executor(None, handle_logs)
-                    
-                    if download_line:
-                        match = self.download_pattern.search(download_line)
-                        if match:
-                            timestamp, username, rom_name = match.groups()
-                            print(f"Matched download - Time: {timestamp}, User: {username}, ROM: {rom_name}")
-    
-                            # Log to database
-                            await self.log_download(username, rom_name)
-    
-                            # Create and send embed
-                            embed = discord.Embed(
-                                title="🎮 New Download",
-                                description=f"**{rom_name}**",
-                                color=discord.Color.blue(),
-                                timestamp=datetime.now()
-                            )
-                            embed.add_field(
-                                name="User",
-                                value=username,
-                                inline=True
-                            )
-                            
-                            channel = self.bot.get_channel(self.bot.config.CHANNEL_ID)
-                            if channel:
-                                await channel.send(embed=embed)
-                                print(f"Notification sent for {rom_name}")
-                            else:
-                                print(f"Channel not found: {self.bot.config.CHANNEL_ID}")
+                                            embed = discord.Embed(
+                                                title="🎮 New Download",
+                                                description=f"**{rom_name}**",
+                                                color=discord.Color.blue(),
+                                                timestamp=datetime.now()
+                                            )
+                                            embed.add_field(
+                                                name="User",
+                                                value=username,
+                                                inline=True
+                                            )
+                                            
+                                            channel = self.bot.get_channel(self.bot.config.CHANNEL_ID)
+                                            if channel:
+                                                await channel.send(embed=embed)
+                                                print(f"Notification sent for {rom_name}")
     
             except Exception as e:
                 print(f"Monitor error: {e}")
