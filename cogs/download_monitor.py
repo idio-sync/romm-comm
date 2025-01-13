@@ -132,53 +132,85 @@ class DownloadMonitor(commands.Cog):
     async def start_monitoring(self):
         """Start monitoring downloads"""
         await self.init_db()
-        
+        logger.info("Starting download monitoring...")
+        print("Starting download monitoring...")  # Console print
+    
         while True:
             try:
+                # Get container synchronously
                 romm_container = self.docker_client.containers.get('romm')
-                logger.info("Connected to romm container, starting log monitoring...")
-                
-                for log in romm_container.logs(stream=True, follow=True, tail=0):
+                logger.info(f"Connected to container: {romm_container.name}")
+                print(f"Connected to container: {romm_container.name}")
+    
+                def handle_logs():
+                    """Synchronous function to handle log streaming"""
                     try:
-                        line = log.decode('utf-8').strip()
-                        
-                        if "INFO:    [RomM][rom]" in line and "is downloading" in line:
-                            print(f"Download detected in log: {line}")  # Console print for visibility
-                            match = self.download_pattern.search(line)
-                            if match:
-                                timestamp, username, rom_name = match.groups()
-                                print(f"Parsed download - User: {username}, ROM: {rom_name}")  # Console print
-                                
-                                await self.log_download(username, rom_name)
-                                
-                                embed = discord.Embed(
-                                    title="🎮 New Download",
-                                    description=f"**{rom_name}**",
-                                    color=discord.Color.blue(),
-                                    timestamp=datetime.now()
-                                )
-                                embed.add_field(
-                                    name="User",
-                                    value=username,
-                                    inline=True
-                                )
-                                
-                                channel = self.bot.get_channel(self.bot.config.CHANNEL_ID)
-                                if channel:
-                                    await channel.send(embed=embed)
-                                    logger.info(f"Download notification sent for {rom_name}")
-                                
+                        # Test getting a single recent log first
+                        recent = romm_container.logs(tail=1).decode()
+                        print(f"Last log line: {recent}")
+    
+                        # Start streaming logs
+                        log_generator = romm_container.logs(
+                            stream=True, 
+                            follow=True, 
+                            tail=0,
+                            stdout=True,
+                            stderr=True
+                        )
+    
+                        print("Starting log stream...")
+                        for log in log_generator:
+                            line = log.decode('utf-8').strip()
+                            print(f"Log received: {line}")  # Print every line
+    
+                            if "INFO:    [RomM][rom]" in line:
+                                print(f"Found RomM log: {line}")
+                                if "is downloading" in line:
+                                    print("Found download entry")
+                                    return line  # Return the line for async processing
                     except Exception as e:
-                        logger.error(f"Error processing log line: {e}")
-                        print(f"Error processing log: {e}")  # Console print for visibility
-                        continue
-                        
+                        print(f"Error in handle_logs: {e}")
+                        return None
+    
+                while True:
+                    # Run log handling in executor
+                    download_line = await self.bot.loop.run_in_executor(None, handle_logs)
+                    
+                    if download_line:
+                        match = self.download_pattern.search(download_line)
+                        if match:
+                            timestamp, username, rom_name = match.groups()
+                            print(f"Matched download - Time: {timestamp}, User: {username}, ROM: {rom_name}")
+    
+                            # Log to database
+                            await self.log_download(username, rom_name)
+    
+                            # Create and send embed
+                            embed = discord.Embed(
+                                title="🎮 New Download",
+                                description=f"**{rom_name}**",
+                                color=discord.Color.blue(),
+                                timestamp=datetime.now()
+                            )
+                            embed.add_field(
+                                name="User",
+                                value=username,
+                                inline=True
+                            )
+                            
+                            channel = self.bot.get_channel(self.bot.config.CHANNEL_ID)
+                            if channel:
+                                await channel.send(embed=embed)
+                                print(f"Notification sent for {rom_name}")
+                            else:
+                                print(f"Channel not found: {self.bot.config.CHANNEL_ID}")
+    
             except Exception as e:
+                print(f"Monitor error: {e}")
                 logger.error(f"Monitor error: {e}")
-                print(f"Monitor error: {e}")  # Console print for visibility
                 await asyncio.sleep(30)
                 continue
-
+                
     @discord.slash_command(
         name="download_stats",
         description="Show download statistics for a specified period"
@@ -262,62 +294,6 @@ class DownloadMonitor(commands.Cog):
             )
 
         await ctx.respond(embed=embed)
-
-    @discord.slash_command(
-        name="test_download_log",
-        description="Test database logging"
-    )
-    async def test_download_log(self, ctx):
-        await ctx.defer()
-        
-        try:
-            # Test database connection
-            await self.log_download("test_user", "test_rom.zip")
-            
-            # Verify the entry
-            async with aiosqlite.connect(self.db_path) as db:
-                async with db.execute('SELECT * FROM downloads ORDER BY timestamp DESC LIMIT 1') as cursor:
-                    last_entry = await cursor.fetchone()
-            
-            if last_entry:
-                embed = discord.Embed(
-                    title="Database Test",
-                    description="Successfully wrote and read from database",
-                    color=discord.Color.green()
-                )
-                embed.add_field(
-                    name="Last Entry",
-                    value=f"User: {last_entry[1]}\nROM: {last_entry[2]}\nTime: {last_entry[3]}",
-                    inline=False
-                )
-            else:
-                embed = discord.Embed(
-                    title="Database Test",
-                    description="Write successful but couldn't read entry",
-                    color=discord.Color.yellow()
-                )
-        except Exception as e:
-            embed = discord.Embed(
-                title="Database Test",
-                description=f"Error: {str(e)}",
-                color=discord.Color.red()
-            )
-        
-        await ctx.respond(embed=embed)
-
-    @discord.slash_command(
-        name="test_pattern",
-        description="Test log pattern matching"
-    )
-    async def test_pattern(self, ctx):
-        test_line = 'INFO:    [RomM][rom][2025-01-13 15:09:38] User idiosync is downloading Magic Survival (0.9452_APKPure).xapk'
-        
-        match = self.download_pattern.search(test_line)
-        if match:
-            timestamp, username, rom_name = match.groups()
-            await ctx.respond(f"Pattern matched successfully!\nTimestamp: {timestamp}\nUser: {username}\nROM: {rom_name}")
-        else:
-            await ctx.respond("Pattern did not match!")
 
     @commands.Cog.listener()
     async def on_ready(self):
