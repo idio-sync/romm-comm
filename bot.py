@@ -182,7 +182,7 @@ class RommBot(discord.Bot):
             'cogs.scan': ['socketio'],
             'cogs.requests': ['aiosqlite'],
             'cogs.user_manager': ['aiohttp','aiosqlite'],
-            'cogs.download_monitor': ['aiosqlite']
+            'cogs.download_monitor': ['aiosqlite','docker']
         }
 
         for cog in cogs_to_load:
