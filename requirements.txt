@@ -6,3 +6,4 @@ Pillow
 python-socketio
 requests
 aiosqlite
+docker
