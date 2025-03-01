@@ -42,6 +42,7 @@ Planned (if possible)
 - python-socketio
 - requests
 - aiosqlite
+- audioop-lts
 
 ## Installation
 
@@ -54,7 +55,7 @@ Non-Docker:
 1. Clone the repository or download the source code
 2. Install required dependencies:
 ```bash
-pip install py-cord aiohttp python-dotenv qrcode Pillow python-socketio requests aiosqlite
+pip install py-cord aiohttp python-dotenv qrcode Pillow python-socketio requests aiosqlite audioop-lts
 ```
 ## Discord Bot Token Creation
 - See https://docs.pycord.dev/en/stable/discord.html
