@@ -84,7 +84,7 @@ class ROM_View(discord.ui.View):
             igdb_name = re.sub(r'[^a-z0-9-]', '', igdb_name)
             igdb_url = f"https://www.igdb.com/games/{igdb_name}"
             romm_url = f"{self.bot.config.DOMAIN}/rom/{rom_data['id']}"
-            logo_url = "https://raw.githubusercontent.com/rommapp/romm/release/.github/resources/romm_complete.png"
+            logo_url = "https://raw.githubusercontent.com/rommapp/romm/refs/tags/3.8.0-beta.3/.github/resources/isotipo.png"
             
             embed = discord.Embed(
                 title=f"{rom_data['name']}",
