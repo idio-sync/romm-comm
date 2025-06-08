@@ -1,6 +1,7 @@
 # RomM-ComM (RomM Communicator Module)
 
 **DEVELOPMENT IS CURRENTLY PAUSED**
+
 RomM development is still early and the API is changing often enough to make work on this a bit too much to handle with my current life schedule. I will resume once things finalize a bit.
 
 A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) API to provide information about your ROM collection and conrol RomM from Discord.
