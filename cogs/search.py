@@ -45,7 +45,7 @@ class ROM_View(discord.ui.View):
             file_name = rom.get('file_name', 'Unknown filename')
             
             # Get correct size for dropdown
-            size_bytes = rom.get('file_size_bytes', 0)
+            size_bytes = rom.get('fs_size_bytes', 0)
             if not size_bytes and rom.get('files'):
                 # For multi-file ROMs, sum the sizes
                 size_bytes = sum(f.get('size_bytes', 0) for f in rom['files'])
