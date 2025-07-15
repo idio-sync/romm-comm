@@ -691,6 +691,7 @@ class UserManager(commands.Cog):
             params = {
                 'username': username,
                 'password': password,
+                'email': 'none',  # Using default email string as is now required
                 'role': 'VIEWER'  # Using correct role from backend enum
             }
             
