@@ -318,7 +318,7 @@ class RommBot(discord.Bot):
                     "Saves": raw_data.get('SAVES', 0),
                     "States": raw_data.get('STATES', 0),
                     "Screenshots": raw_data.get('SCREENSHOTS', 0),
-                    "Storage Size": self.bytes_to_tb(raw_data.get('FILESIZE', 0))
+                    "Storage Size": self.bytes_to_tb(raw_data.get('TOTAL_FILESIZE_BYTES', 0))
                 }
         
             elif data_type == 'platforms':
