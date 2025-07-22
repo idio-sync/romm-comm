@@ -5,7 +5,7 @@ A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) A
 
 **DEVELOPMENT IS CURRENTLY PAUSED**
 
-RomM development is still early and the API is changing often enough to make work on this a bit too much to handle with my current life schedule. I will resume once things finalize a bit. The bot still somewhat works (outside of searching), but there are a few bugs relating to things like filesize reporting and properly handling DLC and user regestrations. The last Romm version that the bot was 100% compatable with was 3.6/3.7.
+RomM development is still early and the API is changing often enough to make work on this a bit too much to handle with my current life schedule. I will resume once things finalize a bit. The bot still somewhat works (outside of searching), but there are a few bugs relating to things like properly handling DLC and user regestrations. The last Romm version that the bot was 100% compatable with was 3.6/3.7.
 
 ## Features
 
