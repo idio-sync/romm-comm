@@ -42,13 +42,13 @@ class ROM_View(discord.ui.View):
         # Add options to select menu
         for rom in search_results[:25]:
             display_name = rom['name'][:75] if len(rom['name']) > 75 else rom['name']
-            file_name = rom.get('file_name', 'Unknown filename')
+            file_name = rom.get('fs_name', 'Unknown filename')
             
             # Get correct size for dropdown
-            size_bytes = rom.get('file_size_bytes', 0)
+            size_bytes = rom.get('fs_size_bytes', 0)  # Check ROM level first
             if not size_bytes and rom.get('files'):
                 # For multi-file ROMs, sum the sizes
-                size_bytes = sum(f.get('size_bytes', 0) for f in rom['files'])
+                size_bytes = sum(f.get('file_size_bytes', 0) for f in rom['files'])
             file_size = self.format_file_size(size_bytes)
             
             truncated_filename = (file_name[:47] + '...') if len(file_name) > 50 else file_name
@@ -78,13 +78,13 @@ class ROM_View(discord.ui.View):
 
     async def create_rom_embed(self, rom_data: Dict) -> discord.Embed:
         try:
-            file_name = rom_data.get('file_name', 'unknown_file').replace(' ', '%20')
+            file_name = quote(rom_data.get('fs_name', 'unknown_file'))
             download_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_data['id']}/content/{file_name}"
             igdb_name = rom_data['name'].lower().replace(' ', '-')
             igdb_name = re.sub(r'[^a-z0-9-]', '', igdb_name)
             igdb_url = f"https://www.igdb.com/games/{igdb_name}"
             romm_url = f"{self.bot.config.DOMAIN}/rom/{rom_data['id']}"
-            logo_url = "https://raw.githubusercontent.com/rommapp/romm/release/.github/resources/romm_complete.png"
+            logo_url = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png"
             
             embed = discord.Embed(
                 title=f"{rom_data['name']}",
@@ -117,13 +117,14 @@ class ROM_View(discord.ui.View):
                 embed.add_field(name="Platform", value=platform_display, inline=True)
             
             # Add other metadata fields
-            if genres := rom_data.get('genres'):
-                if isinstance(genres, list):
-                    genre_list = genres[:2]  # Take only first two genres
-                    genre_display = ", ".join(genre_list)
-                else:
-                    genre_display = str(genres)
-                embed.add_field(name="Genres", value=genre_display, inline=True)
+            if metadatum := rom_data.get('metadatum'):
+                if genres := metadatum.get('genres'):
+                    if isinstance(genres, list):
+                        genre_list = genres[:2]  # Take only first two genres
+                        genre_display = ", ".join(genre_list)
+                    else:
+                        genre_display = str(genres)
+                    embed.add_field(name="Genres", value=genre_display, inline=True)
             
             if release_date := rom_data.get('first_release_date'):
                 try:
@@ -138,7 +139,7 @@ class ROM_View(discord.ui.View):
                 if trimmed_summary:
                     embed.add_field(name="Summary", value=trimmed_summary, inline=False)
             
-            if companies := rom_data.get('companies'):
+            if companies := metadatum.get('companies'):
                 if isinstance(companies, list):
                     company_list = companies[:2]  # Take only first two companies
                     companies_str = ", ".join(company_list)
@@ -156,7 +157,7 @@ class ROM_View(discord.ui.View):
             # File information
             if rom_data.get('multi') and rom_data.get('files'):
                 files = rom_data.get('files', [])
-                total_size = sum(f.get('size_bytes', 0) if f.get('size_bytes', 0) else f.get('size', 0) for f in files)
+                total_size = sum(f.get('file_size_bytes', 0) for f in files)
                 files_info = []
                 total_length = 0
                 files_shown = 0
@@ -172,25 +173,23 @@ class ROM_View(discord.ui.View):
                 if len(files) > 10:
                     sorted_files = sorted(
                         files, 
-                        key=lambda x: x.get('size_bytes', 0) if x.get('size_bytes', 0) else x.get('size', 0), 
+                        key=lambda x: x.get('file_size_bytes', 0), 
                         reverse=True
                     )[:10]
                 else:
                     sorted_files = sorted(
                         files,
-                        key=lambda x: x.get('filename', '').lower()
+                        key=lambda x: x.get('file_name', '').lower()
                     )
 
                 # Process each file
                 for file_info in sorted_files:
                     # Get file size
-                    size_bytes = file_info.get('size_bytes', 0)
-                    if not size_bytes and 'size' in file_info:
-                        size_bytes = file_info.get('size', 0)
+                    size_bytes = file_info.get('file_size_bytes', 0)
                     size_str = self.format_file_size(size_bytes)
 
                     # Create file line
-                    file_line = f"• {file_info['filename']} ({size_str})"
+                    file_line = f"• {file_info['file_name']} ({size_str})"
                     line_length = len(file_line) + 1  # +1 for newline
                     
                     if total_length + line_length > max_length:
@@ -249,9 +248,9 @@ class ROM_View(discord.ui.View):
                     inline=False
                 )
             else:
-                 # Single file display
-                file_size = self.format_file_size(rom_data.get('file_size_bytes', 0))
-                file_name = rom_data.get('file_name', 'unknown_file')
+                # Single file display
+                file_size = self.format_file_size(rom_data.get('fs_size_bytes', 0))
+                file_name = rom_data.get('fs_name' , 'unknown_file')
                 
                 # Add filename and hash values to embed
                 file_info = [f"• {file_name}"]
@@ -353,8 +352,9 @@ class ROM_View(discord.ui.View):
             for item in components_to_remove:
                 self.remove_item(item)
 
-            # Initialize filename map as instance variable
+            # Initialize filename and ID maps as instance variables
             self.filename_map = {}
+            self.file_id_map = {}
 
             if rom_data.get('multi') and rom_data.get('files'):
                 files = rom_data.get('files', [])
@@ -365,13 +365,13 @@ class ROM_View(discord.ui.View):
                 if len(files) > 10:
                     sorted_files = sorted(
                         files, 
-                        key=lambda x: x.get('size_bytes', 0) if x.get('size_bytes', 0) else x.get('size', 0), 
+                        key=lambda x: x.get('file_size_bytes', 0),
                         reverse=True
                     )[:10]
                 else:
                     sorted_files = sorted(
                         files,
-                        key=lambda x: x.get('filename', '').lower()
+                        key=lambda x: x.get('file_name', '').lower()
                     )
                 
                 # Create file select with appropriate max_values
@@ -385,18 +385,17 @@ class ROM_View(discord.ui.View):
                 # Add file options using shortened values
                 for i, file_info in enumerate(sorted_files):
                     # Get size from file info
-                    size_bytes = file_info.get('size_bytes', 0)
-                    if not size_bytes and 'size' in file_info:
-                        size_bytes = file_info.get('size', 0)
+                    size_bytes = file_info.get('file_size_bytes', 0)
                     size = self.format_file_size(size_bytes)
                     
-                    # Create shortened value and map it to full filename
+                    # Create shortened value and map it to full filename AND file ID
                     short_value = f"file_{i}"
-                    self.filename_map[short_value] = file_info['filename']
+                    self.filename_map[short_value] = file_info['file_name']
+                    self.file_id_map[short_value] = file_info.get('id')
                     
                     self.file_select.add_option(
-                        label=file_info['filename'][:75],
-                        value=short_value,  # Use shortened value
+                        label=file_info['file_name'][:75],
+                        value=short_value,
                         description=f"Size: {size}"
                     )
                 
@@ -404,8 +403,8 @@ class ROM_View(discord.ui.View):
                 self.add_item(self.file_select)
 
                 # Add download buttons as URL buttons
-                file_name = quote(rom_data.get('file_name', 'unknown_file'))
-                base_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_data['id']}/content/{file_name}"
+                file_name = quote(rom_data.get('fs_name', 'unknown_file'))
+                base_url = f"{self.bot.config.DOMAIN}/roms/{rom_data['id']}/content/{file_name}"
 
                 # Download Selected button starts disabled
                 self.download_selected = discord.ui.Button(
@@ -426,8 +425,8 @@ class ROM_View(discord.ui.View):
 
             else:
                 # Single file download button
-                file_name = quote(rom_data.get('file_name', 'unknown_file'))
-                file_size = self.format_file_size(rom_data.get('file_size_bytes', 0))
+                file_name = quote(rom_data.get('fs_name', 'unknown_file'))
+                file_size = self.format_file_size(rom_data.get('fs_size_bytes', 0))
                 download_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_data['id']}/content/{file_name}"
                 
                 self.download_all = discord.ui.Button(
@@ -441,7 +440,6 @@ class ROM_View(discord.ui.View):
             logger.error(f"Error updating file select: {e}")
             logger.error(f"ROM data: {rom_data}")
             raise
-
 
     async def file_select_callback(self, interaction: discord.Interaction):
         """Handle file selection"""
@@ -459,18 +457,23 @@ class ROM_View(discord.ui.View):
                 selected_file_names = [self.filename_map[short_value] for short_value in selected_short_values]
                 
                 # Create the URL based on number of files
-                base_file_name = self._selected_rom.get('file_name', 'unknown_file')
+                base_file_name = self._selected_rom.get('fs_name', 'unknown_file')
                 encoded_base_name = quote(base_file_name)
-                base_url = f"{self.bot.config.DOMAIN}/api/roms/{self._selected_rom['id']}/content/{encoded_base_name}"
+                base_url = f"{self.bot.config.DOMAIN}/roms/{self._selected_rom['id']}/content/{encoded_base_name}"
                 
-                if len(selected_file_names) == 1:
-                    # For single file, encode the filename
-                    encoded_file = quote(selected_file_names[0])
-                    download_url = f"{base_url}?files={encoded_file}"
-                else:
-                    # For multiple files, pass each file as a separate query parameter
-                    file_params = "&".join(f"files={quote(f)}" for f in selected_file_names)
-                    download_url = f"{base_url}?{file_params}"
+                selected_file_ids = []
+                for short_value in selected_short_values:
+                    filename = self.filename_map[short_value]
+                    # Find the file ID for this filename
+                    for file_info in self._selected_rom.get('files', []):
+                        if file_info.get('file_name') == filename:
+                            selected_file_ids.append(str(file_info.get('id')))
+                            break
+
+                if selected_file_ids:
+                    # Use file_ids parameter as expected by backend
+                    file_ids_param = ','.join(selected_file_ids)
+                    download_url = f"{base_url}?file_ids={file_ids_param}"
                 
                 logger.debug(f"Generated download URL: {download_url}")
                 
@@ -489,8 +492,8 @@ class ROM_View(discord.ui.View):
                 self.add_item(self.download_selected)
 
                 # Re-add download all button
-                all_file_name = quote(self._selected_rom.get('file_name', 'unknown_file'))
-                download_all_url = f"{self.bot.config.DOMAIN}/api/roms/{self._selected_rom['id']}/content/{all_file_name}"
+                all_file_name = quote(self._selected_rom.get('fs_name', 'unknown_file'))
+                download_all_url = f"{self.bot.config.DOMAIN}/roms/{self._selected_rom['id']}/content/{all_file_name}"
                 self.download_all = discord.ui.Button(
                     label="Download All",
                     style=discord.ButtonStyle.link,
@@ -538,8 +541,8 @@ class ROM_View(discord.ui.View):
             await interaction.followup.send("Please select files to download!", ephemeral=True)
             return
         
-        file_name = self._selected_rom.get('file_name', 'unknown_file').replace(' ', '%20')
-        download_url = f"{self.bot.config.DOMAIN}/api/roms/{self._selected_rom['id']}/content/{file_name}?files={','.join(selected_values)}"
+        file_name = self._selected_rom.get('fs_name', 'unknown_file').replace(' ', '%20')
+        download_url = f"{self.bot.config.DOMAIN}/roms/{self._selected_rom['id']}/content/{file_name}?files={','.join(selected_values)}"
         
         await interaction.followup.send(
             f"Download link for selected files:\n{download_url}",
@@ -575,7 +578,7 @@ class ROM_View(discord.ui.View):
             await interaction.followup.send("Please select a ROM first!", ephemeral=True)
             return
 
-        file_name = self._selected_rom.get('file_name', 'unknown_file').replace(' ', '%20')
+        file_name = self._selected_rom.get('fs_name', 'unknown_file').replace(' ', '%20')
         download_url = f"{self.bot.config.DOMAIN}/api/roms/{self._selected_rom['id']}/content/{file_name}"
         
         await interaction.followup.send(
@@ -598,7 +601,7 @@ class ROM_View(discord.ui.View):
                 await interaction.channel.send("❌ Unable to find ROM data")
                 return
 
-            file_name = selected_rom.get('file_name', 'unknown_file').replace(' ', '%20')
+            file_name = selected_rom.get('fs_name', 'unknown_file').replace(' ', '%20')
             download_url = f"{self.bot.config.DOMAIN}/api/roms/{selected_rom['id']}/content/{file_name}"
                 
             qr_file = await self.generate_qr(download_url)
@@ -1099,9 +1102,17 @@ class Search(commands.Cog):
                 for attempt in range(max_attempts):
                     try:
                         # Get ROMs for platform
-                        all_roms = await self.bot.fetch_api_endpoint(
+                        roms_response = await self.bot.fetch_api_endpoint(
                             f'roms?platform_id={platform_id}&limit={rom_count}'
                         )
+
+                        # Handle paginated response
+                        if roms_response and isinstance(roms_response, dict) and 'items' in roms_response:
+                            all_roms = roms_response['items']
+                        elif roms_response and isinstance(roms_response, list):
+                            all_roms = roms_response
+                        else:
+                            all_roms = []
                         
                         if all_roms and isinstance(all_roms, list) and len(all_roms) > 0:
                             # Select a random ROM from the list
@@ -1234,17 +1245,34 @@ class Search(commands.Cog):
 
             # Search for ROMs
             search_term = game.strip()
-            search_results = await self.bot.fetch_api_endpoint(
+            search_response = await self.bot.fetch_api_endpoint(
                 f'roms?platform_id={platform_id}&search_term={search_term}&limit=25'
             )
-            
+
+            # Handle paginated response
+            if search_response and isinstance(search_response, dict) and 'items' in search_response:
+                search_results = search_response['items']
+            elif search_response and isinstance(search_response, list):
+                search_results = search_response
+            else:
+                search_results = []
+
+            # If no results, try with modified search term
             if not search_results or len(search_results) == 0:
-                search_words = search_term.split()
+                search_words = search_term.split()  # Define search_words here
                 if len(search_words) > 1:
                     search_term = ' '.join(search_words)
-                    search_results = await self.bot.fetch_api_endpoint(
+                    search_response = await self.bot.fetch_api_endpoint(
                         f'roms?platform_id={platform_id}&search_term={search_term}&limit=25'
                     )
+                    
+                    # Handle paginated response for retry
+                    if search_response and isinstance(search_response, dict) and 'items' in search_response:
+                        search_results = search_response['items']
+                    elif search_response and isinstance(search_response, list):
+                        search_results = search_response
+                    else:
+                        search_results = []
 
             if not search_results or not isinstance(search_results, list) or len(search_results) == 0:
                 await ctx.respond(f"No ROMs found matching '{game}' for platform '{platform_name}'")
