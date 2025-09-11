@@ -19,12 +19,8 @@ Current
 - Rate-limited Discord API interactions
 - Caching system, the bot onnly fetches fresh stats if that particular stat has updated since last fetch
 
-Planned (if possible)
+Planned
 - Alternative chat client integrations (Matrix, Telegram, Slack), no eta for now
-- Prowlarr integration for requests?
-- Requests dashboard webpage, not sure if this feature will get enough usage to justify
-- Look up most popular games (via RomM logs?) and provide stats via command
-- More collection information commands (IGDB have/miss, report missing, etc)
 
 ## Requirements
 
@@ -275,7 +271,7 @@ Implements an efficient caching system:
 
 ## Security
 
-- OAuth2 bearer tokens for API requests using http and websockets
+- OAuth2 bearer tokens for API requests using http
 - Environment variable configuration instead of storing passwors in code
 - No sensitive data logging (passwords, etc)
 - Proper permission checking
@@ -287,5 +283,6 @@ Implements an efficient caching system:
 - Check API connectivity to RomM
 - Check logs for error messages, I tried to meticulously report errors
 - Verify configuration settings in the env
+
 
 
