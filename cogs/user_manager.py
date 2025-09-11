@@ -102,19 +102,11 @@ class AsyncUserDatabaseManager:
             return False
 
 class UserManager(commands.Cog):
-    """
-    User management cog for RomM bot.
-    Handles automatic user creation and management when roles are assigned or removed.
-    """
     def __init__(self, bot):
         self.bot = bot
         self.auto_register_role_id = int(os.getenv('AUTO_REGISTER_ROLE_ID', 0))
         self.log_channel_id = self.bot.config.CHANNEL_ID
         self.temp_storage = {}
-        self.access_token = None
-        self.refresh_token = None
-        self.token_expiry = 0
-        self.refresh_token_task.start()
         self.db_manager = AsyncUserDatabaseManager()
         
         logger.info(
@@ -126,138 +118,7 @@ class UserManager(commands.Cog):
         """Initialize when cog is loaded"""
         await self.db_manager.initialize()
         logger.info("User Manager database initialized!")
-
-    async def get_oauth_token(self) -> bool:
-        """Get initial OAuth token with proper CSRF handling"""
-        try:
-            session = await self.bot.ensure_session()
-            
-            # First get CSRF token from heartbeat endpoint
-            heartbeat_url = f"{self.bot.config.API_BASE_URL}/api/heartbeat"
-            
-            async with session.get(heartbeat_url) as response:
-                if response.status != 200:
-                    logger.error(f"Failed to get heartbeat. Status: {response.status}")
-                    response_text = await response.text()
-                    logger.error(f"Heartbeat response: {response_text}")
-                    return False
-                
-                # Get CSRF token from Set-Cookie header
-                set_cookie = response.headers.get('Set-Cookie')
-                if not set_cookie:
-                    logger.error("No Set-Cookie header in response")
-                    return False
-                
-                # Parse the Set-Cookie header to get the CSRF token
-                csrf_token = set_cookie.split('romm_csrftoken=')[1].split(';')[0]
-              # logger.info(f"Extracted CSRF token: {csrf_token[:10]}...")
-
-                # Now get OAuth token
-                token_url = f"{self.bot.config.API_BASE_URL}/api/token"
-                
-                # Create form data
-                data = aiohttp.FormData()
-                data.add_field('grant_type', 'password')
-                data.add_field('username', self.bot.config.USER)
-                data.add_field('password', self.bot.config.PASS)
-                data.add_field('scope', 'users.write users.read')
-                
-                # Include CSRF token in both header and cookie
-                headers = {
-                    "Accept": "application/json",
-                    "X-CSRFToken": csrf_token,
-                    "Cookie": f"romm_csrftoken={csrf_token}"
-                }
-                
-                async with session.post(token_url, data=data, headers=headers) as response:
-                    response_text = await response.text()
-                  # logger.info(f"Token response status: {response.status}")
-                  # logger.info(f"Token response body: {response_text}")
-                    
-                    if response.status == 200:
-                        token_data = await response.json()
-                        self.access_token = token_data.get('access_token')
-                        self.refresh_token = token_data.get('refresh_token')
-                        self.token_expiry = time.time() + token_data.get('expires', 840)
-                      # logger.info("Successfully obtained OAuth token")
-                        return True
-                    else:
-                        logger.error(f"Failed to get OAuth token. Status: {response.status}, Response: {response_text}")
-                        return False
-                    
-        except Exception as e:
-            logger.error(f"Error getting OAuth token: {e}", exc_info=True)
-            return False
-
-    async def refresh_oauth_token(self) -> bool:
-        """Refresh OAuth token with CSRF handling"""
-        try:
-            if not self.refresh_token:
-                return await self.get_oauth_token()
-
-            session = await self.bot.ensure_session()
-            
-            # Get fresh CSRF token from heartbeat
-            heartbeat_url = f"{self.bot.config.API_BASE_URL}/api/heartbeat"
-            async with session.get(heartbeat_url) as response:
-                if response.status != 200:
-                    logger.error(f"Failed to get heartbeat. Status: {response.status}")
-                    return False
-                    
-                set_cookie = response.headers.get('Set-Cookie')
-                if not set_cookie:
-                    logger.error("No Set-Cookie header in response")
-                    return False
-                
-                csrf_token = set_cookie.split('romm_csrftoken=')[1].split(';')[0]
-                logger.info(f"Got CSRF token for refresh: {csrf_token[:10]}...")
-
-            # Now refresh the token
-            token_url = f"{self.bot.config.API_BASE_URL}/api/token"
-            
-            data = aiohttp.FormData()
-            data.add_field('grant_type', 'refresh_token')
-            data.add_field('refresh_token', self.refresh_token)
-            
-            headers = {
-                "Accept": "application/json",
-                "X-CSRFToken": csrf_token,
-                "Cookie": f"romm_csrftoken={csrf_token}"
-            }
-            
-            logger.info("Attempting to refresh OAuth token")
-            async with session.post(token_url, data=data, headers=headers) as response:
-                response_text = await response.text()
-                logger.info(f"Refresh response status: {response.status}")
-                logger.info(f"Refresh response body: {response_text}")
-                
-                if response.status == 200:
-                    token_data = await response.json()
-                    self.access_token = token_data.get('access_token')
-                    self.refresh_token = token_data.get('refresh_token')
-                    self.token_expiry = time.time() + token_data.get('expires', 840)
-                    logger.info("Successfully refreshed OAuth token")
-                    return True
-                else:
-                    logger.error(f"Failed to refresh token, status: {response.status}")
-                    return await self.get_oauth_token()
-                    
-        except Exception as e:
-            logger.error(f"Error refreshing OAuth token: {e}")
-            return False
-            
-    @tasks.loop(minutes=13)  # Refresh token every 13 minutes (before 15-minute expiry)
-    async def refresh_token_task(self):
-        """Periodic token refresh task"""
-        if time.time() > self.token_expiry - 60:  # Refresh if within 1 minute of expiry
-            await self.refresh_oauth_token()
-
-    async def ensure_token(self) -> bool:
-        """Ensure we have a valid OAuth token"""
-        if not self.access_token or time.time() > self.token_expiry - 60:
-            return await self.get_oauth_token()
-        return True
-
+    
     async def generate_secure_password(self, length=16):
         """Generate a secure random password"""
         alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
@@ -306,40 +167,14 @@ class UserManager(commands.Cog):
     async def delete_user(self, user_id: int) -> bool:
         """Delete user from the API"""
         try:
-            # Ensure we have a valid token
-            if not await self.ensure_token():
-                logger.error("Failed to obtain OAuth token")
-                return False
-
-            session = await self.bot.ensure_session()
-            url = f"{self.bot.config.API_BASE_URL}/api/users/{user_id}"
+            # Use bot's helper method
+            result = await self.bot.make_authenticated_request(
+                method="DELETE",
+                endpoint=f"users/{user_id}",
+                require_csrf=True  # Though not needed with Bearer auth
+            )
+            return result is not None
             
-            # Get fresh CSRF token
-            heartbeat_url = f"{self.bot.config.API_BASE_URL}/api/heartbeat"
-            async with session.get(heartbeat_url) as response:
-                if response.status != 200:
-                    logger.error(f"Failed to get heartbeat. Status: {response.status}")
-                    return False
-                
-                set_cookie = response.headers.get('Set-Cookie')
-                if not set_cookie:
-                    logger.error("No Set-Cookie header in response")
-                    return False
-                
-                csrf_token = set_cookie.split('romm_csrftoken=')[1].split(';')[0]
-            
-            headers = {
-                "Accept": "application/json",
-                "Authorization": f"Bearer {self.access_token}",
-                "X-CSRFToken": csrf_token,
-                "Cookie": f"romm_csrftoken={csrf_token}"
-            }
-            
-            async with session.delete(url, headers=headers) as response:
-                if response.status == 401:  # Unauthorized - token might be expired
-                    if await self.get_oauth_token():  # Try refreshing token
-                        return await self.delete_user(user_id)  # Retry once
-                return response.status == 200
         except Exception as e:
             logger.error(f"Error deleting user {user_id}: {e}", exc_info=True)
             return False
@@ -347,36 +182,20 @@ class UserManager(commands.Cog):
     async def find_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
         """Find a user by their username in the API"""
         try:
-            # Ensure we have a valid token
-            if not await self.ensure_token():
-                logger.error("Failed to obtain OAuth token")
-                return None
-
-            url = f"{self.bot.config.API_BASE_URL}/api/users"
-            headers = {
-                "Accept": "application/json",
-                "Authorization": f"Bearer {self.access_token}"
-            }
-
-            session = await self.bot.ensure_session()
-            async with session.get(url, headers=headers) as response:
-                if response.status == 401:  # Unauthorized - token might be expired
-                    if await self.get_oauth_token():  # Try refreshing token
-                        return await self.find_user_by_username(username)  # Retry once
-                        
-                if response.status == 200:
-                    users = await response.json()
-                    logger.info(f"Searching for user with username: {username}")
-                    if users:
-                        # Log all usernames for debugging
-                        logger.info(f"Available usernames: {[user.get('username', '') for user in users]}")
-                        return next(
-                            (user for user in users if user.get('username', '').lower() == username.lower()),
-                            None
-                        )
+            # Use bot's standard fetch method
+            users_data = await self.bot.fetch_api_endpoint('users')
+            
+            if users_data:
+                logger.info(f"Searching for user with username: {username}")
+                logger.info(f"Available usernames: {[user.get('username', '') for user in users_data]}")
+                return next(
+                    (user for user in users_data if user.get('username', '').lower() == username.lower()),
+                    None
+                )
             return None
         except Exception as e:
             logger.error(f"Error finding user {username}: {e}", exc_info=True)
+            return None
     
     async def handle_role_removal(self, member: discord.Member) -> bool:
         """Handle removal of the auto-register role"""
@@ -514,48 +333,39 @@ class UserManager(commands.Cog):
                         new_username = await self.sanitize_username(member.display_name)
                         logger.info(f"Attempting to update username from {existing_username} to {new_username}")
                         
-                        # Get fresh CSRF token and make request
-                        session = await self.bot.ensure_session()
-                        heartbeat_url = f"{self.bot.config.API_BASE_URL}/api/heartbeat"
-                        async with session.get(heartbeat_url) as response:
-                            csrf_token = response.headers.get('Set-Cookie').split('romm_csrftoken=')[1].split(';')[0]
+                        # Use bot's helper for update
+                        update_params = {"username": new_username}
                         
-                        update_url = f"{self.bot.config.API_BASE_URL}/api/users/{existing_user['id']}"
-                        headers = {
-                            "Accept": "application/json",
-                            "Authorization": f"Bearer {self.access_token}",
-                            "X-CSRFToken": csrf_token,
-                            "Cookie": f"romm_csrftoken={csrf_token}"
-                        }
+                        result = await self.bot.make_authenticated_request(
+                            method="PUT",
+                            endpoint=f"users/{existing_user['id']}",
+                            params=update_params,
+                            require_csrf=True
+                        )
                         
-                        params = {
-                            "username": new_username
-                        }
-                        
-                        async with session.put(update_url, params=params, headers=headers) as response:
-                            if response.status in (200, 201):
-                                # Store link in database
-                                await self.db_manager.add_user_link(
-                                    member.id,
-                                    new_username,
-                                    existing_user['id']
+                        if result:
+                            # Store link in database
+                            await self.db_manager.add_user_link(
+                                member.id,
+                                new_username,
+                                existing_user['id']
+                            )
+                            
+                            await dm_channel.send(
+                                embed=discord.Embed(
+                                    title="✅ Account Linked Successfully",
+                                    description=(
+                                        "Your existing account has been linked to your Discord profile.\n"
+                                        f"You can now log in at {self.bot.config.DOMAIN} using:\n"
+                                        f"Username: `{new_username}`\n"
+                                        "Password: [Your existing password]"
+                                    ),
+                                    color=discord.Color.green()
                                 )
-                                
-                                await dm_channel.send(
-                                    embed=discord.Embed(
-                                        title="✅ Account Linked Successfully",
-                                        description=(
-                                            "Your existing account has been linked to your Discord profile.\n"
-                                            f"You can now log in at {self.bot.config.DOMAIN} using:\n"
-                                            f"Username: `{new_username}`\n"
-                                            "Password: [Your existing password]"
-                                        ),
-                                        color=discord.Color.green()
-                                    )
-                                )
-                                view.stop()
-                                self.temp_storage[member.id] = existing_user
-                            else:
+                            )
+                            view.stop()
+                            self.temp_storage[member.id] = existing_user
+                        else:
                                 error_msg = await dm_channel.send(
                                     embed=discord.Embed(
                                         title="❌ Account Linking Failed",
@@ -662,7 +472,7 @@ class UserManager(commands.Cog):
             session = await self.bot.ensure_session()
             
             # Get fresh CSRF token from heartbeat endpoint
-            heartbeat_url = f"{self.bot.config.API_BASE_URL}/api/heartbeat"
+            heartbeat_url = f"{self.bot.config.API_BASE_URL}/heartbeat"
             
             async with session.get(heartbeat_url) as response:
                 if response.status != 200:
@@ -680,69 +490,61 @@ class UserManager(commands.Cog):
             username = await self.sanitize_username(member.display_name)
             password = await self.generate_secure_password()
             
-            url = f"{self.bot.config.API_BASE_URL}/api/users"
-            headers = {
-                "Accept": "application/json",
-                "Authorization": f"Bearer {self.access_token}",
-                "X-CSRFToken": csrf_token,
-                "Cookie": f"romm_csrftoken={csrf_token}"
-            }
-
-            params = {
-                'username': username,
-                'password': password,
-                'email': 'none',  # Using default email string as is now required
-                'role': 'VIEWER'  # Using correct role from backend enum
-            }
+            # Prepare form data
+            form_data = aiohttp.FormData()
+            form_data.add_field('username', username)
+            form_data.add_field('password', password)
+            form_data.add_field('email', 'none')  # Required field
+            form_data.add_field('role', 'VIEWER')
             
-            logger.info(f"Creating user {username} with URL: {url}")
-            async with session.post(url, params=params, headers=headers) as response:
-                response_text = await response.text()
-                logger.info(f"API Response Status: {response.status}")
-                logger.info(f"API Response Body: {response_text}")
+            # Create user using bot's helper
+            response_data = await self.bot.make_authenticated_request(
+                method="POST",
+                endpoint="users",
+                form_data=form_data,
+                require_csrf=True
+            )
+            
+            if response_data:
+                # Store link in database
+                await self.db_manager.add_user_link(
+                    member.id,
+                    username,
+                    response_data['id']
+                )
+                
+                # Send DM with credentials
+                dm_channel = await self.get_or_create_dm_channel(member)
+                embed = discord.Embed(
+                    title="🎉 RomM Account Created!",
+                    description=f"Your account for {self.bot.config.DOMAIN} has been created.",
+                    color=discord.Color.green()
+                )
+                embed.add_field(name="Username", value=username, inline=False)
+                embed.add_field(name="Password", value=f"||{password}||", inline=False)
+                embed.add_field(
+                    name="⚠️ Important", 
+                    value=f"Please login at {self.bot.config.DOMAIN} and change your password.", 
+                    inline=False
+                )
+                
+                await dm_channel.send(embed=embed)
 
-                if response.status in (200, 201):
-                    response_data = await response.json()
-                    
-                    # Store link in database
-                    await self.db_manager.add_user_link(
-                        member.id,
-                        username,
-                        response_data['id']
-                    )
-                    
-                    # Send DM with credentials
-                    dm_channel = await self.get_or_create_dm_channel(member)
-                    embed = discord.Embed(
-                        title="🎉 RomM Account Created!",
-                        description=f"Your account for {self.bot.config.DOMAIN} has been created.",
-                        color=discord.Color.green()
-                    )
-                    embed.add_field(name="Username", value=username, inline=False)
-                    embed.add_field(name="Password", value=f"||{password}||", inline=False)
-                    embed.add_field(
-                        name="⚠️ Important", 
-                        value=f"Please login at {self.bot.config.DOMAIN} and change your password.", 
-                        inline=False
-                    )
-                    
-                    await dm_channel.send(embed=embed)
-
-                    # Log success
-                    log_channel = self.bot.get_channel(self.log_channel_id)
-                    if log_channel:
-                        await log_channel.send(
-                            embed=discord.Embed(
-                                title="New User Account Created",
-                                description=f"Account created for {member.mention} with username `{username}`",
-                                color=discord.Color.blue()
-                            )
+                # Log success
+                log_channel = self.bot.get_channel(self.log_channel_id)
+                if log_channel:
+                    await log_channel.send(
+                        embed=discord.Embed(
+                            title="New User Account Created",
+                            description=f"Account created for {member.mention} with username `{username}`",
+                            color=discord.Color.blue()
                         )
-                    
-                    return True
-                else:
-                    logger.error(f"User creation failed: {response_text}")
-                    return False
+                    )
+                
+                return True
+            else:
+                logger.error(f"Failed to create user account for {member.display_name}")
+                return False
 
         except Exception as e:
             logger.error(f"Error creating account for {member.display_name}: {e}", exc_info=True)
