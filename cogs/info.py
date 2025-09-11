@@ -381,7 +381,7 @@ class Info(commands.Cog):
                 "**Protocol:** `https`\n"
                 f"**Host:** `{self.bot.config.DOMAIN}`\n"
                 "**Port:** `443`\n"
-                "**Path:** `/api/tinfoil/feed`\n"
+                "**Path:** `/tinfoil/feed`\n"
                 "**Username:** `Your RomM username`\n"
                 "**Password:** `Your RomM password`\n"
                 "**Title:** `Your choice (free text)`\n"
