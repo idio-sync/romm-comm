@@ -275,7 +275,7 @@ Implements an efficient caching system:
 
 ## Security
 
-- Basic authentication for API requests using http and websockets
+- OAuth2 bearer tokens for API requests using http and websockets
 - Environment variable configuration instead of storing passwors in code
 - No sensitive data logging (passwords, etc)
 - Proper permission checking
@@ -287,4 +287,5 @@ Implements an efficient caching system:
 - Check API connectivity to RomM
 - Check logs for error messages, I tried to meticulously report errors
 - Verify configuration settings in the env
+
 
