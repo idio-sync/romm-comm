@@ -2,11 +2,6 @@
 
 A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) API to provide information about your ROM collection and conrol RomM from Discord.
 
-
-**DEVELOPMENT IS CURRENTLY PAUSED**
-
-RomM development is still early and the API is changing often enough to make work on this a bit too much to handle with my current life schedule. I will resume once things finalize a bit. The bot still somewhat works (outside of searching), but there are a few bugs relating to things like properly handling DLC and user regestrations. The last Romm version that the bot was 100% compatable with was 3.6/3.7.
-
 ## Features
 
 Current
@@ -24,14 +19,9 @@ Current
 - Rate-limited Discord API interactions
 - Caching system, the bot onnly fetches fresh stats if that particular stat has updated since last fetch
 
-In Progress
-- Alternative chat client integrations (Matrix, Telegram, Slack), no eta for now
-- Handling of renamed platforms (introduced in Romm 3.7)
-- Pass info of logged downloads from Romm
-
 Planned (if possible)
-- Prowlarr integration for requests
-- Generate and pass EmulatorJS launcher links in game details after search
+- Alternative chat client integrations (Matrix, Telegram, Slack), no eta for now
+- Prowlarr integration for requests?
 - Requests dashboard webpage, not sure if this feature will get enough usage to justify
 - Look up most popular games (via RomM logs?) and provide stats via command
 - More collection information commands (IGDB have/miss, report missing, etc)
@@ -297,3 +287,4 @@ Implements an efficient caching system:
 - Check API connectivity to RomM
 - Check logs for error messages, I tried to meticulously report errors
 - Verify configuration settings in the env
+
