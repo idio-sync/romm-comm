@@ -121,6 +121,21 @@ class RommBot(discord.Bot):
         self.session: Optional[aiohttp.ClientSession] = None
         self._session_lock = asyncio.Lock()
 
+        # OAuth token management attributes
+        self.access_token: Optional[str] = None
+        self.refresh_token: Optional[str] = None
+        self.token_expiry: float = 0
+        self.token_lock = asyncio.Lock()  # Prevent concurrent token refreshes
+        
+        # Initialize session with proper headers
+        self.session: Optional[aiohttp.ClientSession] = None
+        self._session_lock = asyncio.Lock()
+        
+        # CSRF token management
+        self.csrf_token: Optional[str] = None
+        self.csrf_cookie: Optional[str] = None
+        self.csrf_expiry: float = 0
+        
         # Add a commands sync flag
         self.synced = False
 
@@ -130,6 +145,206 @@ class RommBot(discord.Bot):
         # Register error handler
         self.application_command_error = self.on_application_command_error
 
+    async def get_oauth_token(self) -> bool:
+        """Get initial OAuth token using username/password."""
+        try:
+            session = await self.ensure_session()
+            
+            # Token endpoint keeps the /api/ prefix
+            token_url = f"{self.config.API_BASE_URL}/api/token"
+            logger.info(f"Requesting token from: {token_url}")
+            
+            # Prepare form data for OAuth2 password grant
+            data = aiohttp.FormData()
+            data.add_field('grant_type', 'password')
+            data.add_field('username', self.config.USER)
+            data.add_field('password', self.config.PASS)
+            data.add_field('scope', 'roms.read platforms.read firmware.read users.read users.write')
+            
+            # Simple headers for OAuth token request
+            headers = {
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded"
+            }
+            
+            async with session.post(token_url, data=data, headers=headers) as response:
+                response_text = await response.text()
+                logger.info(f"Token response status: {response.status}")
+                logger.info(f"Token response content-type: {response.headers.get('content-type')}")
+                
+                if response.status == 200:
+                    try:
+                        token_data = await response.json()
+                        self.access_token = token_data.get('access_token')
+                        self.refresh_token = token_data.get('refresh_token')
+                        # Store expiry time (subtract 60 seconds for safety margin)
+                        self.token_expiry = time.time() + token_data.get('expires', 900) - 60
+                        logger.info("Successfully obtained OAuth tokens")
+                        return True
+                    except Exception as e:
+                        logger.error(f"Failed to parse token response: {e}")
+                        logger.error(f"Response text: {response_text}")
+                        return False
+                else:
+                    logger.error(f"Failed to get OAuth token. Status: {response.status}")
+                    logger.error(f"Response: {response_text}")
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"Error getting OAuth token: {e}", exc_info=True)
+            return False
+
+    async def refresh_oauth_token(self) -> bool:
+        """Refresh the OAuth token using the refresh token."""
+        if not self.refresh_token:
+            logger.info("No refresh token available, getting new token")
+            return await self.get_oauth_token()
+        
+        try:
+            session = await self.ensure_session()
+            token_url = f"{self.config.API_BASE_URL}/api/token"
+            
+            data = aiohttp.FormData()
+            data.add_field('grant_type', 'refresh_token')
+            data.add_field('refresh_token', self.refresh_token)
+            
+            async with session.post(token_url, data=data) as response:
+                if response.status == 200:
+                    token_data = await response.json()
+                    self.access_token = token_data.get('access_token')
+                    # Refresh token may or may not be returned
+                    if 'refresh_token' in token_data:
+                        self.refresh_token = token_data.get('refresh_token')
+                    self.token_expiry = time.time() + token_data.get('expires', 900) - 60
+                    logger.info("Successfully refreshed OAuth token")
+                    return True
+                else:
+                    logger.warning(f"Failed to refresh token, status: {response.status}")
+                    # If refresh fails, try getting a new token
+                    return await self.get_oauth_token()
+                    
+        except Exception as e:
+            logger.error(f"Error refreshing OAuth token: {e}")
+            return await self.get_oauth_token()
+
+    async def ensure_valid_token(self) -> bool:
+        """Ensure we have a valid OAuth token, refreshing if necessary."""
+        async with self.token_lock:
+            # Check if token is expired or missing
+            if not self.access_token or time.time() >= self.token_expiry:
+                logger.info("Token expired or missing, refreshing...")
+                if self.refresh_token and time.time() < self.token_expiry + 604800:  # 7 days
+                    return await self.refresh_oauth_token()
+                else:
+                    return await self.get_oauth_token()
+            return True
+    
+    async def get_csrf_token(self) -> Optional[str]:
+        """Get CSRF token from the heartbeat endpoint."""
+        try:
+            session = await self.ensure_session()
+            heartbeat_url = f"{self.config.API_BASE_URL}/heartbeat"
+            
+            async with session.get(heartbeat_url) as response:
+                if response.status != 200:
+                    logger.error(f"Failed to get heartbeat. Status: {response.status}")
+                    return None
+                
+                # Extract CSRF token from Set-Cookie header
+                set_cookie = response.headers.get('Set-Cookie')
+                if not set_cookie:
+                    logger.debug("No Set-Cookie header in heartbeat response")
+                    return None
+                
+                # Parse the CSRF token from cookie
+                if 'romm_csrftoken=' in set_cookie:
+                    csrf_token = set_cookie.split('romm_csrftoken=')[1].split(';')[0]
+                    self.csrf_token = csrf_token
+                    self.csrf_cookie = f"romm_csrftoken={csrf_token}"
+                    # CSRF tokens typically last for the session
+                    self.csrf_expiry = time.time() + 3600  # 1 hour expiry
+                    logger.debug(f"Extracted CSRF token: {csrf_token[:10]}...")
+                    return csrf_token
+                else:
+                    logger.debug("CSRF token not found in Set-Cookie header")
+                    return None
+                    
+        except Exception as e:
+            logger.error(f"Error getting CSRF token: {e}")
+            return None
+
+    async def ensure_csrf_token(self) -> Optional[str]:
+        """Ensure we have a valid CSRF token."""
+        if not self.csrf_token or time.time() >= self.csrf_expiry:
+            logger.debug("CSRF token expired or missing, fetching new one")
+            return await self.get_csrf_token()
+        return self.csrf_token
+        
+    async def make_authenticated_request(
+        self, 
+        method: str, 
+        endpoint: str, 
+        data: Optional[Dict] = None,
+        params: Optional[Dict] = None,
+        form_data: Optional[aiohttp.FormData] = None,
+        require_csrf: bool = False
+    ) -> Optional[Dict]:
+        """Make an authenticated API request with proper headers."""
+        try:
+            # Ensure we have a valid OAuth token
+            if not await self.ensure_valid_token():
+                logger.error("Failed to obtain valid OAuth token")
+                return None
+            
+            session = await self.ensure_session()
+            url = f"{self.config.API_BASE_URL}/api/{endpoint}"
+            
+            # Base headers with Bearer token
+            headers = {
+                "Authorization": f"Bearer {self.access_token}",
+                "Accept": "application/json"
+            }
+            
+            # Add CSRF token if required (though it's bypassed with Bearer auth)
+            if require_csrf:
+                csrf_token = await self.ensure_csrf_token()
+                if csrf_token:
+                    headers["X-CSRFToken"] = csrf_token
+                    headers["Cookie"] = self.csrf_cookie
+            
+            # Determine the request method and make the call
+            request_kwargs = {"headers": headers}
+            if data:
+                request_kwargs["json"] = data
+            if params:
+                request_kwargs["params"] = params
+            if form_data:
+                request_kwargs["data"] = form_data
+                
+            async with session.request(method, url, **request_kwargs) as response:
+                if response.status == 401:
+                    # Token expired, refresh and retry
+                    logger.info("Got 401, attempting to refresh token")
+                    if await self.ensure_valid_token():
+                        headers["Authorization"] = f"Bearer {self.access_token}"
+                        async with session.request(method, url, **request_kwargs) as retry_response:
+                            if retry_response.status in (200, 201):
+                                return await retry_response.json()
+                            else:
+                                logger.error(f"Retry failed with status {retry_response.status}")
+                                return None
+                elif response.status in (200, 201):
+                    return await response.json()
+                else:
+                    logger.error(f"Request failed with status {response.status}")
+                    response_text = await response.text()
+                    logger.error(f"Response: {response_text}")
+                    return None
+                    
+        except Exception as e:
+            logger.error(f"Error making authenticated request: {e}")
+            return None
+    
     async def on_application_command_error(self, ctx: discord.ApplicationContext, error: discord.DiscordException):
         """Global error handler for all slash commands."""
         if isinstance(error, commands.CommandOnCooldown):
@@ -211,7 +426,13 @@ class RommBot(discord.Bot):
     async def on_ready(self):
         """When bot is ready, start tasks."""
         logger.info(f'{self.user} has connected to Discord!')
-
+        
+        # Initialize OAuth tokens
+        if not await self.get_oauth_token():
+            logger.error("Failed to obtain OAuth tokens, some features may not work")
+        else:
+            logger.info("OAuth tokens initialized successfully")
+        
         # Load cogs
         self.load_all_cogs()
         loaded_cogs = list(self.cogs.keys())
@@ -246,7 +467,7 @@ class RommBot(discord.Bot):
                 self.session = aiohttp.ClientSession(
                     timeout=aiohttp.ClientTimeout(total=self.config.API_TIMEOUT),
                     headers={
-                        "User-Agent": f"RommBot/1.0",  # Identify as bot in RomM logs
+                        "User-Agent": "RommBot/1.0",
                         "Accept": "application/json"
                     }
                 )
@@ -257,6 +478,17 @@ class RommBot(discord.Bot):
         """Periodic API data update task."""
         await self.update_api_data()
 
+    @tasks.loop(minutes=10)
+    async def refresh_token_task(self):
+        """Periodically refresh the OAuth token to keep it valid."""
+        if self.access_token:
+            await self.ensure_valid_token()
+
+    @refresh_token_task.before_loop
+    async def before_refresh_token(self):
+        """Wait until the bot is ready before starting token refresh."""
+        await self.wait_until_ready()
+    
     @update_loop.before_loop
     async def before_update_loop(self):
         """Set up the update loop with config values."""
@@ -275,30 +507,68 @@ class RommBot(discord.Bot):
                 return cached_data
 
         try:
+            # Ensure we have a valid token
+            if not await self.ensure_valid_token():
+                logger.error("Failed to obtain valid OAuth token")
+                return None
+                
             session = await self.ensure_session()
             url = f"{self.config.API_BASE_URL}/api/{endpoint}"
-
-            # Basic authentication
-            auth = aiohttp.BasicAuth(self.config.USER, self.config.PASS)
+            
+            headers = {
+                "Authorization": f"Bearer {self.access_token}",
+                "Accept": "application/json"
+            }
+            
+            # DEBUG: Log the request details
+            logger.info(f"Making request to: {url}")
+            logger.info(f"Using token: {self.access_token[:20] if self.access_token else 'None'}...")
+            logger.info(f"Authorization header: Bearer {self.access_token[:20] if self.access_token else 'None'}...")
         
-            async with session.get(url, auth=auth) as response:
-                if response.status == 200:
-                    try:
-                        data = await response.json()
-                        logger.info(f"Fetched fresh data for {endpoint}")
-                        # Store data in cache after fetching fresh data
-                        if data:
-                            self.cache.set(endpoint, data)
-                        return data
-                    except Exception as e:
-                        logger.error(f"Error parsing JSON from {endpoint}: {e}")
+            async with session.get(url, headers=headers) as response:
+                content_type = response.headers.get('content-type', '')
+                
+                # DEBUG: Log response details
+                logger.info(f"Response status: {response.status}")
+                logger.info(f"Response content-type: {content_type}")
+                
+                if response.status == 401:
+                    logger.info("Got 401, attempting to refresh token")
+                    if await self.ensure_valid_token():
+                        headers["Authorization"] = f"Bearer {self.access_token}"
+                        async with session.get(url, headers=headers) as retry_response:
+                            if retry_response.status == 200 and 'application/json' in retry_response.headers.get('content-type', ''):
+                                data = await retry_response.json()
+                                logger.info(f"Fetched fresh data for {endpoint} after token refresh")
+                                if data:
+                                    self.cache.set(endpoint, data)
+                                return data
+                            else:
+                                logger.warning(f"API returned status {retry_response.status} for endpoint {endpoint}")
+                                return None
+                elif response.status == 200:
+                    if 'application/json' in content_type:
+                        try:
+                            data = await response.json()
+                            logger.info(f"Fetched fresh data for {endpoint}")
+                            if data:
+                                self.cache.set(endpoint, data)
+                            return data
+                        except Exception as e:
+                            logger.error(f"Error parsing JSON from {endpoint}: {e}")
+                            return None
+                    else:
+                        logger.error(f"Expected JSON but got {content_type} for {endpoint}")
+                        # DEBUG: Log the actual response content
+                        response_text = await response.text()
+                        logger.error(f"Response content (first 500 chars): {response_text[:500]}")
+                        return None
                 else:
                     logger.warning(f"API returned status {response.status} for endpoint {endpoint}")
-                return None
-        except asyncio.TimeoutError:
-            logger.error(f"Timeout while fetching {endpoint}")
-        except aiohttp.ClientError as e:
-            logger.error(f"Network error fetching {endpoint}: {e}")
+                    response_text = await response.text()
+                    logger.warning(f"Response content: {response_text[:200]}")
+                    return None
+                    
         except Exception as e:
             logger.error(f"Error fetching {endpoint}: {e}")
         return None
