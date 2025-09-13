@@ -137,11 +137,23 @@ class ROM_View(discord.ui.View):
             if metadatum := rom_data.get('metadatum'):
                 if release_date := metadatum.get('first_release_date'):
                     try:
-                        release_datetime = datetime.fromtimestamp(int(release_date))
+                        # Log the raw value for debugging
+                        logger.debug(f"Raw release_date value: {release_date}")
+                        
+                        # Handle different timestamp formats
+                        if release_date > 10_000_000_000:  # Likely milliseconds
+                            release_date = release_date // 1000
+                        elif release_date < 0:  # Some old games have negative timestamps
+                            logger.warning(f"Negative timestamp for release date: {release_date}")
+                            # Skip negative dates or handle them specially
+                            embed.add_field(name="Release Date", value="Unknown", inline=True)
+                            continue
+                        
+                        release_datetime = datetime.fromtimestamp(release_date)
                         formatted_date = release_datetime.strftime('%b %d, %Y')
                         embed.add_field(name="Release Date", value=formatted_date, inline=True)
                     except (ValueError, TypeError) as e:
-                        logger.error(f"Error formatting date: {e}")
+                        logger.error(f"Error formatting date: {e}, value was: {release_date}")
             
             if summary := rom_data.get('summary'):
                 trimmed_summary = self.trim_summary_to_lines(summary, max_lines=3)
