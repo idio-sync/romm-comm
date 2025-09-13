@@ -134,13 +134,14 @@ class ROM_View(discord.ui.View):
                         genre_display = str(genres)
                     embed.add_field(name="Genres", value=genre_display, inline=True)
             
-            if release_date := rom_data.get('first_release_date'):
-                try:
-                    release_datetime = datetime.fromtimestamp(int(release_date))
-                    formatted_date = release_datetime.strftime('%b %d, %Y')
-                    embed.add_field(name="Release Date", value=formatted_date, inline=True)
-                except (ValueError, TypeError) as e:
-                    logger.error(f"Error formatting date: {e}")
+            if metadatum := rom_data.get('metadatum'):
+                if release_date := metadatum.get('first_release_date'):
+                    try:
+                        release_datetime = datetime.fromtimestamp(int(release_date))
+                        formatted_date = release_datetime.strftime('%b %d, %Y')
+                        embed.add_field(name="Release Date", value=formatted_date, inline=True)
+                    except (ValueError, TypeError) as e:
+                        logger.error(f"Error formatting date: {e}")
             
             if summary := rom_data.get('summary'):
                 trimmed_summary = self.trim_summary_to_lines(summary, max_lines=3)
