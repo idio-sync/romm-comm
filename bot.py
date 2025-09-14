@@ -152,7 +152,7 @@ class RommBot(discord.Bot):
             
             # Token endpoint keeps the /api/ prefix
             token_url = f"{self.config.API_BASE_URL}/api/token"
-            logger.info(f"Requesting token from: {token_url}")
+            logger.debug(f"Requesting token from: {token_url}")
             
             # Prepare form data for OAuth2 password grant
             data = aiohttp.FormData()
@@ -169,8 +169,8 @@ class RommBot(discord.Bot):
             
             async with session.post(token_url, data=data, headers=headers) as response:
                 response_text = await response.text()
-                logger.info(f"Token response status: {response.status}")
-                logger.info(f"Token response content-type: {response.headers.get('content-type')}")
+                logger.debug(f"Token response status: {response.status}")
+                logger.debug(f"Token response content-type: {response.headers.get('content-type')}")
                 
                 if response.status == 200:
                     try:
@@ -179,7 +179,7 @@ class RommBot(discord.Bot):
                         self.refresh_token = token_data.get('refresh_token')
                         # Store expiry time (subtract 60 seconds for safety margin)
                         self.token_expiry = time.time() + token_data.get('expires', 900) - 60
-                        logger.info("Successfully obtained OAuth tokens")
+                        logger.debug("Successfully obtained OAuth tokens")
                         return True
                     except Exception as e:
                         logger.error(f"Failed to parse token response: {e}")
@@ -197,7 +197,7 @@ class RommBot(discord.Bot):
     async def refresh_oauth_token(self) -> bool:
         """Refresh the OAuth token using the refresh token."""
         if not self.refresh_token:
-            logger.info("No refresh token available, getting new token")
+            logger.debug("No refresh token available, getting new token")
             return await self.get_oauth_token()
         
         try:
@@ -216,7 +216,7 @@ class RommBot(discord.Bot):
                     if 'refresh_token' in token_data:
                         self.refresh_token = token_data.get('refresh_token')
                     self.token_expiry = time.time() + token_data.get('expires', 900) - 60
-                    logger.info("Successfully refreshed OAuth token")
+                    logger.debug("Successfully refreshed OAuth token")
                     return True
                 else:
                     logger.warning(f"Failed to refresh token, status: {response.status}")
@@ -232,7 +232,7 @@ class RommBot(discord.Bot):
         async with self.token_lock:
             # Check if token is expired or missing
             if not self.access_token or time.time() >= self.token_expiry:
-                logger.info("Token expired or missing, refreshing...")
+                logger.debug("Token expired or missing, refreshing...")
                 if self.refresh_token and time.time() < self.token_expiry + 604800:  # 7 days
                     return await self.refresh_oauth_token()
                 else:
@@ -324,7 +324,7 @@ class RommBot(discord.Bot):
             async with session.request(method, url, **request_kwargs) as response:
                 if response.status == 401:
                     # Token expired, refresh and retry
-                    logger.info("Got 401, attempting to refresh token")
+                    logger.debug("Got 401, attempting to refresh token")
                     if await self.ensure_valid_token():
                         headers["Authorization"] = f"Bearer {self.access_token}"
                         async with session.request(method, url, **request_kwargs) as retry_response:
@@ -495,7 +495,7 @@ class RommBot(discord.Bot):
         await self.wait_until_ready()
         # Update the interval using the config value
         self.update_loop.change_interval(seconds=self.config.SYNC_RATE)
-        logger.info("Update loop initialized")
+        logger.debug("Update loop initialized")
 
     async def fetch_api_endpoint(self, endpoint: str, bypass_cache: bool = False) -> Optional[Dict]:
         """Fetch data from API with caching and error handling."""
@@ -521,25 +521,25 @@ class RommBot(discord.Bot):
             }
             
             # DEBUG: Log the request details
-            logger.info(f"Making request to: {url}")
-            logger.info(f"Using token: {self.access_token[:20] if self.access_token else 'None'}...")
-            logger.info(f"Authorization header: Bearer {self.access_token[:20] if self.access_token else 'None'}...")
+            logger.debug(f"Making request to: {url}")
+            logger.debug(f"Using token: {self.access_token[:20] if self.access_token else 'None'}...")
+            logger.debug(f"Authorization header: Bearer {self.access_token[:20] if self.access_token else 'None'}...")
         
             async with session.get(url, headers=headers) as response:
                 content_type = response.headers.get('content-type', '')
                 
                 # DEBUG: Log response details
-                logger.info(f"Response status: {response.status}")
-                logger.info(f"Response content-type: {content_type}")
+                logger.debug(f"Response status: {response.status}")
+                logger.debug(f"Response content-type: {content_type}")
                 
                 if response.status == 401:
-                    logger.info("Got 401, attempting to refresh token")
+                    logger.debug("Got 401, attempting to refresh token")
                     if await self.ensure_valid_token():
                         headers["Authorization"] = f"Bearer {self.access_token}"
                         async with session.get(url, headers=headers) as retry_response:
                             if retry_response.status == 200 and 'application/json' in retry_response.headers.get('content-type', ''):
                                 data = await retry_response.json()
-                                logger.info(f"Fetched fresh data for {endpoint} after token refresh")
+                                logger.debug(f"Fetched fresh data for {endpoint} after token refresh")
                                 if data:
                                     self.cache.set(endpoint, data)
                                 return data
@@ -550,7 +550,7 @@ class RommBot(discord.Bot):
                     if 'application/json' in content_type:
                         try:
                             data = await response.json()
-                            logger.info(f"Fetched fresh data for {endpoint}")
+                            logger.debug(f"Fetched fresh data for {endpoint}")
                             if data:
                                 self.cache.set(endpoint, data)
                             return data
