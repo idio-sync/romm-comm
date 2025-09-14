@@ -261,14 +261,6 @@ The bot includes comprehensive error handling and logging:
 - Data validation
 - Cache management
 
-## Cache System
-
-Implements an efficient caching system:
-- Configurable TTL (Time-To-Live)
-- Automatic cache invalidation
-- Memory-efficient storage
-- Separate caching for different endpoints
-
 ## Security
 
 - OAuth2 bearer tokens for API requests using http
@@ -283,6 +275,7 @@ Implements an efficient caching system:
 - Check API connectivity to RomM
 - Check logs for error messages, I tried to meticulously report errors
 - Verify configuration settings in the env
+
 
 
 
