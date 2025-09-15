@@ -141,15 +141,23 @@ class Info(commands.Cog):
         """Check if Switch is available in platforms"""
         await self.bot.wait_until_ready()
         try:
-            # Get platforms from API
+            # Get raw platforms from API to access custom_name field
             raw_platforms = await self.bot.fetch_api_endpoint('platforms')
             if raw_platforms:
-                platforms_data = self.bot.sanitize_data(raw_platforms, data_type='platforms')
-                # Check if Switch exists in platforms
-                self.has_switch = any(
-                    platform['name'].lower() in ['nintendo switch', 'switch'] 
-                    for platform in platforms_data
-                )
+                # Check if Switch exists in platforms (checking both regular and custom names)
+                self.has_switch = False
+                for platform in raw_platforms:
+                    # Check regular name (handle None values)
+                    regular_name = (platform.get('name') or '').lower()
+                    # Check custom name (handle None values)
+                    custom_name = (platform.get('custom_name') or '').lower()
+                    
+                    # Look for Switch in either name
+                    if any(switch_name in regular_name or switch_name in custom_name 
+                           for switch_name in ['nintendo switch', 'switch']):
+                        self.has_switch = True
+                        break
+                
                 logger.info(f"Switch platform {'found' if self.has_switch else 'not found'} in platform list")
         except Exception as e:
             logger.error(f"Error checking Switch platform: {e}")
@@ -254,37 +262,7 @@ class Info(commands.Cog):
             if hasattr(self.bot, 'logger'):
                 self.bot.logger.error(f"Error in stats command: {e}", exc_info=True)
             await ctx.respond("❌ An error occurred while fetching stats")
-
-    # Refresh
-    # @discord.slash_command(
-    #    name="refresh",
-    #    description="Manually refresh API data"
-    #)
-    #async def refresh(self, ctx):
-    #    """Manually refresh API data and update channels."""
-    #    await ctx.defer()
-    #    try:
-    #        # Call the main bot's update function directly
-    #        await self.bot.update_api_data()
-    #    
-    #        # Send a success message after update completes
-    #        embed = discord.Embed(
-    #            title="✅ Manual Data Refresh Sucessful",
-    #            description=f"Data update initiated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-    #            color=discord.Color.green()
-    #        )
-    #        await ctx.respond(embed=embed)
-    #
-    #    except Exception as e:
-    #        logger.error(f"Error in refresh command: {e}", exc_info=True)
-    #        await ctx.respond(
-    #            embed=discord.Embed(
-    #                title="❌ Error",
-    #                description="An error occurred while refreshing API data.",
-    #                color=discord.Color.red()
-    #            )
-    #        )
-    
+   
     # Platforms
     @discord.slash_command(
         name="platforms", 
@@ -296,10 +274,20 @@ class Info(commands.Cog):
             # Defer the response since it might take a moment to fetch
             await ctx.defer()
         
-            # Fetch platforms data
+            # Fetch raw platforms data to access custom_name field
             raw_platforms = await self.bot.fetch_api_endpoint('platforms')
             if raw_platforms:
-                platforms_data = self.bot.sanitize_data(raw_platforms, data_type='platforms')
+                # Create platform data with display names
+                platforms_data = []
+                for platform in raw_platforms:
+                    if platform.get('name') and platform.get('rom_count') is not None:
+                        platforms_data.append({
+                            'display_name': self.bot.get_platform_display_name(platform),
+                            'rom_count': platform.get('rom_count', 0)
+                        })
+                
+                # Sort platforms by display name
+                platforms_data.sort(key=lambda x: x['display_name'])
             
                 if platforms_data:
                     # Create embed with platform information
@@ -312,7 +300,7 @@ class Info(commands.Cog):
                     # Split into multiple fields if needed (Discord has a 25 field limit)
                     field_content = ""
                     for platform in platforms_data:
-                        platform_line = f"**{platform['name']}**: {platform['rom_count']:,} ROMs\n"
+                        platform_line = f"**{platform['display_name']}**: {platform['rom_count']:,} ROMs\n"
                     
                         # If adding this line would exceed Discord's limit, create a new field
                         if len(field_content) + len(platform_line) > 1024:
