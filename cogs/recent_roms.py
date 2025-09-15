@@ -209,8 +209,7 @@ class RecentRomsMonitor(commands.Cog):
         # Create embed
         embed = discord.Embed(
             title=f"🆕 {rom['name']}",
-            color=discord.Color.green(),
-            timestamp=datetime.utcnow()
+            color=discord.Color.green()
         )
 
         platform_text = self.get_platform_with_emoji(platform_name)
@@ -287,8 +286,7 @@ class RecentRomsMonitor(commands.Cog):
             embed = discord.Embed(
                 title=f"🌊 Large Collection Update",
                 description=f"A large number of ROMs ({len(roms)}+) have been added to the collection!",
-                color=discord.Color.orange(),
-                timestamp=datetime.utcnow()
+                color=discord.Color.orange()
             )
             
             # Group by platform for summary
@@ -321,8 +319,7 @@ class RecentRomsMonitor(commands.Cog):
             embed = discord.Embed(
                 title=f"🆕 {len(roms)} New ROMs Added",
                 description="Multiple ROMs have been added to the collection:",
-                color=discord.Color.blue(),
-                timestamp=datetime.utcnow()
+                color=discord.Color.blue()
             )
             
             # Group by platform
