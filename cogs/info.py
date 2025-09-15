@@ -249,41 +249,41 @@ class Info(commands.Cog):
             
                 await ctx.respond(embed=embed)
             else:
-                await ctx.respond("No API data available yet. Try using /refresh first!")
+                await ctx.respond("No API data available! Check connection to Romm.")
         except Exception as e:
             if hasattr(self.bot, 'logger'):
                 self.bot.logger.error(f"Error in stats command: {e}", exc_info=True)
             await ctx.respond("❌ An error occurred while fetching stats")
 
     # Refresh
-    @discord.slash_command(
-        name="refresh",
-        description="Manually refresh API data"
-    )
-    async def refresh(self, ctx):
-        """Manually refresh API data and update channels."""
-        await ctx.defer()
-        try:
-            # Call the main bot's update function directly
-            await self.bot.update_api_data()
-        
-            # Send a success message after update completes
-            embed = discord.Embed(
-                title="✅ Manual Data Refresh Sucessful",
-                description=f"Data update initiated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                color=discord.Color.green()
-            )
-            await ctx.respond(embed=embed)
-
-        except Exception as e:
-            logger.error(f"Error in refresh command: {e}", exc_info=True)
-            await ctx.respond(
-                embed=discord.Embed(
-                    title="❌ Error",
-                    description="An error occurred while refreshing API data.",
-                    color=discord.Color.red()
-                )
-            )
+    # @discord.slash_command(
+    #    name="refresh",
+    #    description="Manually refresh API data"
+    #)
+    #async def refresh(self, ctx):
+    #    """Manually refresh API data and update channels."""
+    #    await ctx.defer()
+    #    try:
+    #        # Call the main bot's update function directly
+    #        await self.bot.update_api_data()
+    #    
+    #        # Send a success message after update completes
+    #        embed = discord.Embed(
+    #            title="✅ Manual Data Refresh Sucessful",
+    #            description=f"Data update initiated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+    #            color=discord.Color.green()
+    #        )
+    #        await ctx.respond(embed=embed)
+    #
+    #    except Exception as e:
+    #        logger.error(f"Error in refresh command: {e}", exc_info=True)
+    #        await ctx.respond(
+    #            embed=discord.Embed(
+    #                title="❌ Error",
+    #                description="An error occurred while refreshing API data.",
+    #                color=discord.Color.red()
+    #            )
+    #        )
     
     # Platforms
     @discord.slash_command(
