@@ -80,6 +80,12 @@ CHANNEL_ID=your_channel_id
 SHOW_API_SUCCESS=false
 CACHE_TTL=3900
 API_TIMEOUT=10
+RECENT_ROMS_ENABLED=TRUE
+RECENT_ROMS_CHANNEL_ID=yourchannel
+RECENT_ROMS_CHECK_MINUTES=5
+RECENT_ROMS_BATCH_MINUTES=1
+RECENT_ROMS_MAX_PER_POST=10
+RECENT_ROMS_FLOOD_THRESHOLD=25
 ```
 
 ### Configuration Details
@@ -110,7 +116,6 @@ API_TIMEOUT=10
 - `RECENT_ROMS_BATCH_MINUTES` : Time window to batch multiple ROMs (default: 1)
 - `RECENT_ROMS_MAX_PER_POST` : Max ROMs to show details for (default: 10)
 - `RECENT_ROMS_FLOOD_THRESHOLD` : Trigger flood protection above this (default: 25)
-- `USER_TIMEZONE` : Timezone for 
 
 ## Recently Added ROM Notifications
 - If enabled (`RECENT_ROMS_ENABLED=true`) the bot will post recently added roms to a specified channel
@@ -289,6 +294,7 @@ The bot includes comprehensive error handling and logging:
 - Check API connectivity to RomM
 - Check logs for error messages, I tried to meticulously report errors
 - Verify configuration settings in the env
+
 
 
 
