@@ -141,7 +141,7 @@ class RecentRomsMonitor(commands.Cog):
             
             for rom in recent_roms:
                 if not await self.has_been_posted(rom['id']):
-                    # Add platform name
+                    # Add platform name (with custom name support)
                     if platform_id := rom.get('platform_id'):
                         # Try cached platforms first, fetch if not available
                         if not platforms_data:
@@ -153,7 +153,12 @@ class RecentRomsMonitor(commands.Cog):
                         if platforms_data:
                             for p in platforms_data:
                                 if p.get('id') == platform_id:
-                                    rom['platform_name'] = p.get('name', 'Unknown')
+                                    # Use custom name if available, otherwise fall back to regular name
+                                    custom_name = p.get('custom_name')
+                                    if custom_name and custom_name.strip():
+                                        rom['platform_name'] = custom_name.strip()
+                                    else:
+                                        rom['platform_name'] = p.get('name', 'Unknown')
                                     break
                     new_roms.append(rom)
                     
