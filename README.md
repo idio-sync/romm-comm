@@ -127,6 +127,8 @@ RECENT_ROMS_FLOOD_THRESHOLD=25
 
 <img width="400" height="310" alt="image" src="https://github.com/user-attachments/assets/f3ec5369-6cd0-49a8-a834-49df725e88dc" />
 
+<img width="400" height="411" alt="image" src="https://github.com/user-attachments/assets/2969a70d-1ff1-4cb3-982d-d85f06ea67aa" />
+
 ## Visable Statistics
 
 Voice Channel Stat Display
@@ -294,6 +296,7 @@ The bot includes comprehensive error handling and logging:
 - Check API connectivity to RomM
 - Check logs for error messages, I tried to meticulously report errors
 - Verify configuration settings in the env
+
 
 
 
