@@ -104,6 +104,20 @@ API_TIMEOUT=10
 - `CHANNEL_ID`: Channel ID for API sync result and user manager notifications to be sent to (if enabled above) and user manager log messages
 - `CACHE_TTL`: Cache time-to-live in seconds (default: 3900)
 - `API_TIMEOUT`: API request timeout in seconds (default: 10)
+- `RECENT_ROMS_ENABLED` : Enables recent rom additions messages (default: true)
+- `RECENT_ROMS_CHANNEL_ID` : Channel ID for posting new ROMs
+- `RECENT_ROMS_CHECK_MINUTES` : Check interval in minutes (default: 5)
+- `RECENT_ROMS_BATCH_MINUTES` : Time window to batch multiple ROMs (default: 1)
+- `RECENT_ROMS_MAX_PER_POST` : Max ROMs to show details for (default: 10)
+- `RECENT_ROMS_FLOOD_THRESHOLD` : Trigger flood protection above this (default: 25)
+- `USER_TIMEZONE` : Timezone for 
+
+## Recently Added ROM Notifications
+- If enabled (`RECENT_ROMS_ENABLED=true`) the bot will post recently added roms to a specified channel
+- When multiple roms are added, the bot creates a bached responce listing what was added by platform
+- If a large amount of roms are added, flood control is tripped and messages are supressed
+
+<img width="495" height="310" alt="image" src="https://github.com/user-attachments/assets/f3ec5369-6cd0-49a8-a834-49df725e88dc" />
 
 ## Visable Statistics
 
@@ -275,6 +289,7 @@ The bot includes comprehensive error handling and logging:
 - Check API connectivity to RomM
 - Check logs for error messages, I tried to meticulously report errors
 - Verify configuration settings in the env
+
 
 
 
