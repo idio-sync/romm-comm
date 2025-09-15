@@ -157,9 +157,6 @@ Automatic Emoji management. Provides:
 
 ## Available Commands
 
-### /refresh
-Manually update API data from RomM.
-
 ### /stats
 Show current collection statistics.
 
@@ -297,6 +294,7 @@ The bot includes comprehensive error handling and logging:
 - Check API connectivity to RomM
 - Check logs for error messages, I tried to meticulously report errors
 - Verify configuration settings in the env
+
 
 
 
