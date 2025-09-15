@@ -377,6 +377,16 @@ class RommBot(discord.Bot):
             if retry_after:
                 raise commands.CommandOnCooldown(bucket, retry_after, self._cd_bucket.type)
 
+    def get_platform_display_name(self, platform_data: Dict) -> str:
+        """Get the display name for a platform, preferring custom_name over name."""
+        # Check if platform_data has custom_name and it's not empty/None
+        custom_name = platform_data.get('custom_name')
+        if custom_name and custom_name.strip():
+            return custom_name.strip()
+        
+        # Fall back to regular name
+        return platform_data.get('name', 'Unknown Platform')
+    
     def load_all_cogs(self):
         """Load all cogs."""
         cogs_to_load = [
@@ -596,6 +606,8 @@ class RommBot(discord.Bot):
                     {
                         "id": platform.get("id", 0),
                         "name": platform.get("name", "Unknown Platform"),
+                        "custom_name": platform.get("custom_name"),  # Include custom_name
+                        "display_name": self.get_platform_display_name(platform),  # Add display_name
                         "rom_count": platform.get("rom_count", 0)
                     }
                     for platform in raw_data if isinstance(platform, dict) and platform.get("name") and platform.get("rom_count")
@@ -616,7 +628,7 @@ class RommBot(discord.Bot):
         except Exception as e:
             logger.error(f"Error sanitizing {data_type} data: {e}")
             return None
-
+            
     async def close(self):
         """Cleanup resources on shutdown."""
         if self.session and not self.session.closed:
