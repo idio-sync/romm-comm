@@ -81,7 +81,7 @@ class GameSelectView(discord.ui.View):
         )
         
         # Set the romm logo as thumbnail
-        embed.set_thumbnail(url="https://raw.githubusercontent.com/rommapp/romm/release/.github/resources/romm_complete.png")
+        embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
         
         # Set the cover image as the main image
         if game.get('cover_url'):
@@ -255,14 +255,25 @@ class Request(commands.Cog):
     async def check_if_game_exists(self, platform: str, game_name: str) -> Tuple[bool, List[Dict]]:
         """Check if a game already exists in the database"""
         try:
-            # First get platform ID
-            platforms_data = self.bot.cache.get('platforms')
-            if not platforms_data:
-                platforms_data = await self.bot.fetch_api_endpoint('platforms')
+            # Get raw platforms data to access custom_name field
+            raw_platforms = await self.bot.fetch_api_endpoint('platforms')
+            if not raw_platforms:
+                return False, []
 
+            # Find platform by name (including custom names)
             platform_id = None
-            for p in platforms_data:
-                if p.get('name', '').lower() == platform.lower():
+            platform_lower = platform.lower()
+            
+            for p in raw_platforms:
+                # Check custom name first
+                custom_name = p.get('custom_name')
+                if custom_name and custom_name.lower() == platform_lower:
+                    platform_id = p.get('id')
+                    break
+                
+                # Check regular name
+                regular_name = p.get('name', '')
+                if regular_name.lower() == platform_lower:
                     platform_id = p.get('id')
                     break
 
@@ -532,31 +543,41 @@ class Request(commands.Cog):
                 return
             
             platform_id = None
-            platform_name = None
-            sanitized_platforms = self.bot.sanitize_data(raw_platforms, data_type='platforms')
+            platform_display_name = None
+            platform_lower = platform.lower()
             
-            for p in sanitized_platforms:
-                if p['name'].lower() == platform.lower():
-                    platform_id = p['id']
-                    platform_name = p['name']
+            for p in raw_platforms:
+                # Check custom name first
+                custom_name = p.get('custom_name')
+                if custom_name and custom_name.lower() == platform_lower:
+                    platform_id = p.get('id')
+                    platform_display_name = self.bot.get_platform_display_name(p)
+                    break
+                
+                # Check regular name
+                regular_name = p.get('name', '')
+                if regular_name.lower() == platform_lower:
+                    platform_id = p.get('id')
+                    platform_display_name = self.bot.get_platform_display_name(p)
                     break
                     
             if not platform_id:
+                # Show available platforms with display names
                 platforms_list = "\n".join(
-                    f"• {self.bot.get_cog('Search').get_platform_with_emoji(p['name'])}" 
-                    for p in sorted(sanitized_platforms, key=lambda x: x['name'])
+                    f"• {self.bot.get_cog('Search').get_platform_with_emoji(self.bot.get_platform_display_name(p))}" 
+                    for p in sorted(raw_platforms, key=lambda x: self.bot.get_platform_display_name(x))
                 )
                 await ctx.respond(f"❌ Platform '{platform}' not found. Available platforms:\n{platforms_list}")
                 return
 
             # Check if game exists in current collection
-            exists, matches = await self.check_if_game_exists(platform_name, game)
+            exists, matches = await self.check_if_game_exists(platform_display_name, game)
             
             # Search IGDB for game metadata if available
             igdb_matches = []
             if self.igdb_enabled:
                 try:
-                    igdb_matches = await self.igdb.search_game(game, platform_name)
+                    igdb_matches = await self.igdb.search_game(game, platform_display_name)
                 except Exception as e:
                     logger.error(f"Error fetching IGDB data: {e}")
                     # Continue without IGDB data if there's an error
@@ -660,7 +681,7 @@ class Request(commands.Cog):
 
             # If we get here, either the game doesn't exist or user confirmed different version needed
             if igdb_matches:
-                select_view = GameSelectView(igdb_matches, platform_name)  # Pass platform_name here
+                select_view = GameSelectView(igdb_matches, platform_display_name)
                 select_embed = discord.Embed(
                     title="Game Selection",
                     description="Please select the correct game from the list below:",
@@ -687,11 +708,12 @@ class Request(commands.Cog):
                     selected_game = None
                 else:
                     selected_game = select_view.selected_game
-                    await self.process_request(ctx, platform_name, game, details, selected_game, select_view.message)
+                    await self.process_request(ctx, platform_display_name, game, details, selected_game, select_view.message)
                     return
 
             # If we get here, either no IGDB matches or manual entry selected
-            await self.process_request(ctx, platform_name, game, details, selected_game, None)
+            selected_game = None
+            await self.process_request(ctx, platform_display_name, game, details, selected_game, None)
 
         except Exception as e:
             logger.error(f"Error submitting request: {e}")
