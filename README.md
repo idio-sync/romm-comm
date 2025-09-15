@@ -122,6 +122,7 @@ RECENT_ROMS_FLOOD_THRESHOLD=25
 - If enabled (`RECENT_ROMS_ENABLED=true`) the bot will post recently added roms to a specified channel
 - When multiple roms are added, the bot creates a bached responce listing what was added by platform
 - If a large amount of roms are added, flood control is tripped and messages are supressed
+- Thresholds for max listed ROMs and flood protection adjustable as an env variable 
 - NOTE: I would only enable this on installations where most of the roms are already scanned in. Large imports that run multiple hours may cause issues, I have not had the opprotunity to test.
 
 <img width="400" height="310" alt="image" src="https://github.com/user-attachments/assets/f3ec5369-6cd0-49a8-a834-49df725e88dc" />
@@ -296,6 +297,7 @@ The bot includes comprehensive error handling and logging:
 - Check API connectivity to RomM
 - Check logs for error messages, I tried to meticulously report errors
 - Verify configuration settings in the env
+
 
 
 
