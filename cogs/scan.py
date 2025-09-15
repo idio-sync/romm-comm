@@ -6,7 +6,7 @@ from datetime import datetime
 import logging
 import base64
 import json
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from enum import Enum
 
 logger = logging.getLogger(__name__)
@@ -121,9 +121,10 @@ class Scan(commands.Cog):
                     
                     if data.get('is_new', False):
                         self.scan_progress['added_roms'] = self.scan_progress.get('added_roms', 0) + 1
-                        # Add new game to the tracking list
+                        # Use the display name stored in scan_progress for consistency
+                        current_platform = self.scan_progress.get('current_platform', 'Unknown')
                         self.new_games.append({
-                            'platform': self.scan_progress.get('current_platform', 'Unknown'),
+                            'platform': current_platform,  # This will now be the display name
                             'name': rom_name,
                             'file_name': data.get('file_name', '')
                         })
@@ -349,22 +350,40 @@ class Scan(commands.Cog):
     async def _scan_platform(self, ctx: discord.ApplicationContext, platform: str):
         """Handle platform-specific scan"""
         try:
-            platforms_data = self.bot.cache.get('platforms')
+            # Use raw platform data to access custom_name field
+            raw_platforms = await self.bot.fetch_api_endpoint('platforms')
             
-            if not platforms_data:
+            if not raw_platforms:
                 await ctx.respond("❌ Error: Platform data not available")
                 return
             
+            # Find platform by name (including custom names)
             platform_id = None
-            platform_name = None
-            for p in platforms_data:
-                if p.get('name', '').lower() == platform.lower():
+            platform_display_name = None
+            platform_lower = platform.lower()
+            
+            for p in raw_platforms:
+                # Check custom name first
+                custom_name = p.get('custom_name')
+                if custom_name and custom_name.lower() == platform_lower:
                     platform_id = p.get('id')
-                    platform_name = p.get('name')
+                    platform_display_name = self.bot.get_platform_display_name(p)
+                    break
+                
+                # Check regular name
+                regular_name = p.get('name', '')
+                if regular_name.lower() == platform_lower:
+                    platform_id = p.get('id')
+                    platform_display_name = self.bot.get_platform_display_name(p)
                     break
             
             if not platform_id:
-                await ctx.respond(f"❌ Platform '{platform}' not found")
+                # Show available platforms with display names
+                platforms_list = "\n".join(
+                    f"• {self.bot.get_platform_display_name(p)}" 
+                    for p in sorted(raw_platforms, key=lambda x: self.bot.get_platform_display_name(x))
+                )
+                await ctx.respond(f"❌ Platform '{platform}' not found. Available platforms:\n{platforms_list}")
                 return
 
             await self.ensure_connected()
@@ -373,9 +392,9 @@ class Scan(commands.Cog):
             self.scan_start_time = datetime.now()
             self.is_scanning = True
             
-            # Initialize scan progress for this platform
+            # Initialize scan progress for this platform using display name
             self.scan_progress = {
-                'current_platform': platform_name,
+                'current_platform': platform_display_name,
                 'current_platform_slug': None,
                 'current_rom': None,
                 'platform_roms': 0,
@@ -394,7 +413,7 @@ class Scan(commands.Cog):
             
             self.new_games = []
             await self.sio.emit('scan', options)
-            await ctx.respond("🔍 Started single platform scan")
+            await ctx.respond(f"🔍 Started scanning platform: {platform_display_name}")
             
         except Exception as e:
             self.is_scanning = False
