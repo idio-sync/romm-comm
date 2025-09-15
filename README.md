@@ -5,6 +5,7 @@ A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) A
 ## Features
 
 Current
+- Recently Added: Posts recently added ROM updates in specified channel
 - Stats: Near real-time ROM collection statistics in voice channel, bot status and via command
 - Search: Platform-specific ROM searches and random ROM roll that provide download link and game/file information
 - Search: Support for multi-file games - user can select one, some or all files to download
@@ -295,6 +296,7 @@ The bot includes comprehensive error handling and logging:
 - Check API connectivity to RomM
 - Check logs for error messages, I tried to meticulously report errors
 - Verify configuration settings in the env
+
 
 
 
