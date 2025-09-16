@@ -220,10 +220,12 @@ Trigger RomM library scan. Options are:
 
 ![RrequestFulfulledDM](.github/screenshots/RequestFulfilledDM.png)
 
+<img width="300" height="283" alt="image" src="https://github.com/user-attachments/assets/513b41fd-080f-4489-887b-e467c7cd50e6" />
+
 Request System Features:
 - Users can submit ROM requests with platform, game name, and optional details as text
 - Searches for existing ROM names in the RomM database to see if there is already a ROM present with the requested game name to avoid unnecessary requests
-- Matches request with IGDB entry if possible, if IGDB match is not found user can still submit "Platform, Game" request
+- Matches request with IGDB entry if possible, if IGDB match is not found user can still submit "Platform, Game" request with added details (see GTA III example above)
 - Limit of 5 pending requests per user, so requests do not get overwhelming
 - DM notifications to users when their requests are fulfilled/rejected either automatically after a RomM system scan or manually via admin
 - Users can view their own requests
@@ -296,6 +298,7 @@ The bot includes comprehensive error handling and logging:
 - Check API connectivity to RomM
 - Check logs for error messages, I tried to meticulously report errors
 - Verify configuration settings in the env
+
 
 
 
