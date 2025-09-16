@@ -71,22 +71,31 @@ PASS=api_password
 # Optional Settings
 DOMAIN=your_website_domain
 SYNC_RATE=3600
+
 REQUESTS_ENABLED=TRUE
 IGDB_CLIENT_ID=your_client_id
 IGDB_CLIENT_SECRET=your_client_secret
+
 ENABLE_USER_MANAGER=TRUE
 AUTO_REGISTER_ROLE_ID=romm_users_role_id
+
 UPDATE_VOICE_NAMES=true
 CHANNEL_ID=your_channel_id
 SHOW_API_SUCCESS=false
 CACHE_TTL=3900
 API_TIMEOUT=10
+
 RECENT_ROMS_ENABLED=TRUE
 RECENT_ROMS_CHANNEL_ID=yourchannel
 RECENT_ROMS_CHECK_MINUTES=5
 RECENT_ROMS_BATCH_MINUTES=1
 RECENT_ROMS_MAX_PER_POST=10
 RECENT_ROMS_FLOOD_THRESHOLD=25
+
+WEB_DASHBOARD_ENABLED=true
+WEB_DASHBOARD_HOST=0.0.0.0
+WEB_DASHBOARD_PORT=8080
+DASHBOARD_PASSWORD=yourpassword
 ```
 
 ### Configuration Details
@@ -117,6 +126,10 @@ RECENT_ROMS_FLOOD_THRESHOLD=25
 - `RECENT_ROMS_BATCH_MINUTES` : Time window to batch multiple ROMs (default: 1)
 - `RECENT_ROMS_MAX_PER_POST` : Max ROMs to show details for (default: 10)
 - `RECENT_ROMS_FLOOD_THRESHOLD` : Trigger flood protection above this (default: 25)
+- `WEB_DASHBOARD_ENABLED` : Enable web dashboard for requests (default: true)
+- `WEB_DASHBOARD_HOST` : IP for dashboard webserver, you don't really need to change this (default: 0.0.0.0)
+- `WEB_DASHBOARD_PORT` : Port to broadcast webserver on (default: 8080)
+- `DASHBOARD_PASSWORD` : Your desired dashboard password (if dashboard is enabled)
 
 ## Recently Added ROM Notifications
 - If enabled (`RECENT_ROMS_ENABLED=true`) the bot will post recently added roms to a specified channel
@@ -226,12 +239,18 @@ Request System Features:
 - Users can submit ROM requests with platform, game name, and optional details as text
 - Searches for existing ROM names in the RomM database to see if there is already a ROM present with the requested game name to avoid unnecessary requests
 - Matches request with IGDB entry if possible, if IGDB match is not found user can still submit "Platform, Game" request with added details (see GTA III example above)
-- Limit of 5 pending requests per user, so requests do not get overwhelming
+- Limit of 10 pending requests per user, so requests do not get overwhelming
 - DM notifications to users when their requests are fulfilled/rejected either automatically after a RomM system scan or manually via admin
 - Users can view their own requests
 - Users can cancel their pending requests
 - Uses SQLite database to store requests
 - Request system is toggleable via env variable if server admin does not want to use it
+
+Request Dashboard
+- Shows list of requests filterable by status, fulfillment method (auto by bot or manual), platform, user and game name
+- Admin can manuall fulfill, reject, delete requests or add notes
+
+<img width="600" height="961" alt="image" src="https://github.com/user-attachments/assets/6f0863fd-b975-470f-94b6-a84b31881b0b" />
 
 Admin Features:
 - List all pending requests with game and requester info
@@ -298,6 +317,7 @@ The bot includes comprehensive error handling and logging:
 - Check API connectivity to RomM
 - Check logs for error messages, I tried to meticulously report errors
 - Verify configuration settings in the env
+
 
 
 
