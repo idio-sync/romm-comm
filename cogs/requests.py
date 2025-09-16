@@ -281,11 +281,19 @@ class Request(commands.Cog):
                 return False, []
 
             # Search for the game
-            search_results = await self.bot.fetch_api_endpoint(
+            search_response = await self.bot.fetch_api_endpoint(
                 f'roms?platform_id={platform_id}&search_term={game_name}&limit=25'
             )
 
-            if not search_results or not isinstance(search_results, list):
+            # Handle paginated response
+            if search_response and isinstance(search_response, dict) and 'items' in search_response:
+                search_results = search_response['items']
+            elif search_response and isinstance(search_response, list):
+                search_results = search_response
+            else:
+                search_results = []
+
+            if not search_results:
                 return False, []
 
             # Check for close matches
@@ -482,6 +490,7 @@ class Request(commands.Cog):
                         f"Genres: {', '.join(selected_game['genres']) if selected_game['genres'] else 'Unknown'}\n"
                         f"Game Modes: {', '.join(selected_game['game_modes']) if selected_game['game_modes'] else 'Unknown'}\n"
                         f"Summary: {selected_game['summary']}\n"
+                        f"Cover URL: {selected_game.get('cover_url', 'None')}\n"
                     )
                     if details:
                         details = f"{details}\n\n{igdb_details}"
@@ -592,7 +601,7 @@ class Request(commands.Cog):
                 for rom in matches:
                     embed.add_field(
                         name=rom.get('name', 'Unknown'),
-                        value=f"File: {rom.get('file_name', 'Unknown')}\n",
+                        value=f"File: {rom.get('fs_name', 'Unknown')}\n",
                         inline=False
                     )
 
@@ -722,7 +731,7 @@ class Request(commands.Cog):
     @discord.slash_command(name="my_requests", description="View your ROM requests")
     async def my_requests(self, ctx: discord.ApplicationContext):
         """View your submitted requests"""
-        await ctx.defer()
+        await ctx.defer(ephemeral=True)  # Also make the defer ephemeral
 
         try:
             async with aiosqlite.connect(self.db_path) as db:
@@ -733,7 +742,7 @@ class Request(commands.Cog):
                 requests = await cursor.fetchall()
 
                 if not requests:
-                    await ctx.respond("You haven't made any requests yet.")
+                    await ctx.respond("You haven't made any requests yet.", ephemeral=True)
                     return
 
                 embeds = []
@@ -757,13 +766,14 @@ class Request(commands.Cog):
                 # Send embeds (Discord has a limit of 10 embeds per message)
                 for i in range(0, len(embeds), 10):
                     if i == 0:
-                        await ctx.respond(embeds=embeds[i:i+10])
+                        await ctx.respond(embeds=embeds[i:i+10], ephemeral=True)
                     else:
-                        await ctx.channel.send(embeds=embeds[i:i+10])
+                        # Use followup instead of channel.send to maintain ephemeral
+                        await ctx.followup.send(embeds=embeds[i:i+10], ephemeral=True)
 
         except Exception as e:
             logger.error(f"Error fetching requests: {e}")
-            await ctx.respond("❌ An error occurred while fetching your requests.")
+            await ctx.respond("❌ An error occurred while fetching your requests.", ephemeral=True)
 
     @discord.slash_command(name="cancel_request", description="Cancel one of your pending requests")
     async def cancel_request(
