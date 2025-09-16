@@ -888,7 +888,7 @@ class Search(commands.Cog):
             'Virtual Boy': ['virtual_boy'],
             'Visual Memory Unit / Visual Memory System': ['vmu'],
             'Wii': ['wii'],
-            'PC- DOS': ['dos'],
+            'PC - DOS': ['dos'],
             'PC - Win3X': ['win_3x_gui'],
             'PC - Windows': ['pc', 'win_9x'],
             'WonderSwan': ['wonderswan'],
