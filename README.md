@@ -246,16 +246,16 @@ Request System Features:
 - Uses SQLite database to store requests
 - Request system is toggleable via env variable if server admin does not want to use it
 
-Request Dashboard
-- Shows list of requests filterable by status, fulfillment method (auto by bot or manual), platform, user and game name
-- Admin can manuall fulfill, reject, delete requests or add notes
-
-<img width="600" height="961" alt="image" src="https://github.com/user-attachments/assets/6f0863fd-b975-470f-94b6-a84b31881b0b" />
-
 Admin Features:
 - List all pending requests with game and requester info
 - Fulfill or reject requests
 - Add notes to requests
+
+Request Dashboard:
+- Shows list of requests filterable by status, fulfillment method (auto by bot or manual), platform, user and game name
+- Admin can manuall fulfill, reject, delete requests or add notes
+
+<img width="600" height="961" alt="image" src="https://github.com/user-attachments/assets/6f0863fd-b975-470f-94b6-a84b31881b0b" />
 
 Dababase Structure:
 - Request ID
@@ -317,6 +317,7 @@ The bot includes comprehensive error handling and logging:
 - Check API connectivity to RomM
 - Check logs for error messages, I tried to meticulously report errors
 - Verify configuration settings in the env
+
 
 
 
