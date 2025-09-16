@@ -396,7 +396,8 @@ class RommBot(discord.Bot):
             'cogs.scan', 
             'cogs.requests',
             'cogs.user_manager',
-            'cogs.recent_roms'
+            'cogs.recent_roms',
+            'cogs.web_dashboard'
         ]
         
         # Dependencies for each cog
@@ -407,7 +408,8 @@ class RommBot(discord.Bot):
             'cogs.scan': ['socketio'],
             'cogs.requests': ['aiosqlite'],
             'cogs.user_manager': ['aiohttp','aiosqlite'],
-            'cogs.recent_roms': ['aiosqlite']
+            'cogs.recent_roms': ['aiosqlite'],
+            'cogs.web_dashboard': ['aiohttp', 'aiosqlite']
         }
 
         for cog in cogs_to_load:
