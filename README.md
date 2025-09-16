@@ -12,13 +12,14 @@ Current
 - Search: Platform based firmware search that lists firmware file information and provides download links
 - Scans: Start/stop different types of RomM scans, report back with info about the scan when complete and also during a scan in progress via command
 - Request System: Make and manage ROM requests entirely in Discord, now enriched with IGDB metadata
+- Request Dashboard: Optional web dash where admin can manage requests 
 - Emojis: Custom game console emoji uploads upon bot installation, use of said emojis in bot responses and stats
 - Emojis: Bot checks for Nitro on the server and if found uploads extended list of emojis, if the bot detects Nitro removed it deverts back to the standard list
 - QR code generation: Install games on 3DS/Vita via QR code with apps like FBI/[FBI Reloaded](https://github.com/TheRealZora/FBI-Reloaded)/[VitaShell](https://github.com/RealYoti/VitaShell) (download endpoint auth must be disabled on RomM instance)
 - RomM User Management: Manage users, automatically create RomM account for users with specific role and remove RomM accont upon role removal
 - Switch Shop Info: Command that lists instructions on how to connect to the [Tinfoil](https://tinfoil.io/Download) endpoint of connected RomM server (download endpoint auth must be disabled on RomM instance)
-- Rate-limited Discord API interactions
-- Caching system, the bot onnly fetches fresh stats if that particular stat has updated since last fetch
+- Rate-limited Discord API interactions: Bot won't overload Discord with requests
+- Caching system: Only fetches fresh stats if that particular stat has updated since last fetch
 
 Planned
 - Alternative chat client integrations (Matrix, Telegram, Slack), no eta for now
@@ -253,17 +254,9 @@ Admin Features:
 
 Request Dashboard:
 - Shows list of requests filterable by status, fulfillment method (auto by bot or manual), platform, user and game name
-- Admin can manuall fulfill, reject, delete requests or add notes
+- Admin can manually fulfill, reject, or delete requests and add notes
 
 <img width="600" height="961" alt="image" src="https://github.com/user-attachments/assets/6f0863fd-b975-470f-94b6-a84b31881b0b" />
-
-Dababase Structure:
-- Request ID
-- User information
-- Platform and game details
-- Request status (pending/fulfilled/rejected/cancelled)
-- Timestamps
-- Admin notes and fulfillment details
 
 ### User Manager
 - /sync_users - Sync all users who have auto-register role (Admin only)
@@ -317,6 +310,7 @@ The bot includes comprehensive error handling and logging:
 - Check API connectivity to RomM
 - Check logs for error messages, I tried to meticulously report errors
 - Verify configuration settings in the env
+
 
 
 
