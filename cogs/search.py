@@ -226,22 +226,6 @@ class ROM_View(discord.ui.View):
                     total_length += line_length
                     files_shown += 1  # Increment counter when file is actually added
                  
-                    # Get hash information
-                    # hashes = []
-                    # if crc := file_info.get('crc_hash'):
-                    #    hashes.append(f"CRC: {crc}")
-                    # if md5 := file_info.get('md5_hash'):
-                    #    hashes.append(f"MD5: {md5}")
-                    # if sha1 := file_info.get('sha1_hash'):
-                    #    hashes.append(f"SHA1: {sha1}")
-
-                    # Add hash line if we have hashes and room
-                    # if hashes:
-                    #    hash_line = "  " + " | ".join(hashes)
-                    #    if not would_exceed_limit(files_info, hash_line):
-                    #        files_info.append(hash_line)
-
-                    
                 # Create field name
                 field_name = f"Files (Total: {self.format_file_size(total_size)}"
                 if len(files) > files_shown:
@@ -285,19 +269,7 @@ class ROM_View(discord.ui.View):
                     value="\n".join(file_info),
                     inline=False
                 )
-                
-                # Hash values for single file
-                # hashes = []
-                # if crc := rom_data.get('crc_hash'):
-                #    hashes.append(f"**CRC:** {crc}")
-                # if md5 := rom_data.get('md5_hash'):
-                #    hashes.append(f"**MD5:** {md5}")
-                # if sha1 := rom_data.get('sha1_hash'):
-                #    hashes.append(f"**SHA1:** {sha1}")
 
-                # if hashes:
-                #    embed.add_field(name="Hash Values", value=" | ".join(hashes), inline=False)
-                
             return embed
         except Exception as e:
             logger.error(f"Error creating ROM embed: {e}")
