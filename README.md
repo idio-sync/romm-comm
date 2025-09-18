@@ -230,7 +230,9 @@ Trigger RomM library scan. Options are:
 
 ![Request](.github/screenshots/RequestSubmitted.png)
 
-![RequestSubmitted](.github/screenshots/AlreadyPresent.png)
+<img width="300" height="881" alt="490832758-744767e4-b722-4af4-8072-9acd6fa35a52" src="https://github.com/user-attachments/assets/b9f6de4a-674b-4878-bf07-1ed4fa71a5ff" />
+
+<img width="300" height="603" alt="image" src="https://github.com/user-attachments/assets/61f3a78f-13aa-443a-a49b-1bd054f0ea6f" />
 
 ![RrequestFulfulledDM](.github/screenshots/RequestFulfilledDM.png)
 
@@ -310,6 +312,7 @@ The bot includes comprehensive error handling and logging:
 - Check API connectivity to RomM
 - Check logs for error messages, I tried to meticulously report errors
 - Verify configuration settings in the env
+
 
 
 
