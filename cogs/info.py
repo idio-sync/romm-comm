@@ -1,508 +1,422 @@
 import discord
 from discord.ext import commands
-import aiohttp
-import asyncio
-import os
-import json
-from typing import Dict, List, Tuple
-import requests
+from discord.commands import slash_command
+from datetime import datetime
+from typing import Dict, Any
 import logging
 
 logger = logging.getLogger('romm_bot')
 
-class EmojiManager(commands.Cog):
+# Stat type to emoji mapping
+STAT_EMOJIS = {
+    "Platforms": "🎮", "Roms": "👾", "Saves": "📁", 
+    "States": "⏸", "Screenshots": "📸", "Storage Size": "💾",
+    "User Count": "👤"
+}
+
+class Info(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.emoji_url_list = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/emoji_urls.txt"
-        self.emoji_url_list_extended = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/emoji_urls_extended.txt"
+        self.stat_channels = {}
+        self.last_stats = {}  # Store previous stats for comparison
+        self.has_switch = False
+        bot.loop.create_task(self.check_switch_platform())
+     
+    async def get_or_create_category(self, guild: discord.Guild, category_name: str) -> discord.CategoryChannel:
+        """Get or create a category in the guild."""
+        category = discord.utils.get(guild.categories, name=category_name)
+        if not category:
+            category = await guild.create_category(name=category_name)
+        return category
         
-        # Create data directory if it doesn't exist
-        self.data_dir = 'data'
-        os.makedirs(self.data_dir, exist_ok=True)
-        
-        self.processed_servers_file = os.path.join(self.data_dir, 'emoji_processed_servers.json')
-        self.processed_servers = self.load_processed_servers()
-        #print(f"Loaded processed servers: {self.processed_servers}")  # Debug print
-        
-        self.bot.emoji_dict = {}  # Dictionary for all emojis (once uploaded)
-        self.init_task = bot.loop.create_task(self.initialize_emoji_dict())
-        self.boot_check_task = bot.loop.create_task(self.check_emojis_on_boot())
+    async def update_voice_channel(self, channel: discord.VoiceChannel, new_name: str):
+        """Update voice channel with rate limiting."""
+        if channel.name != new_name:
+            await self.bot.rate_limiter.acquire()
+            await channel.edit(name=new_name)
 
-    async def initialize_emoji_dict(self):
-        """Initialize emoji dictionary as soon as the bot is ready"""
-        await self.bot.wait_until_ready()
+    def has_stats_changed(self, new_stats: Dict[str, Any]) -> bool:
+        """Compare new stats with last known stats to detect changes."""
+        if not self.last_stats:
+            return True
+        
+        for key, value in new_stats.items():
+            if key not in self.last_stats or self.last_stats[key] != value:
+                return True
+        return False
+
+    async def update_stat_channels(self, guild: discord.Guild):
+        """Update stat channels when stats change."""
+        if not self.bot.config.UPDATE_VOICE_NAMES:
+            return
+            
+        stats_data = self.bot.cache.get('stats')
+        user_count_data = self.bot.cache.get('user_count')        
+        if not stats_data:
+            return
+        
+        if user_count_data and 'user_count' in user_count_data:
+            stats_data['User Count'] = user_count_data['user_count']
+        
+        # Check if stats have changed
+        if not self.has_stats_changed(stats_data):
+            return
+            
         try:
-            if self.bot.guilds:
-                guild = self.bot.guilds[0]
-                self.bot.emoji_dict = {emoji.name: emoji for emoji in guild.emojis}
-                #print(f"Initialized emoji dictionary with {len(self.bot.emoji_dict)} emojis")
-                #print("\nEmoji Dictionary Contents:")
-                #for name, emoji in self.bot.emoji_dict.items():
-                    #print(f"Emoji: {name} -> {emoji.id}")
-            else:
-                print("No guilds found during emoji dictionary initialization!")
-        except Exception as e:
-            print(f"Error initializing emoji dictionary: {e}")    
- 
-    async def handle_nitro_change(self, guild: discord.Guild, had_nitro: bool, has_nitro: bool):
-        """Handle emoji changes when a server's Nitro status changes."""
-        logger.info(f"Nitro status change for {guild.name}: {had_nitro} -> {has_nitro}")
-        guild_id_str = str(guild.id)
-        
-        try:
-            # Try to find a suitable channel for notification
-            notification_channel = await self.find_notification_channel(guild)
+            # Get or create the category
+            category = await self.get_or_create_category(guild, "Rom Server Stats")
             
-            if had_nitro and not has_nitro:
-                logger.info(f"Server lost Nitro status. Adjusting emojis for {guild.name}")
-                
-                if notification_channel:
-                    notify_msg = await notification_channel.send(
-                        embed=discord.Embed(
-                            title="⚠️ Server Nitro Status Change Detected",
-                            description=(
-                                "This server's Nitro status has changed. Adjusting emojis to fit within Discord's limit of 50 emojis for non-Nitro servers."
-                            ),
-                            color=discord.Color.yellow()
-                        )
-                    )
-                
-                # Load the standard (non-Nitro) emoji list
-                standard_emoji_list = await self.load_emoji_list(guild)
-                standard_emoji_names = {name for name, _ in standard_emoji_list}
-                
-                # Get current emojis
-                current_emojis = guild.emojis
-                to_remove = []
-                to_keep = []
-                
-                # Prioritize keeping emojis that are in our standard list
-                for emoji in current_emojis:
-                    if emoji.name in standard_emoji_names:
-                        to_keep.append(emoji)
-                    else:
-                        to_remove.append(emoji)
-                
-                # Remove excess emojis
-                removed_emojis = []
-                failed_removals = []
-                
-                for emoji in to_remove:
-                    try:
-                        await emoji.delete(reason="Server lost Nitro status - removing excess emojis")
-                        removed_emojis.append(emoji.name)
-                        await asyncio.sleep(1.2)
-                    except Exception as e:
-                        logger.error(f"Error removing emoji {emoji.name}: {e}")
-                        failed_removals.append(emoji.name)
-                
-                logger.info(f"Removed {len(removed_emojis)} excess emojis from {guild.name}")
-                
-                # Update stored data
-                self.processed_servers[guild_id_str] = {
-                    'emojis': [emoji.name for emoji in guild.emojis],
-                    'nitro_status': has_nitro,
-                    'emoji_limit': guild.emoji_limit
-                }
-                self.save_processed_servers()
-                
-                # Send completion notification for removals if any happened
-                if notification_channel and (removed_emojis or failed_removals):
-                    embed = discord.Embed(
-                        title="🔄 Emoji Adjustment Complete",
-                        color=discord.Color.blue()
-                    )
-                    
-                    embed.add_field(
-                        name="Summary",
-                        value=(
-                            f"• Previous emoji count: {len(current_emojis)}\n"
-                            f"• New emoji count: {len(guild.emojis)}\n"
-                            f"• Emojis removed: {len(removed_emojis)}"
-                        ),
-                        inline=False
-                    )
-                    
-                    if removed_emojis:
-                        removed_list = ", ".join(removed_emojis[:20])
-                        if len(removed_emojis) > 20:
-                            removed_list += f" and {len(removed_emojis) - 20} more"
-                        embed.add_field(
-                            name="Removed Emojis",
-                            value=removed_list,
-                            inline=False
-                        )
-                    
-                    if failed_removals:
-                        failed_list = ", ".join(failed_removals)
-                        embed.add_field(
-                            name="⚠️ Failed to Remove",
-                            value=failed_list,
-                            inline=False
-                        )
-                    
-                    try:
-                        if 'notify_msg' in locals():
-                            await notify_msg.edit(embed=embed)
-                        else:
-                            await notification_channel.send(embed=embed)
-                    except Exception as e:
-                        logger.error(f"Failed to send completion notification: {e}")
-            
-            # Always try to upload standard emojis after a status change
-            logger.info(f"Uploading standard emojis for {guild.name}")
-            await self.process_guild_emojis(guild, skip_nitro_check=True)
-            
-        except Exception as e:
-            logger.error(f"Error in handle_nitro_change: {e}")
-    
-    async def check_emojis_on_boot(self):
-        """Check and upload emojis when bot starts."""
-        await self.bot.wait_until_ready()
-        logger.info("Checking emojis on boot...")
-        
-        try:
-            for guild in self.bot.guilds:
-                guild_id_str = str(guild.id)
-                needs_upload = False
-                
-                # Always check if emojis are actually present
-                if len(guild.emojis) == 0:
-                    logger.info(f"No emojis found in {guild.name}, forcing upload")
-                    needs_upload = True
-                else:
-                    # Check if this guild has been processed
-                    if guild_id_str not in self.processed_servers:
-                        logger.info(f"Guild {guild.name} not in processed servers")
-                        needs_upload = True
-                    else:
-                        # Check if we need to update due to Nitro status change
-                        if isinstance(self.processed_servers[guild_id_str], dict):
-                            stored_nitro_status = self.processed_servers[guild_id_str].get('nitro_status', False)
-                            current_nitro_status = self.is_nitro_server(guild)
-                            stored_emoji_limit = self.processed_servers[guild_id_str].get('emoji_limit', 50)
-                            current_emoji_limit = guild.emoji_limit
-                            
-                            if current_nitro_status != stored_nitro_status or current_emoji_limit != stored_emoji_limit:
-                                logger.info(f"Nitro status or limit changed for {guild.name}")
-                                needs_upload = True
-                        else:
-                            # Old format, needs update
-                            needs_upload = True
-
-                    # Check if any expected emojis are missing
-                    expected_emojis = await self.load_emoji_list(guild)
-                    existing_emoji_names = {e.name for e in guild.emojis}
-                    missing_emojis = [name for name, _ in expected_emojis if name not in existing_emoji_names]
-                    if missing_emojis:
-                        logger.info(f"Found {len(missing_emojis)} missing emojis in {guild.name}")
-                        needs_upload = True
-
-                if needs_upload:
-                    logger.info(f"Uploading emojis to {guild.name} on boot")
-                    try:
-                        # Force a clean slate for upload
-                        if guild_id_str in self.processed_servers:
-                            del self.processed_servers[guild_id_str]
-                            self.save_processed_servers()
-                        
-                        # Process guild emojis with skip_nitro_check to avoid loops
-                        await self.process_guild_emojis(guild, skip_nitro_check=True)
-                        
-                        # Update emoji dictionary after upload
-                        for emoji in guild.emojis:
-                            self.bot.emoji_dict[emoji.name] = emoji
-                            
-                    except Exception as e:
-                        logger.error(f"Error uploading emojis to {guild.name} on boot: {e}")
-                else:
-                    logger.info(f"Emojis already present in {guild.name}")
-                    # Update emoji dictionary with existing emojis
-                    for emoji in guild.emojis:
-                        self.bot.emoji_dict[emoji.name] = emoji
-
-        except Exception as e:
-            logger.error(f"Error checking emojis on boot: {e}", exc_info=True)
-    
-    async def process_guild_emojis(self, guild: discord.Guild, skip_nitro_check: bool = False):
-        """Process emoji uploads for a guild."""
-        if not guild.me.guild_permissions.manage_emojis:
-            logger.warning(f"Missing emoji permissions in {guild.name}")
-            return False
-
-        try:
-            guild_id_str = str(guild.id)
-            current_nitro_status = self.is_nitro_server(guild)
-            current_emoji_limit = guild.emoji_limit
-            
-            # Check for Nitro status change only if not skipping
-            if not skip_nitro_check and guild_id_str in self.processed_servers:
-                stored_data = self.processed_servers[guild_id_str]
-                if isinstance(stored_data, dict):
-                    stored_nitro_status = stored_data.get('nitro_status', False)
-                    stored_emoji_limit = stored_data.get('emoji_limit', 50)
-                    
-                    if stored_nitro_status != current_nitro_status or stored_emoji_limit != current_emoji_limit:
-                        await self.handle_nitro_change(
-                            guild,
-                            had_nitro=stored_nitro_status,
-                            has_nitro=current_nitro_status
-                        )
-                        return True
-
-            # Load emoji list for current server status
-            emoji_list = await self.load_emoji_list(guild)
-            if not emoji_list:
-                return False
-
-            # Get current emojis and their names
-            current_emoji_names = {e.name: e for e in guild.emojis}
-            missing_emojis = []
-            
-            # Check which emojis are missing
-            for name, url in emoji_list:
-                if name not in current_emoji_names:
-                    missing_emojis.append((name, url))
-
-            if missing_emojis:
-                slots_available = guild.emoji_limit - len(current_emoji_names)
-                if slots_available > 0:
-                    notification_channel = await self.find_notification_channel(guild)
-                    notify_msg = None
-
-                    if notification_channel and len(missing_emojis) > 5:
-                        notify_msg = await notification_channel.send(
-                            embed=discord.Embed(
-                                title="🔄 Uploading Missing Emojis",
-                                description=f"Found {len(missing_emojis)} missing emojis. Starting upload process...",
-                                color=discord.Color.blue()
-                            )
-                        )
-
-                    uploaded_emojis = []
-                    failed_uploads = []
-
-                    for name, url in missing_emojis[:slots_available]:
-                        if len(guild.emojis) >= guild.emoji_limit:
-                            break
-
-                        if uploaded_emojis:
-                            await asyncio.sleep(1.5)
-
-                        try:
-                            if await self.upload_emoji(guild, name, url):
-                                uploaded_emojis.append(name)
-                                # Update emoji dictionary with new emoji
-                                for emoji in guild.emojis:
-                                    if emoji.name == name:
-                                        self.bot.emoji_dict[name] = emoji
-                                        break
-                            else:
-                                failed_uploads.append(name)
-                        except Exception as e:
-                            logger.error(f"Error uploading emoji {name}: {e}")
-                            failed_uploads.append(name)
-
-                    if notification_channel and len(missing_emojis) > 5:
-                        embed = discord.Embed(
-                            title="✅ Emoji Upload Complete",
-                            description=f"Successfully uploaded {len(uploaded_emojis)} new emojis.",
-                            color=discord.Color.green()
-                        )
-                        
-                        if uploaded_emojis:
-                            uploaded_list = ", ".join(uploaded_emojis[:20])
-                            if len(uploaded_emojis) > 20:
-                                uploaded_list += f" and {len(uploaded_emojis) - 20} more"
-                            embed.add_field(
-                                name="Uploaded Emojis",
-                                value=uploaded_list,
-                                inline=False
-                            )
-                        
-                        if failed_uploads:
-                            failed_list = ", ".join(failed_uploads)
-                            embed.add_field(
-                                name="⚠️ Failed Uploads",
-                                value=failed_list,
-                                inline=False
-                            )
-
-                        try:
-                            if notify_msg:
-                                await notify_msg.edit(embed=embed)
-                            else:
-                                await notification_channel.send(embed=embed)
-                        except Exception as e:
-                            logger.error(f"Failed to send completion notification: {e}")
-
-            # Update processed servers record
-            self.processed_servers[guild_id_str] = {
-                'emojis': list(current_emoji_names.keys()) + (uploaded_emojis if 'uploaded_emojis' in locals() else []),
-                'nitro_status': current_nitro_status,
-                'emoji_limit': current_emoji_limit
+            # Get existing channels efficiently
+            existing_channels = {
+                channel.name: channel 
+                for channel in category.voice_channels
             }
-            self.save_processed_servers()
             
-            return True
-
-        except Exception as e:
-            logger.error(f"Error processing guild emojis: {e}", exc_info=True)
-            return False
-    
-    def load_processed_servers(self) -> Dict[int, List[str]]:
-        """Load the list of servers that have already had emojis uploaded."""
-        if os.path.exists(self.processed_servers_file):
-            with open(self.processed_servers_file, 'r') as f:
-                return json.load(f)
-        return {}
-
-    async def find_notification_channel(self, guild: discord.Guild):
-        """Find a suitable channel for notifications."""
-        for channel in guild.text_channels:
-            if any(name in channel.name.lower() for name in ['bot', 'command', 'bot-command', 'bot-spam']):
-                if channel.permissions_for(guild.me).send_messages:
-                    return channel
-        
-        if guild.system_channel and guild.system_channel.permissions_for(guild.me).send_messages:
-            return guild.system_channel
-        
-        for channel in guild.text_channels:
-            if channel.permissions_for(guild.me).send_messages:
-                return channel
-    
-        return None
-    
-    def save_processed_servers(self):
-        """Save the list of processed servers to avoid duplicate uploads."""
-        os.makedirs(os.path.dirname(self.processed_servers_file), exist_ok=True)
-        with open(self.processed_servers_file, 'w') as f:
-            json.dump(self.processed_servers, f)
-
-    async def load_emoji_list(self, guild: discord.Guild = None) -> List[Tuple[str, str]]:
-        """Load emoji data from appropriate text file based on server's Nitro status."""
-        try:
-            # Determine which URL to use based on server's emoji limit
-            emoji_url = self.emoji_url_list_extended if self.is_nitro_server(guild) else self.emoji_url_list
-            print(f"Using {'extended' if self.is_nitro_server(guild) else 'standard'} emoji list for {guild.name}")
-            print(f"Selected URL: {emoji_url}")
+            # Track channels to keep
+            channels_to_keep = set()
             
-            async with aiohttp.ClientSession() as session:
-                async with session.get(emoji_url) as response:
-                    if response.status != 200:
-                        print(f"Warning: Failed to fetch emoji list: {response.status}")
-                        return []
-                    content = await response.text()
-        
-            # Parse the content into emoji pairs
-            emoji_list = []
-            for line in content.splitlines():
-                line = line.strip()
-                if line and not line.startswith('#'):  # Skip empty lines and comments
-                    try:
-                        name, url = line.split('|')
-                        # Clean the name and ensure consistent formatting
-                        clean_name = name.strip().replace('-', '_').lower()
-                        emoji_list.append((clean_name, url.strip()))
-                    except ValueError:
-                        print(f"Warning: Invalid line format: {line}")
-                        continue
+            # Update or create channels
+            for stat, value in stats_data.items():
+                emoji = STAT_EMOJIS.get(stat, "📊")
+                new_name = (f"{emoji} {stat}: {value:,} TB" if stat == "Storage Size" 
+                           else f"{emoji} {stat}: {value:,}")
+                
+                # Find existing channel
+                existing_channel = discord.utils.get(
+                    category.voice_channels,
+                    name__startswith=f"{emoji} {stat}:"
+                )
+                
+                if existing_channel:
+                    if existing_channel.name != new_name:
+                        await self.update_voice_channel(existing_channel, new_name)
+                    self.stat_channels[stat] = existing_channel
+                    channels_to_keep.add(existing_channel.id)
+                else:
+                    await self.bot.rate_limiter.acquire()
+                    self.stat_channels[stat] = await category.create_voice_channel(
+                        name=new_name,
+                        user_limit=0
+                    )
+                    channels_to_keep.add(self.stat_channels[stat].id)
             
-            print(f"Loaded {len(emoji_list)} emoji definitions")
-            
-            # If it's not a Nitro server, ensure we don't exceed the limit
-            if not self.is_nitro_server(guild) and len(emoji_list) > 50:
-                print(f"Trimming emoji list to 50 for non-Nitro server {guild.name}")
-                emoji_list = emoji_list[:50]
-            
-            return emoji_list
-            
-        except Exception as e:
-            print(f"Warning: Failed to load emoji list: {str(e)}")
-            return []
-
-
-    def is_nitro_server(self, guild: discord.Guild) -> bool:
-        """Check if a server has Nitro boost level that allows more than 50 emojis."""
-        if not guild:
-            return False
-        return guild.emoji_limit > 50
-        
-    async def upload_emoji(self, guild: discord.Guild, name: str, url: str) -> bool:
-        """Upload a single emoji to the server."""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
-                    if response.status != 200:
-                        print(f"Failed to download emoji {name}: {response.status}")
-                        return False
+            # Clean up old channels
+            for channel in category.voice_channels:
+                if channel.id not in channels_to_keep:
+                    await self.bot.rate_limiter.acquire()
+                    await channel.delete()
                     
-                    image_data = await response.read()
-
-            # Clean the emoji name by replacing hyphens with underscores for Discord compatibility
-            clean_name = name.strip().replace('-', '_').lower()
-            
-            emoji = await guild.create_custom_emoji(
-                name=clean_name,
-                image=image_data,
-                reason="Bulk emoji upload on server join"
-            )
-            print(f"Successfully added emoji {emoji.name} to {guild.name}")
-            return True
-
+            # Update last known stats
+            self.last_stats = stats_data.copy()
+                    
         except Exception as e:
-            print(f"Error uploading emoji {name}: {str(e)}")
-            return False
-
-    @commands.Cog.listener()
-    async def on_guild_join(self, guild: discord.Guild):
-        """When the bot joins a new server, upload the emojis if not already done."""
-        logger.info(f"Joined new guild: {guild.name} (ID: {guild.id})")
-        logger.info(f"Server has Nitro status: {self.is_nitro_server(guild)}")
-        logger.info(f"Emoji limit: {guild.emoji_limit}")
-        
-        await self.process_guild_emojis(guild)
+            logger.error(f"Error updating stat channels: {e}", exc_info=True)
     
+    # Update Discord Bot Status
+    async def update_presence(self, status: bool):
+        """Update bot's presence with rate limiting."""
+        try:
+            await self.bot.rate_limiter.acquire()
+            if status and 'stats' in self.bot.cache.cache:
+                stats_data = self.bot.cache.cache['stats']
+                await self.bot.change_presence(
+                    activity=discord.Activity(
+                        type=discord.ActivityType.playing,
+                        name=f"{stats_data['Roms']:,} games 🎮"
+                    ),
+                    status=discord.Status.online
+                )
+            else:
+                await self.bot.change_presence(
+                    activity=discord.Activity(
+                        type=discord.ActivityType.playing,
+                        name="0 games ⚠️Check Romm connection⚠️"
+                    ),
+                    status=discord.Status.do_not_disturb
+                )
+        except Exception as e:
+            logger.error(f"Failed to update presence: {e}")
+    
+    async def check_switch_platform(self):
+        """Check if Switch is available in platforms"""
+        await self.bot.wait_until_ready()
+        try:
+            # Get raw platforms from API to access custom_name field
+            raw_platforms = await self.bot.fetch_api_endpoint('platforms')
+            if raw_platforms:
+                # Check if Switch exists in platforms (checking both regular and custom names)
+                self.has_switch = False
+                for platform in raw_platforms:
+                    # Check regular name (handle None values)
+                    regular_name = (platform.get('name') or '').lower()
+                    # Check custom name (handle None values)
+                    custom_name = (platform.get('custom_name') or '').lower()
+                    
+                    # Look for Switch in either name
+                    if any(switch_name in regular_name or switch_name in custom_name 
+                           for switch_name in ['nintendo switch', 'switch']):
+                        self.has_switch = True
+                        break
+                
+                logger.info(f"Switch platform {'found' if self.has_switch else 'not found'} in platform list")
+        except Exception as e:
+            logger.error(f"Error checking Switch platform: {e}")
+            self.has_switch = False
+            
+    async def cog_slash_command_check(self, ctx: discord.ApplicationContext) -> bool:
+        """This runs before any slash command in this cog"""
+        # If it's the switch_shop_info command and Switch isn't available, block it
+        if ctx.command.name == 'switch_shop_info' and not self.has_switch:
+            await ctx.respond("❌ Switch platform is not available on this RomM server", ephemeral=True)
+            return False
+        return True
+
+    
+    # Listener
     @commands.Cog.listener()
     async def on_ready(self):
-        """Initialize emoji dictionary when bot starts"""
-        logger.info("EmojiManager on_ready event triggered")
-        # We don't need to initialize the emoji dictionary here since it's done in initialize_emoji_dict
-        # Just log that we're ready
-        if self.bot.guilds:
-            logger.info(f"Bot is ready in {len(self.bot.guilds)} guilds")
-            for guild in self.bot.guilds:
-                logger.info(f"Present in guild: {guild.name} (ID: {guild.id}) with {len(guild.emojis)} emojis")
-        else:
-            logger.warning("Bot is ready but no guilds found!")
+        """Initialize channels when bot starts up."""
+        for guild in self.bot.guilds:
+            try:
+                await self.update_stat_channels(guild)
+            except Exception as e:
+                logger.error(f"Error updating stats for guild {guild.id}: {e}", exc_info=True)
+
+    # Add a method to be called when API data updates
+    async def on_stats_update(self):
+        """Called when new stats are fetched from the API."""
+        for guild in self.bot.guilds:
+            await self.update_stat_channels(guild)
+    
+    ## Info Commands
+    # Help
+    @discord.slash_command(
+        name="help", 
+        description="Lists all available commands and their functions"
+    )
+    async def help(self, ctx):
+        # Create an embed for better formatting
+        embed = discord.Embed(
+            title="RomM Bot",
+            description="Support for the bot can be found on [GitHub](https://github.com/idio-sync/romm-comm). \n \n Listed below are all available bot commands:",
+            color=discord.Color.blue()
+        )
+        
+        # Iterate through all cogs
+        for cog in self.bot.cogs.values():
+            # Get all slash commands from the cog
+            commands_list = []
+            for command in cog.walk_commands():
+                if isinstance(command, discord.SlashCommand):
+                    commands_list.append(f"• **/`{command.name}`** - {command.description}")
+            
+            # If cog has commands, add them to embed
+            if commands_list:
+                embed.add_field(
+                    name=cog.__class__.__name__.replace("Cog", ""),
+                    value="\n".join(commands_list),
+                    inline=False
+                )
+                 
+        await ctx.respond(embed=embed)
+        pass
+    
+    # Stats
+    # @discord.slash_command(
+    #    name="stats",
+    #    description="Display current RomM server stats"
+    #)
+    #async def stats(self, ctx):
+    #    """Stats display command with cache usage."""
+    #    try:
+    #        stats_data = self.bot.cache.get('stats')
+    #        user_count_data = self.bot.cache.get('user_count')
+    #        
+    #        if stats_data:
+    #            # Merge user count into stats data if available
+    #            if user_count_data and 'user_count' in user_count_data:
+    #                stats_data['User Count'] = user_count_data['user_count']
+    #            
+    #            last_fetch_time = self.bot.cache.last_fetch.get('stats')
+    #            if last_fetch_time:
+    #                time_str = datetime.fromtimestamp(last_fetch_time).strftime('%Y-%m-%d %H:%M:%S')
+    #            else:
+    #                time_str = "Unknown"
+    #            
+    #            embed = discord.Embed(
+    #                title="Server Stats",
+    #                description=f"Last updated: {time_str}",
+    #                color=discord.Color.blue()
+    #            )
+    #        
+    #            # Display all stats including user count in the same format
+    #            for stat, value in stats_data.items():
+    #                emoji = STAT_EMOJIS.get(stat, "📊")
+    #                field_value = f"{value:,} TB" if stat == "Storage Size" else f"{value:,}"
+    #                embed.add_field(name=f"{emoji} {stat}", value=field_value, inline=False)
+    #        
+    #            await ctx.respond(embed=embed)
+    #        else:
+    #            await ctx.respond("No API data available! Check connection to Romm.")
+    #    except Exception as e:
+    #        if hasattr(self.bot, 'logger'):
+    #            self.bot.logger.error(f"Error in stats command: {e}", exc_info=True)
+    #        await ctx.respond("❌ An error occurred while fetching stats")
+   
+    # Platforms
+    @discord.slash_command(
+        name="platforms", 
+        description="Display all platforms w/ROM counts"
+    )
+    async def platforms(self, ctx: discord.ApplicationContext):
+        """Platforms display command with cache usage."""
+        try:
+            # Defer the response since it might take a moment to fetch
+            await ctx.defer()
+        
+            # Fetch raw platforms data to access custom_name field
+            raw_platforms = await self.bot.fetch_api_endpoint('platforms')
+            if raw_platforms:
+                # Create platform data with display names
+                platforms_data = []
+                for platform in raw_platforms:
+                    if platform.get('name') and platform.get('rom_count') is not None:
+                        platforms_data.append({
+                            'display_name': self.bot.get_platform_display_name(platform),
+                            'rom_count': platform.get('rom_count', 0)
+                        })
+                
+                # Sort platforms by display name
+                platforms_data.sort(key=lambda x: x['display_name'])
+            
+                if platforms_data:
+                    # Create embed with platform information
+                    embed = discord.Embed(
+                        title="Available Platforms w/ROM counts",
+                        description="",
+                        color=discord.Color.blue()
+                    )
+                
+                    # Split into multiple fields if needed (Discord has a 25 field limit)
+                    field_content = ""
+                    for platform in platforms_data:
+                        platform_line = f"**{platform['display_name']}**: {platform['rom_count']:,} ROMs\n"
+                    
+                        # If adding this line would exceed Discord's limit, create a new field
+                        if len(field_content) + len(platform_line) > 1024:
+                            embed.add_field(
+                                name="", 
+                                value=field_content, 
+                                inline=False
+                            )  
+                            field_content = platform_line
+                        else:
+                            field_content += platform_line
+                
+                    # Add any remaining content
+                    if field_content:
+                        embed.add_field(
+                            name="", 
+                            value=field_content, 
+                            inline=False
+                        )
+                
+                    # Add total at the bottom
+                    total_roms = sum(platform['rom_count'] for platform in platforms_data)
+                    embed.set_footer(text=f"Total ROMs across all platforms: {total_roms:,}")
+                
+                    await ctx.respond(embed=embed)
+                else:
+                    await ctx.respond("No platform data available!")
+            else:
+                await ctx.respond("Failed to fetch platform data. Please try again later.")
+            
+        except Exception as e:
+            logger.error(f"Error in platforms command: {e}", exc_info=True)
+            await ctx.respond("❌ An error occurred while fetching platform data")
     
     @discord.slash_command(
-        name="emoji_upload",
-        description="Force upload the bot's custom emojis to current server (owner only)"
+        name="switch_shop_info",
+        description="Instructions for connecting your Switch to this server"
     )
-    
-    #@commands.has_permissions(manage_emojis=True)
-    #@commands.is_owner()
-    #async def emoji_upload(self, ctx):
-    #    """Force upload emojis to the server."""
-    #    await ctx.defer()
-    #    
-    #    try:
-    #        guild_id_str = str(ctx.guild.id)
-    #        
-    #        if guild_id_str in self.processed_servers:
-    #            del self.processed_servers[guild_id_str]
-    #            self.save_processed_servers()
-    #        
-    #        success = await self.process_guild_emojis(ctx.guild)
-    #        if success:
-    #            await ctx.respond("✅ Emoji upload process completed!")
-    #        else:
-    #            await ctx.respond("❌ Failed to upload emojis")
-    #        
-    #    except Exception as e:
-    #        logger.error(f"Error in force_emoji_upload: {e}")
-    #        await ctx.respond("❌ An error occurred while uploading emojis")
+    async def switch_shop_info(self, ctx):
+        """Display Switch shop connection setup instructions."""      
+        try:
+            # Get emojis with fallbacks
+                       
+            embed = discord.Embed(
+                title=f"{self.bot.emoji_dict['switch']}  Switch Shop Connection Guide  {self.bot.emoji_dict['switch']}",
+                description="Follow these steps to configure your Switch for connection to this server.\n"
+                            "\n*Note: This guide assumes you have Tinfoil installed and know how to use its basic functions.*",
+                color=discord.Color.blue()
+            )
 
+            # Add steps as separate fields
+            embed.add_field(
+                name="Step 1: Access File Browser",
+                value="Open Tinfoil and navigate to File Browser",
+                inline=False
+            )
+
+            embed.add_field(
+                name="Step 2: Access Settings",
+                value="Scroll over to the selection and press `-` to access the new menu",
+                inline=False
+            )
+
+            # Connection settings in a formatted table
+            connection_settings = (
+                "**Protocol:** `https`\n"
+                f"**Host:** `{self.bot.config.DOMAIN}`\n"
+                "**Port:** `443`\n"
+                "**Path:** `/tinfoil/feed`\n"
+                "**Username:** `Your RomM username`\n"
+                "**Password:** `Your RomM password`\n"
+                "**Title:** `Your choice (free text)`\n"
+                "**Enabled:** `Yes`"
+            )
+            embed.add_field(
+                name="Step 3: Enter Connection Settings",
+                value=connection_settings,
+                inline=False
+            )
+
+            embed.add_field(
+                name="Step 4: Save Configuration",
+                value="Press `X` to save your settings",
+                inline=False
+            )
+
+            embed.add_field(
+                name="Step 5: Restart Tinfoil",
+                value="Close and reopen Tinfoil to scan TitleIDs\n"
+                      "*If configured correctly, you'll see the custom message:* `RomM Switch Library`",
+                inline=False
+            )
+
+            embed.add_field(
+                name="Accessing Content",
+                value=(
+                    f" Your RomM content will now be available in:\n"
+                    "• The `New Games` tab in Tinfoil\n"
+                    "• The `File Browser` section you just configured"
+                ),
+                inline=False
+            )
+
+            # Add footer with note
+            embed.set_footer(
+                text=(
+                    f"Need help? Check the RomM documentation "
+                    "or ask for support on GitHub/Discord"
+                )
+            )
+
+            await ctx.respond(embed=embed)
+
+        except Exception as e:
+            logger.error(f"Error in switch shop connection info command: {e}", exc_info=True)
+            await ctx.respond("❌ An error occurred while displaying Switch shop connection info")
+     
 def setup(bot):
-    bot.add_cog(EmojiManager(bot))
+    bot.add_cog(Info(bot))
