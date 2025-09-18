@@ -2,6 +2,10 @@
 
 A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) API to provide information about your ROM collection and control RomM from Discord.
 
+<p align="center">
+  <img src=".github/screenshots/Demo.gif" width="90%">
+</p>
+
 ---
 
 ## Table of Contents
@@ -311,5 +315,6 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
