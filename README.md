@@ -70,31 +70,17 @@ USER=api_username
 PASS=api_password
 
 # Optional Settings
+ADMIN_ID=admin_user_id
 DOMAIN=your_website_domain
-SYNC_RATE=3600
-
 REQUESTS_ENABLED=TRUE
 IGDB_CLIENT_ID=your_client_id
 IGDB_CLIENT_SECRET=your_client_secret
-
-ENABLE_USER_MANAGER=TRUE
 AUTO_REGISTER_ROLE_ID=romm_users_role_id
-
 UPDATE_VOICE_NAMES=true
 CHANNEL_ID=your_channel_id
-SHOW_API_SUCCESS=false
-CACHE_TTL=3900
-API_TIMEOUT=10
-
 RECENT_ROMS_ENABLED=TRUE
 RECENT_ROMS_CHANNEL_ID=yourchannel
-RECENT_ROMS_CHECK_MINUTES=5
-RECENT_ROMS_BATCH_MINUTES=1
-RECENT_ROMS_MAX_PER_POST=10
-RECENT_ROMS_FLOOD_THRESHOLD=25
-
 WEB_DASHBOARD_ENABLED=true
-WEB_DASHBOARD_HOST=0.0.0.0
 WEB_DASHBOARD_PORT=8080
 DASHBOARD_PASSWORD=yourpassword
 ```
@@ -109,16 +95,16 @@ DASHBOARD_PASSWORD=yourpassword
 - `PASS`: API authentication password
 
 #### Optional Settings:
+- `ADMIN_ID` : User ID of admin for /command access (scan, sync users, etc.)
 - `DOMAIN`: Website domain for any download links, can use local ip/port if not exposing RomM to the internet (default: "No website configured")
 - `SYNC_RATE`: How often to sync with API in seconds (default: 3600)
 - `UPDATE_VOICE_NAMES`: Enable/disable voice channel stats (default: true)
 - `REQUESTS_ENABLED` : Enable request commands (default: true)
 - `IGDB_CLIENT_ID` : IGDB login info for requests metadata (can be the same one used in RomM)
 - `IGDB_CLIENT_SECRET` : IGDB login info for requests metadata (can be the same one used in RomM)
-- `ENABLE_USER_MANAGER` : Enables user manager module (default: true)
 - `AUTO_REGISTER_ROLE_ID` : Discord role ID used for linking Discord users to RomM users and registering new RomM users if granted to Discord user (if user manager enabled)
 - `SHOW_API_SUCCESS`: Show API sync results and error messages in Discord (default: false)
-- `CHANNEL_ID`: Channel ID for API sync result and user manager notifications to be sent to (if enabled above) and user manager log messages
+- `CHANNEL_ID`: Admin channel ID for API sync result and user manager notifications to be sent to (if enabled above) and user manager log messages
 - `CACHE_TTL`: Cache time-to-live in seconds (default: 3900)
 - `API_TIMEOUT`: API request timeout in seconds (default: 10)
 - `RECENT_ROMS_ENABLED` : Enables recent rom additions messages (default: true)
@@ -172,11 +158,6 @@ Automatic Emoji management. Provides:
 ![wii](.backend/emoji/wii.png) ![ps](.backend/emoji/ps.png) ![psp](.backend/emoji/psp.png) ![ps2](.backend/emoji/ps2.png) ![snes](.backend/emoji/snes.png), etc
 
 ## Available Commands
-
-### /stats
-Show current collection statistics.
-
-![Slash Stats](.github/screenshots/SlashStats.png)
 
 ### /platforms
 Display all available platforms with their ROM counts.
@@ -265,9 +246,6 @@ Request Dashboard:
 ### User Manager
 - /sync_users - Sync all users who have auto-register role (Admin only)
 
-General:
-- User Manager is togglable by server admin, if `ENABLE_USER_MANAGER` is set to `FALSE` the module will avoid being loaded entirely and no commands will show in Discord
-
 Account Creation:
 - Creates RomM account when role specified in `AUTO_REGISTER_ROLE_ID` is assigned to Discord user
 - Uses Discord display name for RomM username (_1/2/3 etc. if dupe)
@@ -314,6 +292,7 @@ The bot includes comprehensive error handling and logging:
 - Check API connectivity to RomM
 - Check logs for error messages, I tried to meticulously report errors
 - Verify configuration settings in the env
+
 
 
 
