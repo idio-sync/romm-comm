@@ -27,6 +27,543 @@ def is_admin():
         return str(ctx.author.id) == admin_id
     return commands.check(predicate)
 
+class RequestAdminView(discord.ui.View):
+    """Paginated view for managing requests"""
+    
+    def __init__(self, bot, requests_data, admin_id):
+        super().__init__(timeout=300)  # 5 minute timeout
+        self.bot = bot
+        self.requests = requests_data
+        self.admin_id = admin_id
+        self.current_index = 0
+        self.message = None
+        
+        # Create buttons
+        self.back_button = discord.ui.Button(
+            label="← Back",
+            style=discord.ButtonStyle.primary,
+            disabled=True  # Start with back disabled on first page
+        )
+        self.back_button.callback = self.back_callback
+        
+        self.fulfill_button = discord.ui.Button(
+            label="Fulfill",
+            style=discord.ButtonStyle.success,
+        )
+        self.fulfill_button.callback = self.fulfill_callback
+        
+        self.reject_button = discord.ui.Button(
+            label="Reject",
+            style=discord.ButtonStyle.danger,
+        )
+        self.reject_button.callback = self.reject_callback
+        
+        self.forward_button = discord.ui.Button(
+            label="Next →",
+            style=discord.ButtonStyle.primary,
+            disabled=len(requests_data) <= 1  # Disable if only one request
+        )
+        self.forward_button.callback = self.forward_callback
+        
+        # Add note button 
+        self.note_button = discord.ui.Button(
+            label="Add Note",
+            style=discord.ButtonStyle.secondary,
+        )
+        self.note_button.callback = self.note_callback
+                
+        # Add all buttons
+        self.add_item(self.back_button)
+        self.add_item(self.fulfill_button)
+        self.add_item(self.reject_button)
+        self.add_item(self.forward_button)
+        self.add_item(self.note_button)
+        
+        self.update_button_states()
+    
+    def update_button_states(self):
+        """Update button states based on current index and request status"""
+        if not self.requests:
+            for item in self.children:
+                item.disabled = True
+            return
+            
+        # Navigation buttons
+        self.back_button.disabled = self.current_index == 0
+        self.forward_button.disabled = self.current_index >= len(self.requests) - 1
+        
+        # Action buttons - disable for non-pending requests
+        current_request = self.requests[self.current_index]
+        is_pending = current_request[6] == 'pending'
+        self.fulfill_button.disabled = not is_pending
+        self.reject_button.disabled = not is_pending
+    
+    def create_request_embed(self, req):
+        """Create an embed for a request with status indication"""
+        # Parse details for IGDB metadata
+        details = req[5] if req[5] else ""
+        game_data = {}
+        cover_url = None
+        igdb_name = req[4]  # Default to requested game name
+        
+        # Extract version request info if present
+        version_request = None
+        additional_notes = None
+        if "Version Request:" in details:
+            try:
+                version_parts = details.split("Version Request: ", 1)[1].split("\n", 1)
+                version_request = version_parts[0]
+                if len(version_parts) > 1 and "Additional Notes:" in version_parts[1]:
+                    additional_notes = version_parts[1].replace("Additional Notes: ", "").split("\n")[0]
+            except:
+                pass
+
+        if "IGDB Metadata:" in details:
+            try:
+                metadata_lines = details.split("IGDB Metadata:\n")[1].split("\n")
+                for line in metadata_lines:
+                    if ": " in line:
+                        key, value = line.split(": ", 1)
+                        game_data[key] = value
+                        if key == "Game":
+                            igdb_name = value.split(" (", 1)[0]
+                
+                cover_matches = re.findall(r'Cover URL:\s*(https://[^\s]+)', details)
+                if cover_matches:
+                    cover_url = cover_matches[0]
+            except Exception as e:
+                logger.error(f"Error parsing metadata: {e}")
+        
+        # Determine status color
+        status_colors = {
+            'pending': discord.Color.yellow(),
+            'fulfilled': discord.Color.green(),
+            'cancelled': discord.Color.light_grey(),
+            'reject': discord.Color.red()
+        }
+        
+        # Create embed
+        status = req[6].upper()
+        embed = discord.Embed(
+            title=f"{igdb_name}",
+            color=status_colors.get(req[6], discord.Color.blue()),
+        )
+        
+        # Add status indicator field at the top
+        status_emoji = {
+            'pending': '⏳',
+            'fulfilled': '✅',
+            'cancelled': '🚫',
+            'reject': '❌'
+        }.get(req[6], '❓')
+        
+        embed.add_field(
+            name="Status",
+            value=f"{status_emoji} **{req[6].title()}**",
+            inline=True
+        )
+        
+        # Platform field
+        embed.add_field(
+            name="Platform",
+            value=req[3],
+            inline=True
+        )
+        
+        # Request ID field
+        embed.add_field(
+            name="Request ID",
+            value=f"#{req[0]}",
+            inline=True
+        )
+        
+        # If there's a version request, add it prominently
+        if version_request:
+            embed.add_field(
+                name="Version Requested",
+                value=version_request[:1024],
+                inline=False
+            )
+        
+        if additional_notes:
+            embed.add_field(
+                name="Additional Notes from User",
+                value=additional_notes[:1024],
+                inline=False
+            )
+        
+        # Set images
+        if cover_url and cover_url != 'None':
+            embed.set_image(url=cover_url)
+        
+        embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
+        
+        # Genre field if available
+        if "Genres" in game_data and game_data["Genres"] != "Unknown":
+            genres = game_data["Genres"].split(", ")[:2]
+            embed.add_field(
+                name="Genre",
+                value=", ".join(genres),
+                inline=True
+            )
+        
+        # Release Date if available
+        if "Release Date" in game_data and game_data["Release Date"] != "Unknown":
+            try:
+                date_obj = datetime.strptime(game_data["Release Date"], "%Y-%m-%d")
+                formatted_date = date_obj.strftime("%B %d, %Y")
+            except:
+                formatted_date = game_data["Release Date"]
+            embed.add_field(
+                name="Release Date",
+                value=formatted_date,
+                inline=True
+            )
+        
+        # Companies if available
+        companies = []
+        if "Developers" in game_data and game_data["Developers"] != "Unknown":
+            developers = game_data["Developers"].split(", ")[:2]
+            companies.extend(developers)
+        if "Publishers" in game_data and game_data["Publishers"] != "Unknown":
+            publishers = game_data["Publishers"].split(", ")
+            remaining_slots = 2 - len(companies)
+            if remaining_slots > 0:
+                companies.extend(publishers[:remaining_slots])
+        
+        if companies:
+            embed.add_field(
+                name="Companies",
+                value=", ".join(companies),
+                inline=True
+            )
+        
+        # Summary if available
+        if "Summary" in game_data:
+            summary = game_data["Summary"]
+            if len(summary) > 500:
+                summary = summary[:497] + "..."
+            embed.add_field(
+                name="Summary",
+                value=summary,
+                inline=False
+            )
+        
+        # Admin notes if present
+        if req[11]:  # notes field
+            embed.add_field(
+                name="Admin Notes",
+                value=req[11][:1024],
+                inline=False
+            )
+        
+        # Fulfillment info if fulfilled/rejected
+        if req[9]:  # fulfilled_by
+            action = "Fulfilled" if req[6] == 'fulfilled' else "Rejected"
+            embed.add_field(
+                name=f"✍️ {action} By",
+                value=req[10],  # fulfiller_name
+                inline=True
+            )
+            
+        # Auto-fulfilled indicator
+        if req[12]:  # auto_fulfilled
+            embed.add_field(
+                name="🤖 Auto-Fulfilled",
+                value="Yes",
+                inline=True
+            )
+        
+        # Links section
+        if igdb_name:
+            igdb_link_name = igdb_name.lower().replace(' ', '-')
+            igdb_link_name = re.sub(r'[^a-z0-9-]', '', igdb_link_name)
+            igdb_url = f"https://www.igdb.com/games/{igdb_link_name}"
+            embed.add_field(
+                name="Links",
+                value=f"[IGDB]({igdb_url})",
+                inline=True
+            )
+        
+        # Footer with requester info and pagination
+        total = len(self.requests)
+        embed.set_footer(
+            text=f"Request {self.current_index + 1}/{total} • Requested by {req[2]} • Use buttons to navigate"
+        )
+        
+        return embed
+    
+    async def back_callback(self, interaction: discord.Interaction):
+        """Navigate to previous request"""
+        if interaction.user.id != self.admin_id:
+            await interaction.response.send_message("Only admins can use these controls.", ephemeral=True)
+            return
+        
+        if self.current_index > 0:
+            self.current_index -= 1
+            self.update_button_states()
+            embed = self.create_request_embed(self.requests[self.current_index])
+            await interaction.response.edit_message(embed=embed, view=self)
+    
+    async def forward_callback(self, interaction: discord.Interaction):
+        """Navigate to next request"""
+        if interaction.user.id != self.admin_id:
+            await interaction.response.send_message("Only admins can use these controls.", ephemeral=True)
+            return
+        
+        if self.current_index < len(self.requests) - 1:
+            self.current_index += 1
+            self.update_button_states()
+            embed = self.create_request_embed(self.requests[self.current_index])
+            await interaction.response.edit_message(embed=embed, view=self)
+    
+    async def fulfill_callback(self, interaction: discord.Interaction):
+        """Mark current request as fulfilled"""
+        if interaction.user.id != self.admin_id:
+            await interaction.response.send_message("Only admins can use these controls.", ephemeral=True)
+            return
+        
+        await interaction.response.defer()
+        
+        current_request = self.requests[self.current_index]
+        request_id = current_request[0]
+        
+        try:
+            db_path = Path('data') / 'requests.db'
+            async with aiosqlite.connect(str(db_path)) as db:
+                await db.execute(
+                    """
+                    UPDATE requests 
+                    SET status = 'fulfilled', 
+                        fulfilled_by = ?, 
+                        fulfiller_name = ?, 
+                        updated_at = CURRENT_TIMESTAMP 
+                    WHERE id = ?
+                    """,
+                    (interaction.user.id, str(interaction.user), request_id)
+                )
+                await db.commit()
+                
+                # Notify user
+                try:
+                    user = await self.bot.fetch_user(current_request[1])  # user_id
+                    await user.send(f"✅ Your request for '{current_request[4]}' has been fulfilled!")
+                except:
+                    logger.warning(f"Could not DM user {current_request[1]}")
+            
+            # Update the request in our list
+            updated_request = list(current_request)
+            updated_request[6] = 'fulfilled'
+            updated_request[9] = interaction.user.id
+            updated_request[10] = str(interaction.user)
+            self.requests[self.current_index] = tuple(updated_request)
+            
+            # Update view
+            self.update_button_states()
+            embed = self.create_request_embed(self.requests[self.current_index])
+            await interaction.followup.edit_message(message_id=self.message.id, embed=embed, view=self)
+            
+        except Exception as e:
+            logger.error(f"Error fulfilling request: {e}")
+            await interaction.followup.send("❌ An error occurred while fulfilling the request.", ephemeral=True)
+    
+    async def reject_callback(self, interaction: discord.Interaction):
+        """Show modal for rejection reason then reject"""
+        if interaction.user.id != self.admin_id:
+            await interaction.response.send_message("Only admins can use these controls.", ephemeral=True)
+            return
+        
+        current_request = self.requests[self.current_index]
+        
+        class RejectModal(discord.ui.Modal):
+            def __init__(self, view, request_data):
+                super().__init__(title="Reject Request")
+                self.view = view
+                self.request_data = request_data
+                
+                self.reason = discord.ui.InputText(
+                    label="Rejection Reason",
+                    placeholder="Enter reason for rejection (optional)",
+                    style=discord.InputTextStyle.long,
+                    required=False,
+                    max_length=500
+                )
+                self.add_item(self.reason)
+            
+            async def callback(self, modal_interaction: discord.Interaction):
+                await modal_interaction.response.defer()
+                
+                request_id = self.request_data[0]
+                reason = self.reason.value or None
+                
+                try:
+                    db_path = Path('data') / 'requests.db'
+                    async with aiosqlite.connect(str(db_path)) as db:
+                        await db.execute(
+                            """
+                            UPDATE requests 
+                            SET status = 'reject', 
+                                fulfilled_by = ?, 
+                                fulfiller_name = ?, 
+                                notes = ?,
+                                updated_at = CURRENT_TIMESTAMP 
+                            WHERE id = ?
+                            """,
+                            (modal_interaction.user.id, str(modal_interaction.user), reason, request_id)
+                        )
+                        await db.commit()
+                        
+                        # Notify user
+                        try:
+                            user = await self.view.bot.fetch_user(self.request_data[1])
+                            message = f"❌ Your request for '{self.request_data[4]}' has been rejected."
+                            if reason:
+                                message += f"\nReason: {reason}"
+                            await user.send(message)
+                        except:
+                            logger.warning(f"Could not DM user {self.request_data[1]}")
+                    
+                    # Update the request in our list
+                    updated_request = list(self.request_data)
+                    updated_request[6] = 'reject'
+                    updated_request[9] = modal_interaction.user.id
+                    updated_request[10] = str(modal_interaction.user)
+                    updated_request[11] = reason
+                    self.view.requests[self.view.current_index] = tuple(updated_request)
+                    
+                    # Update view
+                    self.view.update_button_states()
+                    embed = self.view.create_request_embed(self.view.requests[self.view.current_index])
+                    await modal_interaction.followup.edit_message(
+                        message_id=self.view.message.id, 
+                        embed=embed, 
+                        view=self.view
+                    )
+                    
+                except Exception as e:
+                    logger.error(f"Error rejecting request: {e}")
+                    await modal_interaction.followup.send(
+                        "❌ An error occurred while rejecting the request.", 
+                        ephemeral=True
+                    )
+        
+        modal = RejectModal(self, current_request)
+        await interaction.response.send_modal(modal)
+    
+    async def note_callback(self, interaction: discord.Interaction):
+        """Add a note to the current request"""
+        if interaction.user.id != self.admin_id:
+            await interaction.response.send_message("Only admins can use these controls.", ephemeral=True)
+            return
+        
+        current_request = self.requests[self.current_index]
+        
+        class NoteModal(discord.ui.Modal):
+            def __init__(self, view, request_data):
+                super().__init__(title="Add Note to Request")
+                self.view = view
+                self.request_data = request_data
+                
+                # Show current note if exists
+                current_note = request_data[11] or ""
+                self.note = discord.ui.InputText(
+                    label="Note",
+                    placeholder="Enter note for this request",
+                    style=discord.InputTextStyle.long,
+                    required=True,
+                    max_length=500,
+                    value=current_note
+                )
+                self.add_item(self.note)
+            
+            async def callback(self, modal_interaction: discord.Interaction):
+                await modal_interaction.response.defer()
+                
+                request_id = self.request_data[0]
+                note = self.note.value
+                
+                try:
+                    db_path = Path('data') / 'requests.db'
+                    async with aiosqlite.connect(str(db_path)) as db:
+                        await db.execute(
+                            "UPDATE requests SET notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                            (note, request_id)
+                        )
+                        await db.commit()
+                    
+                    # Update the request in our list
+                    updated_request = list(self.request_data)
+                    updated_request[11] = note
+                    self.view.requests[self.view.current_index] = tuple(updated_request)
+                    
+                    # Update view
+                    embed = self.view.create_request_embed(self.view.requests[self.view.current_index])
+                    await modal_interaction.followup.edit_message(
+                        message_id=self.view.message.id,
+                        embed=embed,
+                        view=self.view
+                    )
+                    
+                except Exception as e:
+                    logger.error(f"Error adding note: {e}")
+                    await modal_interaction.followup.send(
+                        "❌ An error occurred while adding the note.",
+                        ephemeral=True
+                    )
+        
+        modal = NoteModal(self, current_request)
+        await interaction.response.send_modal(modal)
+    
+    async def refresh_callback(self, interaction: discord.Interaction):
+        """Refresh the requests list from database"""
+        if interaction.user.id != self.admin_id:
+            await interaction.response.send_message("Only admins can use these controls.", ephemeral=True)
+            return
+        
+        await interaction.response.defer()
+        
+        try:
+            db_path = Path('data') / 'requests.db'
+            async with aiosqlite.connect(str(db_path)) as db:
+                cursor = await db.execute(
+                    "SELECT * FROM requests ORDER BY created_at DESC"
+                )
+                self.requests = await cursor.fetchall()
+            
+            # Reset to first page if current index is out of bounds
+            if self.current_index >= len(self.requests):
+                self.current_index = 0
+            
+            self.update_button_states()
+            
+            if self.requests:
+                embed = self.create_request_embed(self.requests[self.current_index])
+                await interaction.followup.edit_message(
+                    message_id=self.message.id,
+                    content=None,
+                    embed=embed,
+                    view=self
+                )
+            else:
+                embed = discord.Embed(
+                    title="No Requests",
+                    description="There are currently no requests in the system.",
+                    color=discord.Color.light_grey()
+                )
+                await interaction.followup.edit_message(
+                    message_id=self.message.id,
+                    content=None,
+                    embed=embed,
+                    view=self
+                )
+                
+        except Exception as e:
+            logger.error(f"Error refreshing requests: {e}")
+            await interaction.followup.send(
+                "❌ An error occurred while refreshing the requests.",
+                ephemeral=True
+            )
+
 class VariantRequestModal(discord.ui.Modal):
     def __init__(self, bot, platform_name, game_name, original_details, igdb_matches, ctx_or_interaction, author_id=None):
         super().__init__(title="Request Different Version")
@@ -1149,241 +1686,112 @@ class Request(commands.Cog):
             logger.error(f"Error fetching requests: {e}")
             await ctx.respond("❌ An error occurred while fetching your requests.", ephemeral=True)
 
-    @discord.slash_command(name="cancel_request", description="Cancel one of your pending requests")
-    async def cancel_request(
-        self,
-        ctx: discord.ApplicationContext,
-        request_id: discord.Option(int, "ID of the request to cancel", required=True)
-    ):
-        """Cancel a pending request"""
-        await ctx.defer()
+    #@discord.slash_command(name="cancel_request", description="Cancel one of your pending requests")
+    #async def cancel_request(
+    #    self,
+    #    ctx: discord.ApplicationContext,
+    #    request_id: discord.Option(int, "ID of the request to cancel", required=True)
+    #):
+    #    """Cancel a pending request"""
+    #   await ctx.defer()
 
-        try:
-            async with aiosqlite.connect(self.db_path) as db:
-                # Verify request exists and belongs to user
-                cursor = await db.execute(
-                    "SELECT status FROM requests WHERE id = ? AND user_id = ?",
-                    (request_id, ctx.author.id)
-                )
-                result = await cursor.fetchone()
+    #    try:
+    #        async with aiosqlite.connect(self.db_path) as db:
+    #            # Verify request exists and belongs to user
+    #            cursor = await db.execute(
+    #                "SELECT status FROM requests WHERE id = ? AND user_id = ?",
+    #                (request_id, ctx.author.id)
+    #            )
+    #            result = await cursor.fetchone()
 
-                if not result:
-                    await ctx.respond("❌ Request not found or you don't have permission to cancel it.")
-                    return
+    #            if not result:
+    #                await ctx.respond("❌ Request not found or you don't have permission to cancel it.")
+    #                return
+    #
+    #            if result[0] != 'pending':
+    #                await ctx.respond("❌ Only pending requests can be cancelled.")
+    #                return
 
-                if result[0] != 'pending':
-                    await ctx.respond("❌ Only pending requests can be cancelled.")
-                    return
+    #            # Cancel the request
+    #            await db.execute(
+    #                "UPDATE requests SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    #                (request_id,)
+    #            )
+    #            await db.commit()
+    #
+    #            await ctx.respond(f"✅ Request #{request_id} has been cancelled.")
+    #
+    #    except Exception as e:
+    #        logger.error(f"Error cancelling request: {e}")
+    #        await ctx.respond("❌ An error occurred while cancelling the request.")
 
-                # Cancel the request
-                await db.execute(
-                    "UPDATE requests SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (request_id,)
-                )
-                await db.commit()
-
-                await ctx.respond(f"✅ Request #{request_id} has been cancelled.")
-
-        except Exception as e:
-            logger.error(f"Error cancelling request: {e}")
-            await ctx.respond("❌ An error occurred while cancelling the request.")
-
-    @discord.slash_command(name="request_admin", description="Admin commands for managing requests")
+    @discord.slash_command(name="request_admin", description="Admin interface for managing ROM requests")
     @is_admin()
     async def request_admin(
         self,
         ctx: discord.ApplicationContext,
-        action: discord.Option(
-            str,
-            "Action to perform",
-            required=True,
-            choices=["list", "fulfill", "reject", "addnote"]
-        ),
-        request_id: discord.Option(int, "ID of the request", required=False),
-        note: discord.Option(str, "Note or comment to add", required=False)
+        show_all: discord.Option(
+            bool,
+            "Show all requests instead of just pending ones",
+            required=False,
+            default=False
+        )
     ):
-        """Admin commands for managing requests"""
-        await ctx.defer()
+        """Admin interface for managing requests - shows pending by default"""
+        await ctx.defer(ephemeral=True)
 
         try:
             async with aiosqlite.connect(self.db_path) as db:
-                if action == "list":
+                # Fetch requests based on show_all parameter
+                if show_all:
+                    cursor = await db.execute(
+                        "SELECT * FROM requests ORDER BY created_at DESC"
+                    )
+                    viewing_mode = "all"
+                else:
                     cursor = await db.execute(
                         "SELECT * FROM requests WHERE status = 'pending' ORDER BY created_at ASC"
                     )
-                    requests = await cursor.fetchall()
+                    viewing_mode = "pending"
+                
+                requests = await cursor.fetchall()
 
-                    if not requests:
-                        await ctx.respond("No pending requests.")
-                        return
-
-                    embeds = []
-                    for req in requests:
-                        # Parse the details field to extract IGDB metadata if it exists
-                        details = req[5] if req[5] else ""
-                        game_data = {}
-                        cover_url = None
-                        igdb_name = req[4]  # Default to requested game name
-
-                        if "IGDB Metadata:" in details:
-                            # Extract IGDB metadata from details
-                            try:
-                                metadata_lines = details.split("IGDB Metadata:\n")[1].split("\n")
-                                for line in metadata_lines:
-                                    if ": " in line:
-                                        key, value = line.split(": ", 1)
-                                        game_data[key] = value
-                                        if key == "Game":
-                                            igdb_name = value.split(" (", 1)[0]  # Remove any parentheses part
-
-                                # Look for cover URL in the whole details text
-                                cover_matches = re.findall(r'cover_url:\s*(https://[^\s]+)', details)
-                                if cover_matches:
-                                    cover_url = cover_matches[0]
-                            except Exception as e:
-                                logger.error(f"Error parsing metadata: {e}")
-
+                if not requests:
+                    if show_all:
+                        await ctx.respond("📭 No requests found in the system.", ephemeral=True)
+                    else:
                         embed = discord.Embed(
-                            title=igdb_name,
-                            color=discord.Color.blue(),
-                            timestamp=datetime.fromisoformat(req[7].replace('Z', '+00:00'))
+                            title="No Pending Requests",
+                            description="There are currently no pending requests.\n\nUse `/request_admin show_all:True` to view all requests including fulfilled and rejected ones.",
+                            color=discord.Color.green()
                         )
+                        embed.set_footer(text="All requests have been processed!")
+                        await ctx.respond(embed=embed)
+                    return
 
-                        # Set IGDB logo as thumbnail and cover as main image if available
-                        if cover_url:
-                            embed.set_image(url=cover_url)
-                        else:
-                            embed.set_thumbnail(url="https://www.igdb.com/packs/static/igdbLogo-bcd49db90003ee7cd4f4.svg")
-
-                        # Platform field
-                        embed.add_field(
-                            name="Platform",
-                            value=req[3],  # platform
-                            inline=True
-                        )
-
-                        # Genre field if available
-                        if "Genres" in game_data:
-                            genres = game_data["Genres"].split(", ")[:2]
-                            embed.add_field(
-                                name="Genre",
-                                value=", ".join(genres),
-                                inline=True
-                            )
-
-                        # Release Date if available
-                        if "Release Date" in game_data:
-                            try:
-                                date_obj = datetime.strptime(game_data["Release Date"], "%Y-%m-%d")
-                                formatted_date = date_obj.strftime("%B %d, %Y")
-                            except:
-                                formatted_date = game_data["Release Date"]
-                            embed.add_field(
-                                name="Release Date",
-                                value=formatted_date,
-                                inline=True
-                            )
-
-                        # Summary if available
-                        if "Summary" in game_data:
-                            summary = game_data["Summary"]
-                            if len(summary) > 300:
-                                summary = summary[:297] + "..."
-                            embed.add_field(
-                                name="Summary",
-                                value=summary,
-                                inline=False
-                            )
-
-                        # Companies if available
-                        companies = []
-                        if "Developers" in game_data:
-                            developers = game_data["Developers"].split(", ")[:2]
-                            companies.extend(developers)
-                        if "Publishers" in game_data:
-                            publishers = game_data["Publishers"].split(", ")
-                            remaining_slots = 2 - len(companies)
-                            if remaining_slots > 0:
-                                companies.extend(publishers[:remaining_slots])
-
-                        if companies:
-                            embed.add_field(
-                                name="Companies",
-                                value=", ".join(companies),
-                                inline=True
-                            )
-
-                        # Links section (IGDB)
-                        igdb_link_name = igdb_name.lower().replace(' ', '-')
-                        igdb_link_name = re.sub(r'[^a-z0-9-]', '', igdb_link_name)
-                        igdb_url = f"https://www.igdb.com/games/{igdb_link_name}"
-                        embed.add_field(
-                            name="Links",
-                            value=f"[IGDB]({igdb_url})",
-                            inline=True
-                        )
-
-                        # Request information at the bottom
-                        embed.set_footer(text=f"Request #{req[0]} • Requested by {req[2]}")
-
-                        embeds.append(embed)
-
-                    # Send embeds (Discord has a limit of 10 embeds per message)
-                    for i in range(0, len(embeds), 10):
-                        if i == 0:
-                            await ctx.respond(embeds=embeds[i:i+10])
-                        else:
-                            await ctx.channel.send(embeds=embeds[i:i+10])
-
-                elif action in ["fulfill", "reject"]:
-                    if not request_id:
-                        await ctx.respond("❌ Request ID is required for this action.")
-                        return
-
-                    # Update request status
-                    await db.execute(
-                        """
-                        UPDATE requests 
-                        SET status = ?, fulfilled_by = ?, fulfiller_name = ?, updated_at = CURRENT_TIMESTAMP, notes = ?
-                        WHERE id = ?
-                        """,
-                        (action, ctx.author.id, str(ctx.author), note, request_id)
-                    )
-                    await db.commit()
-
-                    # Fetch request details to notify user
-                    cursor = await db.execute("SELECT user_id, game_name FROM requests WHERE id = ?", (request_id,))
-                    req = await cursor.fetchone()
-                    
-                    if req:
-                        try:
-                            user = await self.bot.fetch_user(req[0])
-                            if action == "fulfill":
-                                await user.send(f"✅ Your request for '{req[1]}' has been fulfilled!")
-                            else:
-                                await user.send(f"❌ Your request for '{req[1]}' has been rejected." + 
-                                              (f"\nReason: {note}" if note else ""))
-                        except:
-                            logger.warning(f"Could not DM user {req[0]}")
-
-                    await ctx.respond(f"✅ Request #{request_id} has been marked as {action}ed.")
-
-                elif action == "addnote":
-                    if not request_id or not note:
-                        await ctx.respond("❌ Both request ID and note are required for this action.")
-                        return
-
-                    await db.execute(
-                        "UPDATE requests SET notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                        (note, request_id)
-                    )
-                    await db.commit()
-
-                    await ctx.respond(f"✅ Note added to request #{request_id}.")
+                # Create paginated view
+                view = RequestAdminView(self.bot, requests, ctx.author.id)
+                embed = view.create_request_embed(requests[0])
+                
+                # Add viewing mode indicator to the message
+                mode_text = "📋 **Viewing: All Requests**" if show_all else "⏳ **Viewing: Pending Requests Only**"
+                hint_text = "\n *Use `/request_admin show_all:True` to see all requests*" if not show_all else ""
+                
+                message = await ctx.respond(
+                    content=f"{mode_text}",
+                    embed=embed, 
+                    view=view
+                )
+                
+                # Store message reference for editing
+                if isinstance(message, discord.Interaction):
+                    view.message = await message.original_response()
+                else:
+                    view.message = message
 
         except Exception as e:
             logger.error(f"Error in request admin command: {e}")
-            await ctx.respond("❌ An error occurred while processing the command.")
+            await ctx.respond("❌ An error occurred while loading the requests interface.", ephemeral=True)
 
 def setup(bot):
     bot.add_cog(Request(bot))
