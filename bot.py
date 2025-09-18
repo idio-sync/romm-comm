@@ -69,6 +69,7 @@ class Config:
         self.TOKEN = os.getenv('TOKEN')
         self.GUILD_ID = os.getenv('GUILD')
         self.CHANNEL_ID = os.getenv('CHANNEL_ID')
+        self.ADMIN_ID = os.getenv('ADMIN_ID')
         self.API_BASE_URL = os.getenv('API_URL', '').rstrip('/')
         self.DOMAIN = os.getenv('DOMAIN', 'No website configured')
         self.SYNC_RATE = int(os.getenv('SYNC_RATE', 3600)) # 1 hour default
