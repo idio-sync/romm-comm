@@ -206,7 +206,7 @@ Trigger RomM library scan. Options are:
 ### Requests
 - /request - Submit a new request
 - /my_requests - View your requests
-- /request_admin - Admin commands (list/fulfill/reject/addnote)
+- /request_admin - Admin commands (fulfill/reject/add note)
 
 ![Request](.github/screenshots/RequestSubmitted.png)
 
@@ -291,6 +291,7 @@ The bot includes comprehensive error handling and logging:
 - Check API connectivity to RomM
 - Check logs for error messages, I tried to meticulously report errors
 - Verify configuration settings in the env
+
 
 
 
