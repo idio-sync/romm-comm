@@ -271,26 +271,38 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 ## Gallery
 
 ### Platform & Search
-![Platforms](.github/screenshots/SlashPlatforms.png)
-![Search Results](.github/screenshots/SingleFile.png)
+<p align="center">
+  <img src=".github/screenshots/SlashPlatforms.png" width="45%">
+  <img src=".github/screenshots/SingleFile.png" width="45%">
+</p>
 
 ### Random & Firmware
-![Random Search](.github/screenshots/BotStatus.png)
-![Firmware](.github/screenshots/SlashFirmware.png)
+<p align="center">
+  <img src=".github/screenshots/BotStatus.png" width="45%">
+  <img src=".github/screenshots/SlashFirmware.png" width="45%">
+</p>
 
 ### Scans
-![Scan Status](.github/screenshots/SlashScanStatus.png)
+<p align="center">
+  <img src=".github/screenshots/SlashScanStatus.png" width="60%">
+</p>
 
 ### Requests
-![Request Submitted](.github/screenshots/RequestSubmitted.png)
-![Request Fulfilled](.github/screenshots/RequestFulfilledDM.png)
+<p align="center">
+  <img src=".github/screenshots/RequestSubmitted.png" width="45%">
+  <img src=".github/screenshots/RequestFulfilledDM.png" width="45%">
+</p>
 
 ### User Manager
-![User Manager Messages](.github/screenshots/UserManagerMessages.png)
-![User Notification](.github/screenshots/UserNotification.png)
+<p align="center">
+  <img src=".github/screenshots/UserManagerMessages.png" width="45%">
+  <img src=".github/screenshots/UserNotification.png" width="45%">
+</p>
 
 ### Emojis & Nitro Support
-![Nitro Emojis](.github/screenshots/Nitro.png)
+<p align="center">
+  <img src=".github/screenshots/Nitro.png" width="60%">
+</p>
 
 ---
 
@@ -299,4 +311,5 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
