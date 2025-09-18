@@ -207,7 +207,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 
 ---
 
-## Requests (detailed)
+## Requests System
 
 **User features:**
 - Submit requests with platform, game name, and optional details.
@@ -299,3 +299,4 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
