@@ -26,8 +26,6 @@ A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) A
 - [Security](#security)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
-- [License](#license)
-- [Gallery](#gallery)
 
 ---
 
@@ -205,9 +203,9 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 - `/search [platform] [game]` — Search ROMs with interactive results and optional QR code for console installs.
 - `/random [platform]` — Fetch a random ROM (platform optional).
 - `/firmware [platform]` — List firmware files with hash details and download links.
-- `/scan [option]` — Run or check scans: `full`, `platform`, `stop`, `status`, `unidentified`, `hashes`, `new_platforms`, `partial`, `summary`.
+- `/scan [option]` — Run or check scans (admin only): `full`, `platform`, `stop`, `status`, `unidentified`, `hashes`, `new_platforms`, `partial`, `summary`.
 - `/request`, `/my_requests`, `/request_admin` — Submit, view, and manage requests.
-- `/sync_users` — Admin-only user sync.
+- `/sync_users` — Romm > Discord user sync (admin only).
 
 ---
 
@@ -258,7 +256,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 - Uses OAuth2 bearer tokens for RomM API.
 - Secrets configured in environment variables.
 - No password logging.
-- Strict permission checks.
+- Strict permission checks for admin commands.
 
 ---
 
@@ -277,6 +275,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
