@@ -230,13 +230,13 @@ Trigger RomM library scan. Options are:
 
 ![Request](.github/screenshots/RequestSubmitted.png)
 
-<img width="350" height="881" alt="490832758-744767e4-b722-4af4-8072-9acd6fa35a52" src="https://github.com/user-attachments/assets/b9f6de4a-674b-4878-bf07-1ed4fa71a5ff" />
+<img width="400" height="881" alt="490832758-744767e4-b722-4af4-8072-9acd6fa35a52" src="https://github.com/user-attachments/assets/b9f6de4a-674b-4878-bf07-1ed4fa71a5ff" />
 <br/>
-<img width="350" height="603" alt="image" src="https://github.com/user-attachments/assets/61f3a78f-13aa-443a-a49b-1bd054f0ea6f" />
+<img width="400" height="603" alt="image" src="https://github.com/user-attachments/assets/61f3a78f-13aa-443a-a49b-1bd054f0ea6f" />
+<br/>
+<img width="400" height="283" alt="image" src="https://github.com/user-attachments/assets/513b41fd-080f-4489-887b-e467c7cd50e6" />
 
 ![RrequestFulfulledDM](.github/screenshots/RequestFulfilledDM.png)
-
-<img width="350" height="283" alt="image" src="https://github.com/user-attachments/assets/513b41fd-080f-4489-887b-e467c7cd50e6" />
 
 Request System Features:
 - Users can submit ROM requests with platform, game name, and optional details as text
@@ -312,6 +312,7 @@ The bot includes comprehensive error handling and logging:
 - Check API connectivity to RomM
 - Check logs for error messages, I tried to meticulously report errors
 - Verify configuration settings in the env
+
 
 
 
