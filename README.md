@@ -217,6 +217,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 - Attempts IGDB matching for metadata.
 - Per-user request cap (default: 25).
 - DM notifications when requests are fulfilled or rejected.
+- Requests can be filled automatically during Romm filesystem scan or manually by admin
 
 **Admin features:**
 - View, filter, and manage pending requests.
@@ -275,11 +276,3 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
-
-
-
-
-
-
-
-
