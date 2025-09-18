@@ -18,6 +18,15 @@ from urllib.parse import quote
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+def is_admin():
+    """Check if the user is the admin"""
+    async def predicate(ctx: discord.ApplicationContext):
+        admin_id = os.getenv('ADMIN_ID')
+        if not admin_id:
+            return False
+        return str(ctx.author.id) == admin_id
+    return commands.check(predicate)
+
 class VariantRequestModal(discord.ui.Modal):
     def __init__(self, bot, platform_name, game_name, original_details, igdb_matches, ctx_or_interaction, author_id=None):
         super().__init__(title="Request Different Version")
@@ -1179,8 +1188,8 @@ class Request(commands.Cog):
             logger.error(f"Error cancelling request: {e}")
             await ctx.respond("❌ An error occurred while cancelling the request.")
 
-    @commands.has_permissions(administrator=True)
     @discord.slash_command(name="request_admin", description="Admin commands for managing requests")
+    @is_admin()
     async def request_admin(
         self,
         ctx: discord.ApplicationContext,
