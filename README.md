@@ -195,7 +195,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 
 - On first boot or when joining a server, the bot uploads a standard set of custom console emojis (default ~50).
 - If the server has boosted Nitro/extra emoji slots available, the bot can upload an extended emoji set; if Nitro is later removed the bot reverts to the standard list to preserve the most-used emojis.
-- Emojis are used throughout bot responses to visually identify platforms when a matching emoji exists on the server.
+- Emojis are used throughout bot responses to visually identify platforms when a matching emoji exists on the server. The extended emoji set covers less popular consoles as well as variants.
 
 ---
 
@@ -272,49 +272,12 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 
 ---
 
-## Gallery
-
-### Platform & Search
-<p align="center">
-  <img src=".github/screenshots/SlashPlatforms.png" width="45%">
-  <img src=".github/screenshots/SingleFile.png" width="45%">
-</p>
-
-### Random & Firmware
-<p align="center">
-  <img src=".github/screenshots/BotStatus.png" width="45%">
-  <img src=".github/screenshots/SlashFirmware.png" width="45%">
-</p>
-
-### Scans
-<p align="center">
-  <img src=".github/screenshots/SlashScanStatus.png" width="60%">
-</p>
-
-### Requests
-<p align="center">
-  <img src=".github/screenshots/RequestSubmitted.png" width="45%">
-  <img src=".github/screenshots/RequestFulfilledDM.png" width="45%">
-</p>
-
-### User Manager
-<p align="center">
-  <img src=".github/screenshots/UserManagerMessages.png" width="45%">
-  <img src=".github/screenshots/UserNotification.png" width="45%">
-</p>
-
-### Emojis & Nitro Support
-<p align="center">
-  <img src=".github/screenshots/Nitro.png" width="60%">
-</p>
-
----
-
 ## Contributing
 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
