@@ -165,7 +165,7 @@ DASHBOARD_PASSWORD=yourpassword
 - Multiple ROMs that occur within the configured batch window are grouped into a single batched response by platform.
 - Large imports can trigger flood protection; thresholds for maximum listed ROMs and flood limits are adjustable via env vars.
 
-**Note:** Only enable recent-ROM posting on installations where most ROMs are already scanned. Large, long-running imports may overload the bot or cause noisy notifications.
+**Note:** Only enable recent-ROM posting on installations where most ROMs are already scanned in. Fresh, long-running imports may overload the bot or cause noisy notifications, I haven't tested it with a new library.
 
 ---
 
@@ -275,6 +275,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
