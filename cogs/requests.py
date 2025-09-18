@@ -12,10 +12,75 @@ from pathlib import Path
 from .search import Search
 from .igdb_client import IGDBClient
 from collections import defaultdict
+from .search import ROM_View
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+class VariantRequestModal(discord.ui.Modal):
+    def __init__(self, bot, platform_name, game_name, original_details, igdb_matches, ctx_or_interaction, author_id=None):
+        super().__init__(title="Request Different Version")
+        self.bot = bot
+        self.platform_name = platform_name
+        self.game_name = game_name
+        self.original_details = original_details
+        self.igdb_matches = igdb_matches
+        
+        # Handle both ctx and interaction objects
+        if hasattr(ctx_or_interaction, 'author'):
+            # It's a ctx object
+            self.ctx = ctx_or_interaction
+            self.author_id = ctx_or_interaction.author.id
+        else:
+            # It's an interaction object
+            self.ctx = ctx_or_interaction
+            self.author_id = author_id or ctx_or_interaction.user.id
+        
+        # Add text input for variant details
+        self.variant_input = discord.ui.InputText(
+            label="Specify Version",
+            placeholder="e.g., 'English translation patch', 'Kaizo hack', 'PAL region', etc.",
+            style=discord.InputTextStyle.long,
+            required=True,
+            max_length=500
+        )
+        self.add_item(self.variant_input)
+        
+        # Optional additional notes
+        self.notes_input = discord.ui.InputText(
+            label="Additional Notes (Optional)",
+            placeholder="e.g., 'Current ROM broken', 'Update released', etc.",
+            style=discord.InputTextStyle.long,
+            required=False,
+            max_length=500
+        )
+        self.add_item(self.notes_input)
+    
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        
+        # Combine the variant request with original details
+        variant_details = f"Version Request: {self.variant_input.value}"
+        if self.notes_input.value:
+            variant_details += f"\nAdditional Notes: {self.notes_input.value}"
+        
+        if self.original_details:
+            combined_details = f"{self.original_details}\n\n{variant_details}"
+        else:
+            combined_details = variant_details
+        
+        # Get the request cog and continue with the flow
+        request_cog = self.bot.get_cog('Request')
+        if request_cog:
+            await request_cog.continue_request_flow(
+                interaction,
+                self.platform_name, 
+                self.game_name, 
+                combined_details, 
+                self.igdb_matches
+            )
+            
 class GameSelect(discord.ui.Select):
     def __init__(self, matches):
         options = []
@@ -52,14 +117,22 @@ class GameSelectView(discord.ui.View):
         self.matches = matches
         self.selected_game = None
         self.message = None
-        self.submit_button = None
         self.platform_name = platform_name
         
-        # Add select menu
+        # Add select menu (row 1)
         self.select_menu = GameSelect(matches)
         self.add_item(self.select_menu)
         
-        # Add "Not Listed" button
+        # Add "Submit Request" button first (row 2) - disabled initially
+        self.submit_button = discord.ui.Button(
+            label="Submit Request",
+            style=discord.ButtonStyle.success,
+            row=2,
+            disabled=True  # Disabled until a game is selected
+        )
+        self.add_item(self.submit_button)
+        
+        # Add "Not Listed" button second (row 2)
         not_listed_button = discord.ui.Button(
             label="Not Listed",
             style=discord.ButtonStyle.secondary,
@@ -75,6 +148,7 @@ class GameSelectView(discord.ui.View):
         self.add_item(not_listed_button)
 
     def create_game_embed(self, game):
+        """Create an embed for the selected game"""
         embed = discord.Embed(
             title=f"{game['name']}",
             color=discord.Color.green()
@@ -161,37 +235,209 @@ class GameSelectView(discord.ui.View):
         self.selected_game = game  # Store the selected game
         embed = self.create_game_embed(game)
         
-        # Add submit button if not already present
-        if not self.submit_button:
-            self.submit_button = discord.ui.Button(
-                label="Submit Request",
-                style=discord.ButtonStyle.success,
-                row=3
-            )
+        # Enable the submit button and set its callback
+        self.submit_button.disabled = False
+        
+        async def submit_callback(interaction: discord.Interaction):
+            await interaction.response.defer()
             
-            async def submit_callback(interaction: discord.Interaction):
-                await interaction.response.defer()
-                
-                # Update button appearance
-                self.submit_button.label = "Request Submitted"
-                self.submit_button.disabled = True
-                self.submit_button.style = discord.ButtonStyle.secondary
-                
-                # Remove select menu and Not Listed button
-                for item in self.children[:]:
-                    if isinstance(item, (discord.ui.Select, discord.ui.Button)) and item != self.submit_button:
-                        self.remove_item(item)
-                
-                # Update the message with the modified view
-                await self.message.edit(view=self)
-                
-                # Stop the view
-                self.stop()
+            # Update button appearance
+            self.submit_button.label = "Request Submitted"
+            self.submit_button.disabled = True
+            self.submit_button.style = discord.ButtonStyle.secondary
             
-            self.submit_button.callback = submit_callback
-            self.add_item(self.submit_button)
+            # Remove select menu and Not Listed button
+            for item in self.children[:]:
+                if isinstance(item, (discord.ui.Select, discord.ui.Button)) and item != self.submit_button:
+                    self.remove_item(item)
+            
+            # Update the message with the modified view
+            await self.message.edit(view=self)
+            
+            # Stop the view
+            self.stop()
+        
+        self.submit_button.callback = submit_callback
         
         await self.message.edit(embed=embed, view=self)
+
+class ExistingGameView(discord.ui.View):
+    """View for when requested games already exist in the collection"""
+    
+    def __init__(self, bot, matches, platform_name, game_name, author_id):
+        super().__init__()
+        self.bot = bot
+        self.matches = matches
+        self.platform_name = platform_name
+        self.game_name = game_name
+        self.author_id = author_id
+        self.selected_rom = None
+        self.action = None  # 'download' or 'request_different'
+        self.message = None  # Store the message reference
+        
+        # If we have multiple matches, add a select menu
+        if len(matches) > 1:
+            self.select = discord.ui.Select(
+                placeholder="Select game to view/download",
+                custom_id="existing_game_select"
+            )
+            
+            for rom in matches[:25]:
+                display_name = rom['name'][:75] if len(rom['name']) > 75 else rom['name']
+                file_name = rom.get('fs_name', 'Unknown filename')
+                truncated_filename = (file_name[:47] + '...') if len(file_name) > 50 else file_name
+                
+                self.select.add_option(
+                    label=display_name,
+                    value=str(rom['id']),
+                    description=truncated_filename
+                )
+            
+            self.select.callback = self.select_callback
+            self.add_item(self.select)
+        
+        # Add "Request Different Version" button
+        request_different = discord.ui.Button(
+            label="Request Different Version",
+            style=discord.ButtonStyle.primary,
+            row=1
+        )
+        request_different.callback = self.request_different_callback
+        self.add_item(request_different)
+        
+        # Add "Cancel" button
+        cancel_button = discord.ui.Button(
+            label="Cancel",
+            style=discord.ButtonStyle.secondary,
+            row=1
+        )
+        cancel_button.callback = self.cancel_callback
+        self.add_item(cancel_button)
+        
+        # If single match, show full ROM view immediately
+        if len(matches) == 1:
+            self.selected_rom = matches[0]
+    
+    async def create_full_rom_view(self, rom_data):
+        """Create a full ROM view similar to search results"""
+        from .search import ROM_View
+        
+        # Fetch detailed ROM data if not already fetched
+        try:
+            if 'igdb' not in rom_data:  # Check if we have full details
+                detailed_rom = await self.bot.fetch_api_endpoint(f'roms/{rom_data["id"]}')
+                if detailed_rom:
+                    rom_data.update(detailed_rom)
+        except Exception as e:
+            logger.error(f"Error fetching detailed ROM data: {e}")
+        
+        # Create ROM_View instance to use its embed creation
+        rom_view = ROM_View(self.bot, [rom_data], self.author_id, self.platform_name)
+        rom_embed = await rom_view.create_rom_embed(rom_data)
+        
+        # Update the view to include file selection if available
+        await rom_view.update_file_select(rom_data)
+        
+        # Copy over the file select dropdown if it exists
+        file_select = None
+        for item in rom_view.children:
+            if isinstance(item, discord.ui.Select) and item.custom_id == "rom_file_select":
+                file_select = item
+                break
+        
+        # Determine which row to use for buttons
+        button_row = 2 if file_select else 1
+        
+        # Clear current items and rebuild view
+        self.clear_items()
+        
+        # Re-add the game select if we have multiple matches
+        if len(self.matches) > 1:
+            self.add_item(self.select)
+        
+        # Add file select if available
+        if file_select:
+            self.add_item(file_select)
+        
+        # Add all three buttons on the same row
+        # Add download button(s)
+        for item in rom_view.children:
+            if isinstance(item, discord.ui.Button) and "Download" in item.label:
+                item.row = button_row
+                self.add_item(item)
+                break
+        
+        # Re-add "Request Different Version" and "Cancel" buttons
+        request_different = discord.ui.Button(
+            label="Request Different Version",
+            style=discord.ButtonStyle.primary,
+            row=button_row  # Same row as download button
+        )
+        request_different.callback = self.request_different_callback
+        self.add_item(request_different)
+        
+        # Add "Cancel" button
+        cancel_button = discord.ui.Button(
+            label="Cancel",
+            style=discord.ButtonStyle.secondary,
+            row=button_row  # Same row as other buttons
+        )
+        cancel_button.callback = self.cancel_callback
+        self.add_item(cancel_button)
+        
+        return rom_embed
+    
+    async def select_callback(self, interaction: discord.Interaction):
+        """Handle ROM selection"""
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This isn't for you!", ephemeral=True)
+            return
+        
+        selected_rom_id = int(interaction.data['values'][0])
+        self.selected_rom = next((rom for rom in self.matches if rom['id'] == selected_rom_id), None)
+        
+        if self.selected_rom:
+            # Create full ROM embed
+            rom_embed = await self.create_full_rom_view(self.selected_rom)
+            
+            # Edit the message with new embed and updated view
+            await interaction.response.edit_message(
+                content="✅ **This game is already available! You can download it now:**",
+                embed=rom_embed,
+                view=self
+            )
+    
+    async def request_different_callback(self, interaction: discord.Interaction):
+        """User wants to request a different version - show modal"""
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This isn't for you!", ephemeral=True)
+            return
+        
+        # Show modal for variant input
+        modal = VariantRequestModal(
+            self.bot,
+            self.platform_name,
+            self.game_name,
+            None,  # No original details from this flow
+            [],    # No IGDB matches needed here
+            interaction  # Pass the interaction as context
+        )
+        await interaction.response.send_modal(modal)
+        self.stop()
+    
+    async def cancel_callback(self, interaction: discord.Interaction):
+        """Cancel the request"""
+        self.action = "cancel"
+        self.clear_items()
+        cancelled_button = discord.ui.Button(
+            label="Cancelled",
+            style=discord.ButtonStyle.secondary,
+            disabled=True
+        )
+        self.add_item(cancelled_button)
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
 
 class Request(commands.Cog):
     def __init__(self, bot):
@@ -458,18 +704,38 @@ class Request(commands.Cog):
             logger.error(f"Error checking pending requests: {e}")
             return []
 
-    async def process_request(self, ctx, platform_name, game, details, selected_game, message):
+    async def process_request(self, ctx_or_interaction, platform_name, game, details, selected_game, message):
         """Process and save the request"""
         try:
+            # Handle both ctx and interaction objects
+            if hasattr(ctx_or_interaction, 'user'):
+                # It's an interaction
+                author = ctx_or_interaction.user
+                author_name = str(ctx_or_interaction.user)
+                
+                # For responding, we need to check if it's already deferred
+                async def respond(content=None, embed=None, embeds=None):
+                    try:
+                        return await ctx_or_interaction.followup.send(content=content, embed=embed, embeds=embeds)
+                    except:
+                        return await ctx_or_interaction.response.send_message(content=content, embed=embed, embeds=embeds)
+            else:
+                # It's a ctx
+                author = ctx_or_interaction.author
+                author_name = str(ctx_or_interaction.author)
+                
+                async def respond(content=None, embed=None, embeds=None):
+                    return await ctx_or_interaction.respond(content=content, embed=embed, embeds=embeds)
+            
             async with aiosqlite.connect(str(self.db_path)) as db:
                 cursor = await db.execute(
                     "SELECT COUNT(*) FROM requests WHERE user_id = ? AND status = 'pending'",
-                    (ctx.author.id,)
+                    (author.id,)
                 )
                 pending_count = (await cursor.fetchone())[0]
 
-                if pending_count >= 5:
-                    await ctx.respond("❌ You already have 5 pending requests. Please wait for them to be fulfilled or cancel some.")
+                if pending_count >= 10:
+                    await respond(content="❌ You already have 10 pending requests. Please wait for them to be fulfilled or cancel some.")
                     return
 
                 # Add IGDB metadata to details if available
@@ -503,14 +769,14 @@ class Request(commands.Cog):
                     INSERT INTO requests (user_id, username, platform, game_name, details)
                     VALUES (?, ?, ?, ?, ?)
                     """,
-                    (ctx.author.id, str(ctx.author), platform_name, game, details)
+                    (author.id, author_name, platform_name, game, details)
                 )
                 await db.commit()
 
                 if message and selected_game:
-                    view = GameSelectView(matches=[selected_game], platform_name=platform_name)  # Use keyword arguments
+                    view = GameSelectView(matches=[selected_game], platform_name=platform_name)
                     embed = view.create_game_embed(selected_game)
-                    embed.set_footer(text=f"Request submitted by {ctx.author}")
+                    embed.set_footer(text=f"Request submitted by {author_name}")
                     await message.edit(embed=embed)
                 else:
                     # Create basic embed for manual submissions
@@ -521,13 +787,44 @@ class Request(commands.Cog):
                     embed.add_field(name="Platform", value=platform_name, inline=True)
                     if details:
                         embed.add_field(name="Details", value=details[:1024], inline=False)
-                    embed.set_footer(text=f"Request submitted by {ctx.author}")
-                    await ctx.respond(embed=embed)
+                    embed.set_footer(text=f"Request submitted by {author_name}")
+                    await respond(embed=embed)
 
         except Exception as e:
             logger.error(f"Error processing request: {e}")
-            await ctx.respond("❌ An error occurred while processing the request.")
-             
+            try:
+                await respond(content="❌ An error occurred while processing the request.")
+            except:
+                logger.error("Could not send error message to user")
+    
+    async def continue_request_flow(self, ctx, platform_display_name, game, details, igdb_matches):
+        """Continue with the request flow when user wants different version"""
+        
+        if igdb_matches:
+            # Show IGDB selection
+            select_view = GameSelectView(igdb_matches, platform_display_name)
+            initial_embed = select_view.create_game_embed(igdb_matches[0])
+            select_view.message = await ctx.followup.send(
+                "Please select the correct game from the list below:",
+                embed=initial_embed,
+                view=select_view
+            )
+            
+            await select_view.wait()
+            
+            if not select_view.selected_game:
+                # Timeout
+                return
+            elif select_view.selected_game == "manual":
+                selected_game = None
+            else:
+                selected_game = select_view.selected_game
+                await self.process_request(ctx, platform_display_name, game, details, selected_game, select_view.message)
+                return
+        
+        # Process manual request
+        await self.process_request(ctx, platform_display_name, game, details, None, None)
+    
     @discord.slash_command(name="request", description="Submit a ROM request")
     async def request(
         self,
@@ -592,100 +889,168 @@ class Request(commands.Cog):
                     # Continue without IGDB data if there's an error
             
             if exists:
+                # Create embed showing games found
                 embed = discord.Embed(
-                    title="Similar Games Found",
-                    description="These games appear to be already in our collection:",
+                    title="Similar Games Found in Collection",
+                    description=f"Found {len(matches)} game(s) matching '{game}' that are already available:",
                     color=discord.Color.blue()
                 )
-                
-                for rom in matches:
-                    embed.add_field(
-                        name=rom.get('name', 'Unknown'),
-                        value=f"File: {rom.get('fs_name', 'Unknown')}\n",
-                        inline=False
-                    )
-
-                # If we have IGDB matches, check if they confirm it's the same game
-                if igdb_matches:
-                    # Find the best matching IGDB game
-                    best_match = None
-                    best_match_score = 0
-                    requested_game_lower = game.lower()
+                                
+                # For single match, show ROM_View directly
+                if len(matches) == 1:
+                    # Fetch full ROM details
+                    rom_data = matches[0]
+                    try:
+                        detailed_rom = await self.bot.fetch_api_endpoint(f'roms/{rom_data["id"]}')
+                        if detailed_rom:
+                            rom_data.update(detailed_rom)
+                    except Exception as e:
+                        logger.error(f"Error fetching ROM details: {e}")
                     
-                    for igdb_game in igdb_matches:
-                        # Check main name
-                        if self.calculate_similarity(requested_game_lower, igdb_game['name'].lower()) > best_match_score:
-                            best_match = igdb_game
-                            best_match_score = self.calculate_similarity(requested_game_lower, igdb_game['name'].lower())
+                    # Create ROM_View for immediate download access
+                    rom_view = ROM_View(self.bot, [rom_data], ctx.author.id, platform_display_name)
+                    rom_view.remove_item(rom_view.select)  # Remove selection since single item
+                    rom_view._selected_rom = rom_data
+                    
+                    # Create embed using ROM_View's method
+                    rom_embed = await rom_view.create_rom_embed(rom_data)
+                    await rom_view.update_file_select(rom_data)
+                    
+                    # Collect all download buttons and file select
+                    download_buttons = []
+                    file_select = None
+                    items_to_remove = []
+                    
+                    for item in rom_view.children[:]:  # Use slice to avoid modification during iteration
+                        if isinstance(item, discord.ui.Button) and "Download" in item.label:
+                            download_buttons.append(item)
+                            items_to_remove.append(item)
+                        elif isinstance(item, discord.ui.Select) and item.custom_id == "rom_file_select":
+                            file_select = item
+                    
+                    # Remove all download buttons temporarily
+                    for item in items_to_remove:
+                        rom_view.remove_item(item)
+                    
+                    # Determine which row to use
+                    button_row = 2 if file_select else 1
+                    
+                    # Re-add download buttons with correct row
+                    for button in download_buttons:
+                        button.row = button_row
+                        rom_view.add_item(button)
+                    
+                    # Add custom buttons for request flow on the same row
+                    request_different_btn = discord.ui.Button(
+                        label="Request Different Version",
+                        style=discord.ButtonStyle.primary,
+                        row=button_row
+                    )
+                    
+                    async def request_different(interaction):
+                        if interaction.user.id != ctx.author.id:
+                            await interaction.response.send_message("This isn't for you!", ephemeral=True)
+                            return
                         
-                        # Check alternative names
-                        for alt_name in igdb_game.get('alternative_names', []):
-                            alt_name_text = alt_name['name'].lower()
-                            score = self.calculate_similarity(requested_game_lower, alt_name_text)
-                            if score > best_match_score:
-                                best_match = igdb_game
-                                best_match_score = score
+                        # Show modal for variant input
+                        modal = VariantRequestModal(
+                            self.bot,
+                            platform_display_name,
+                            game,
+                            details,
+                            igdb_matches,
+                            ctx
+                        )
+                        await interaction.response.send_modal(modal)
+                        rom_view.stop()
 
-                    if best_match:
+                    request_different_btn.callback = request_different
+                    rom_view.add_item(request_different_btn)
+                    
+                    cancel_btn = discord.ui.Button(
+                        label="Cancel",
+                        style=discord.ButtonStyle.secondary,
+                        row=button_row
+                    )
+                    
+                    async def cancel_callback(interaction):
+                        if interaction.user.id != ctx.author.id:
+                            await interaction.response.send_message("This isn't for you!", ephemeral=True)
+                            return
+                        await interaction.response.defer()
+                        rom_view.stop()
+
+                    cancel_btn.callback = cancel_callback
+                    rom_view.add_item(cancel_btn)
+                    
+                    message = await ctx.respond(
+                        "✅ This game is already available! You can download it now:",
+                        embed=rom_embed,
+                        view=rom_view
+                    )
+                    
+                    if isinstance(message, discord.Interaction):
+                        message = await message.original_response()
+                    rom_view.message = message
+                    
+                     # Wait for the view to complete
+                    await rom_view.wait()
+                    return  # prevent further execution
+                    
+                else:
+                    # Multiple matches - show selection with download capabilities
+                    view = ExistingGameView(self.bot, matches, platform_display_name, game, ctx.author.id)
+                    
+                    # Add match details to embed
+                    embed = discord.Embed(
+                        title="Similar Games Found in Collection",
+                        description=f"Found {len(matches)} game(s) matching '{game}' that are already available:",
+                        color=discord.Color.blue()
+                    )
+                    
+                    if igdb_matches:
+                        # Find best matching IGDB game
+                        best_match_score = 0
+                        best_igdb_match = None
+                        requested_game_lower = game.lower()
+                        
+                        for igdb_game in igdb_matches:
+                            score = self.calculate_similarity(requested_game_lower, igdb_game['name'].lower())
+                            if score > best_match_score:
+                                best_igdb_match = igdb_game
+                                best_match_score = score
+                        
+                        # Add IGDB thumbnail if available
+                        if best_igdb_match and best_igdb_match.get('cover_url'):
+                            embed.set_thumbnail(url=best_igdb_match['cover_url'])
+                    
+                    for i, rom in enumerate(matches[:5]):  # Show first 5
                         embed.add_field(
-                            name="IGDB Match Found",
-                            value=(
-                                f"This appears to be: {best_match['name']}\n"
-                                f"Released: {best_match['release_date']}\n"
-                                f"Developer: {', '.join(best_match['developers']) if best_match['developers'] else 'Unknown'}\n"
-                            ),
+                            name=rom.get('name', 'Unknown'),
+                            value=f"File: {rom.get('fs_name', 'Unknown')}",
                             inline=False
                         )
-                        if best_match['cover_url']:
-                            embed.set_thumbnail(url=best_match['cover_url'])
-
-                # Create confirmation buttons
-                class ConfirmView(discord.ui.View):
-                    def __init__(self):
-                        super().__init__()
-                        self.value = None
-                        self.message = None
-
-                    async def on_timeout(self) -> None:
-                        if self.message:
-                            for item in self.children:
-                                item.disabled = True
-                            await self.message.edit(view=self)
-
-                    @discord.ui.button(label="Different Game/Variant", style=discord.ButtonStyle.primary)
-                    async def different_game(self, button: discord.ui.Button, interaction: discord.Interaction):
-                        self.value = "different"
-                        await interaction.response.defer()
-                        self.stop()
-
-                    @discord.ui.button(label="Cancel Request", style=discord.ButtonStyle.secondary)
-                    async def cancel(self, button: discord.ui.Button, interaction: discord.Interaction):
-                        self.value = "cancel"
-                        self.clear_items()
-                        cancelled_button = discord.ui.Button(
-                            label="Request Cancelled",
-                            style=discord.ButtonStyle.secondary,
-                            disabled=True
-                        )
-                        self.add_item(cancelled_button)
-                        await interaction.response.edit_message(view=self)
-                        self.stop()
-
-                view = ConfirmView()
-                view.message = await ctx.respond(embed=embed, view=view)
-                await view.wait()
-                
-                if view.value == "cancel":
-                    return
-                elif view.value != "different":
-                    timeout_view = discord.ui.View()
-                    timeout_button = discord.ui.Button(
-                        label="Selection Timed Out",
-                        style=discord.ButtonStyle.secondary,
-                        disabled=True
-                    )
-                    timeout_view.add_item(timeout_button)
-                    await view.message.edit(view=timeout_view)
+                    
+                    if len(matches) > 5:
+                        embed.set_footer(text=f"...and {len(matches) - 5} more")
+                    
+                    message = await ctx.respond(embed=embed, view=view)
+                    
+                    # Store message reference in the view
+                    if isinstance(message, discord.Interaction):
+                        view.message = await message.original_response()
+                    else:
+                        view.message = message
+                    
+                    await view.wait()
+                    
+                    if view.action == "request_different":
+                        # Continue with request flow
+                        await self.continue_request_flow(ctx, platform_display_name, game, details, igdb_matches)
+                        return
+                    elif view.action == "cancel":
+                        return
+                    # If they selected and downloaded, we're done
                     return
 
             # If we get here, either the game doesn't exist or user confirmed different version needed
