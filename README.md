@@ -235,6 +235,8 @@ Trigger RomM library scan. Options are:
 <img width="400" height="603" alt="image" src="https://github.com/user-attachments/assets/61f3a78f-13aa-443a-a49b-1bd054f0ea6f" />
 <br/>
 <img width="400" height="283" alt="image" src="https://github.com/user-attachments/assets/513b41fd-080f-4489-887b-e467c7cd50e6" />
+<br/>
+<img width="400" height="628" alt="490832588-e6e98c52-a73d-4eba-815e-c30cb19c57cb" src="https://github.com/user-attachments/assets/0ca0408f-ef55-4a98-86bd-a5b9ad58b140" />
 
 ![RrequestFulfulledDM](.github/screenshots/RequestFulfilledDM.png)
 
@@ -312,6 +314,7 @@ The bot includes comprehensive error handling and logging:
 - Check API connectivity to RomM
 - Check logs for error messages, I tried to meticulously report errors
 - Verify configuration settings in the env
+
 
 
 
