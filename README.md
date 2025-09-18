@@ -217,6 +217,8 @@ Trigger RomM library scan. Options are:
 <img width="400" height="283" alt="image" src="https://github.com/user-attachments/assets/513b41fd-080f-4489-887b-e467c7cd50e6" />
 <br/>
 <img width="400" height="628" alt="490832588-e6e98c52-a73d-4eba-815e-c30cb19c57cb" src="https://github.com/user-attachments/assets/0ca0408f-ef55-4a98-86bd-a5b9ad58b140" />
+<br/>
+<img width="400" height="1049" alt="image" src="https://github.com/user-attachments/assets/4e1ce285-8926-441d-bb5f-761f0956ad56" />
 
 ![RrequestFulfulledDM](.github/screenshots/RequestFulfilledDM.png)
 
@@ -228,8 +230,6 @@ Request System Features:
 - DM notifications to users when their requests are fulfilled/rejected either automatically after a RomM system scan or manually via admin
 - Users can view their own requests
 - Users can cancel their pending requests
-- Uses SQLite database to store requests
-- Request system is toggleable via env variable if server admin does not want to use it
 
 Admin Features:
 - List all pending requests with game and requester info
@@ -291,6 +291,7 @@ The bot includes comprehensive error handling and logging:
 - Check API connectivity to RomM
 - Check logs for error messages, I tried to meticulously report errors
 - Verify configuration settings in the env
+
 
 
 
