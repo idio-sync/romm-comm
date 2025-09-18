@@ -476,32 +476,32 @@ class EmojiManager(commands.Cog):
         else:
             logger.warning("Bot is ready but no guilds found!")
     
-    @discord.slash_command(
-        name="emoji_upload",
-        description="Force upload the bot's custom emojis to current server (owner only)"
-    )
-    @commands.has_permissions(manage_emojis=True)
-    @commands.is_owner()
-    async def emoji_upload(self, ctx):
-        """Force upload emojis to the server."""
-        await ctx.defer()
-        
-        try:
-            guild_id_str = str(ctx.guild.id)
-            
-            if guild_id_str in self.processed_servers:
-                del self.processed_servers[guild_id_str]
-                self.save_processed_servers()
-            
-            success = await self.process_guild_emojis(ctx.guild)
-            if success:
-                await ctx.respond("✅ Emoji upload process completed!")
-            else:
-                await ctx.respond("❌ Failed to upload emojis")
-            
-        except Exception as e:
-            logger.error(f"Error in force_emoji_upload: {e}")
-            await ctx.respond("❌ An error occurred while uploading emojis")
+    #@discord.slash_command(
+    #    name="emoji_upload",
+    #    description="Force upload the bot's custom emojis to current server (owner only)"
+    #)
+    #@commands.has_permissions(manage_emojis=True)
+    #@commands.is_owner()
+    #async def emoji_upload(self, ctx):
+    #    """Force upload emojis to the server."""
+    #    await ctx.defer()
+    #    
+    #    try:
+    #        guild_id_str = str(ctx.guild.id)
+    #        
+    #        if guild_id_str in self.processed_servers:
+    #            del self.processed_servers[guild_id_str]
+    #            self.save_processed_servers()
+    #        
+    #        success = await self.process_guild_emojis(ctx.guild)
+    #        if success:
+    #            await ctx.respond("✅ Emoji upload process completed!")
+    #        else:
+    #            await ctx.respond("❌ Failed to upload emojis")
+    #        
+    #    except Exception as e:
+    #        logger.error(f"Error in force_emoji_upload: {e}")
+    #        await ctx.respond("❌ An error occurred while uploading emojis")
 
 def setup(bot):
     bot.add_cog(EmojiManager(bot))
