@@ -205,7 +205,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 - `/firmware [platform]` — List firmware files with hash details and download links.
 - `/scan [option]` — Run or check scans (admin only): `full`, `platform`, `stop`, `status`, `unidentified`, `hashes`, `new_platforms`, `partial`, `summary`.
 - `/request`, `/my_requests`, `/request_admin` — Submit, view, and manage requests.
-- `/sync_users` — Romm > Discord user sync (admin only).
+- `/user_manager` — Manage Romm and Discord users (linking, new account prompting, etc.) (admin only).
 
 ---
 
@@ -231,10 +231,13 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 
 ## User Manager
 
-- `/sync_users` — Sync Discord users who have the auto-register role (admin only).
+- `/manage_users` — Manage Romm and Discord users (admin only).
+- Discord users can be linked to Romm users. Linking is useful for keeping track of who on the server has a Romm account.
+- Unlinking accounts removes Romm user from server.
+- Select Discord user and hit 'Create New Romm Account' button to manually onboard user to Romm via DM (see Account Creation).
 
 **Account creation:**
-- Creates RomM accounts automatically when role is added.
+- Creates RomM accounts automatically when role is added to Discord user.
 - Uses Discord display name + suffixes.
 - Generates a random password and DMs the user.
 - Preserves and warns on existing admin accounts.
@@ -276,4 +279,5 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
