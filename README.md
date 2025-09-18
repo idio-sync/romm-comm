@@ -1,33 +1,61 @@
 # RomM-ComM (RomM Communicator Module)
 
-A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) API to provide information about your ROM collection and conrol RomM from Discord.
+A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) API to provide information about your ROM collection and control RomM from Discord.
+
+---
+
+## Table of Contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Discord Bot Token Creation](#discord-bot-token-creation)
+- [RomM Settings](#romm-settings)
+- [Configuration](#configuration)
+- [Recently Added ROM Notifications](#recently-added-rom-notifications)
+- [Visible Statistics](#visible-statistics)
+- [Emojis](#emojis)
+- [Available Commands](#available-commands)
+- [Requests](#requests)
+- [User Manager](#user-manager)
+- [Error Handling](#error-handling)
+- [Security](#security)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+- [License](#license)
+- [Gallery](#gallery)
+
+---
 
 ## Features
 
-Current
-- Recently Added: Posts recently added ROM updates in specified channel
-- Stats: Near real-time ROM collection statistics in voice channel, bot status and via command
-- Search: Platform-specific ROM searches and random ROM roll that provide download link and game/file information
-- Search: Support for multi-file games - user can select one, some or all files to download
-- Search: Platform based firmware search that lists firmware file information and provides download links
-- Scans: Start/stop different types of RomM scans, report back with info about the scan when complete and also during a scan in progress via command
-- Request System: Make and manage ROM requests entirely in Discord, now enriched with IGDB metadata
-- Request Dashboard: Optional web dash where admin can manage requests 
-- Emojis: Custom game console emoji uploads upon bot installation, use of said emojis in bot responses and stats
-- Emojis: Bot checks for Nitro on the server and if found uploads extended list of emojis, if the bot detects Nitro removed it deverts back to the standard list
-- QR code generation: Install games on 3DS/Vita via QR code with apps like FBI/[FBI Reloaded](https://github.com/TheRealZora/FBI-Reloaded)/[VitaShell](https://github.com/RealYoti/VitaShell) (download endpoint auth must be disabled on RomM instance)
-- RomM User Management: Manage users, automatically create RomM account for users with specific role and remove RomM accont upon role removal
-- Switch Shop Info: Command that lists instructions on how to connect to the [Tinfoil](https://tinfoil.io/Download) endpoint of connected RomM server (download endpoint auth must be disabled on RomM instance)
-- Rate-limited Discord API interactions: Bot won't overload Discord with requests
-- Caching system: Only fetches fresh stats if that particular stat has updated since last fetch
+### Current
 
-Planned
-- Alternative chat client integrations (Matrix, Telegram, Slack), no eta for now
+- **Recently Added**: Posts recently added ROM updates to a configured channel (batched when multiple ROMs are added).
+- **Stats**: Near real-time collection statistics shown in voice channel names, the bot "Now Playing" status, and via commands.
+- **Search**: Platform-specific searches and a random ROM roll. Results include download links, file information, and cover images when available.
+- **Multi-file support**: Searches support multi-file games; users can select one, several, or all files to download.
+- **Firmware search**: Lists firmware files for a platform with names, sizes, hashes, and download links.
+- **Scans**: Start/stop/status for different RomM scan types. The bot reports progress and a summary on completion.
+- **Request system**: Submit and manage ROM requests entirely from Discord. Requests are enriched with IGDB metadata when available.
+- **Request dashboard**: Optional web dashboard for admins to manage requests.
+- **Emojis**: Uploads custom console emojis on install; uses emojis in responses and stats. Nitro-aware to expand/revert the emoji set.
+- **QR code generation**: Generate QR codes for 3DS/Vita installs (requires download endpoint auth to be disabled on the RomM instance).
+- **RomM user management**: Auto-create RomM accounts for Discord users with a configured role and optionally delete accounts when the role is removed.
+- **Switch Shop info**: Command to display instructions for connecting to a Tinfoil endpoint (download endpoint auth must be disabled).
+- **Rate-limited Discord interactions**: Built-in rate limiting to avoid overloading the Discord API.
+- **Caching**: Only fetches stats that have changed since the last fetch to reduce load.
+
+### Planned
+
+- Alternative chat client integrations: Matrix, Telegram, Slack (no ETA).
+
+---
 
 ## Requirements
 
 - Python 3.8+
-- Pycord library
+- py-cord
 - aiohttp
 - python-dotenv
 - qrcode
@@ -36,280 +64,238 @@ Planned
 - requests
 - aiosqlite
 
+---
+
 ## Installation
 
-Docker:
-1. `docker pull idiosync000/romm-comm:latest`
-2. Pass env variables as shown below
-3. Pass `/app/data` in the container to host directory, this is where the request DB and emoji sync status are stored
+### Docker
 
-Non-Docker:
-1. Clone the repository or download the source code
-2. Install required dependencies:
+1. `docker pull idiosync000/romm-comm:latest`
+2. Pass the environment variables (see [Configuration](#configuration)).
+3. Mount `/app/data` to a host directory — this stores the request DB and emoji sync status.
+
+### Non-Docker (local)
+
+1. Clone the repository or download the source code.
+2. Install dependencies:
+
 ```bash
 pip install py-cord aiohttp python-dotenv qrcode Pillow python-socketio requests aiosqlite
 ```
+
+---
+
 ## Discord Bot Token Creation
-- See https://docs.pycord.dev/en/stable/discord.html
-- Enable "privileged gateway intents" in the bot settings
+
+- See the Pycord docs for bot creation and permission setup: https://docs.pycord.dev/en/stable/discord.html
+- Enable **Privileged Gateway Intents** in the bot settings as required by your bot features.
+
+---
 
 ## RomM Settings
 
-If you want browser downloads to function for users without logging in and Switch shop/Qr code downloads to function on consoles, set Add `DISABLE_DOWNLOAD_ENDPOINT_AUTH=true` to your RomM environment variables. Without this setting disabled, the user clicking the download link will have to have a RomM account and log in before downloading.
+If you want downloads to work without requiring users to log in (including Switch shop / QR code console installs), set the following on your RomM server environment:
+
+```env
+DISABLE_DOWNLOAD_ENDPOINT_AUTH=true
+```
+
+Setting this disables authentication for the download endpoint. If not set (or set to `false`), users must be logged in to RomM to download files.
+
+---
 
 ## Configuration
 
-Create a `.env` file in the root directory with the following variables:
+Create a `.env` file in the project root with the following variables.
 
 ```env
-# Required Settings
+# Required
 TOKEN=your_discord_bot_token
 GUILD=your_guild_id
-API_URL=your_api_base_url
+API_URL=http://your_romm_host:port
 USER=api_username
 PASS=api_password
 
-# Optional Settings
+# Optional
 ADMIN_ID=admin_user_id
 DOMAIN=your_website_domain
-REQUESTS_ENABLED=TRUE
+REQUESTS_ENABLED=true
 IGDB_CLIENT_ID=your_client_id
 IGDB_CLIENT_SECRET=your_client_secret
 AUTO_REGISTER_ROLE_ID=romm_users_role_id
 UPDATE_VOICE_NAMES=true
 CHANNEL_ID=your_channel_id
-RECENT_ROMS_ENABLED=TRUE
-RECENT_ROMS_CHANNEL_ID=yourchannel
+RECENT_ROMS_ENABLED=true
+RECENT_ROMS_CHANNEL_ID=your_channel_id
 WEB_DASHBOARD_ENABLED=true
 WEB_DASHBOARD_PORT=8080
 DASHBOARD_PASSWORD=yourpassword
 ```
 
-### Configuration Details
+### Configuration details
 
-#### Required Settings:
-- `TOKEN`: Your Discord bot token
-- `GUILD`: Discord server (guild) ID
-- `API_URL`: Base URL for local Romm instance (http://ip:port)
-- `USER`: API authentication username
-- `PASS`: API authentication password
+**Required:**
+- `TOKEN` — Discord bot token.
+- `GUILD` — Discord server (guild) ID.
+- `API_URL` — Base URL for your RomM instance (use `http://ip:port` or a domain).
+- `USER` / `PASS` — API credentials for RomM.
 
-#### Optional Settings:
-- `ADMIN_ID` : User ID of admin for /command access (scan, sync users, etc.)
-- `DOMAIN`: Website domain for any download links, can use local ip/port if not exposing RomM to the internet (default: "No website configured")
-- `SYNC_RATE`: How often to sync with API in seconds (default: 3600)
-- `UPDATE_VOICE_NAMES`: Enable/disable voice channel stats (default: true)
-- `REQUESTS_ENABLED` : Enable request commands (default: true)
-- `IGDB_CLIENT_ID` : IGDB login info for requests metadata (can be the same one used in RomM)
-- `IGDB_CLIENT_SECRET` : IGDB login info for requests metadata (can be the same one used in RomM)
-- `AUTO_REGISTER_ROLE_ID` : Discord role ID used for linking Discord users to RomM users and registering new RomM users if granted to Discord user (if user manager enabled)
-- `SHOW_API_SUCCESS`: Show API sync results and error messages in Discord (default: false)
-- `CHANNEL_ID`: Admin channel ID for API sync result and user manager notifications to be sent to (if enabled above) and user manager log messages
-- `CACHE_TTL`: Cache time-to-live in seconds (default: 3900)
-- `API_TIMEOUT`: API request timeout in seconds (default: 10)
-- `RECENT_ROMS_ENABLED` : Enables recent rom additions messages (default: true)
-- `RECENT_ROMS_CHANNEL_ID` : Channel ID for posting new ROMs
-- `RECENT_ROMS_CHECK_MINUTES` : Check interval in minutes (default: 5)
-- `RECENT_ROMS_BATCH_MINUTES` : Time window to batch multiple ROMs (default: 1)
-- `RECENT_ROMS_MAX_PER_POST` : Max ROMs to show details for (default: 10)
-- `RECENT_ROMS_FLOOD_THRESHOLD` : Trigger flood protection above this (default: 25)
-- `WEB_DASHBOARD_ENABLED` : Enable web dashboard for requests (default: true)
-- `WEB_DASHBOARD_HOST` : IP for dashboard webserver, you don't really need to change this (default: 0.0.0.0)
-- `WEB_DASHBOARD_PORT` : Port to broadcast webserver on (default: 8080)
-- `DASHBOARD_PASSWORD` : Your desired dashboard password (if dashboard is enabled)
+**Common optional settings (defaults shown where applicable):**
+- `ADMIN_ID` — User ID allowed to run admin commands (scan, sync users, etc.).
+- `DOMAIN` — Public domain for download links (default: `No website configured`).
+- `SYNC_RATE` — How often to sync with the API in seconds (default: `3600`).
+- `UPDATE_VOICE_NAMES` — Enable voice channel stats (default: `true`).
+- `REQUESTS_ENABLED` — Enable request commands (default: `true`).
+- `IGDB_CLIENT_ID`, `IGDB_CLIENT_SECRET` — For request metadata (can be shared with RomM).
+- `AUTO_REGISTER_ROLE_ID` — Role that triggers automatic RomM account creation.
+- `SHOW_API_SUCCESS` — Show API sync results and errors in Discord (default: `false`).
+- `CHANNEL_ID` — Channel for sync results and user manager logs.
+- `CACHE_TTL` — Cache TTL in seconds (default: `3900`).
+- `API_TIMEOUT` — API request timeout in seconds (default: `10`).
+- `RECENT_ROMS_*` — Controls for recent-ROM posting (enabled, channel id, intervals, batch size, thresholds).
+- `WEB_DASHBOARD_*` — Dashboard enable/host/port/password settings.
+
+---
 
 ## Recently Added ROM Notifications
-- If enabled (`RECENT_ROMS_ENABLED=true`) the bot will post recently added roms to a specified channel
-- When multiple roms are added, the bot creates a bached responce listing what was added by platform
-- If a large amount of roms are added, flood control is tripped and messages are supressed
-- Thresholds for max listed ROMs and flood protection adjustable as an env variable 
-- NOTE: I would only enable this on installations where most of the roms are already scanned in. Large imports that run multiple hours may cause issues, I have not had the opprotunity to test.
 
-<img width="400" height="310" alt="image" src="https://github.com/user-attachments/assets/f3ec5369-6cd0-49a8-a834-49df725e88dc" />
+- When enabled (`RECENT_ROMS_ENABLED=true`) the bot posts newly added ROMs to the configured channel.
+- Multiple ROMs that occur within the configured batch window are grouped into a single batched response by platform.
+- Large imports can trigger flood protection; thresholds for maximum listed ROMs and flood limits are adjustable via env vars.
 
-<img width="400" height="411" alt="image" src="https://github.com/user-attachments/assets/2969a70d-1ff1-4cb3-982d-d85f06ea67aa" />
+**Note:** Only enable recent-ROM posting on installations where most ROMs are already scanned. Large, long-running imports may overload the bot or cause noisy notifications.
 
-## Visable Statistics
+---
 
-Voice Channel Stat Display
-- If enabled (`UPDATE_VOICE_NAMES=true`), the bot creates voice channels displaying platform, rom, save, savestate, screenshot and RomM user count as well as RomM storage use size
-- Only updates if stats change upon API refresh
-- Creates new channels and deletes the old to guarantee no duplicate channels
+## Visible Statistics
 
-![VC Stats](.github/screenshots/VCStats.png)
+### Voice channel stats
 
-Bot "Now Playing" ROM count
-- Lists number of ROMs as the bot's status
-- Updates whenever API data is refreshed via timer or manually
+When enabled (`UPDATE_VOICE_NAMES=true`) the bot creates voice channels to display:
+- Platform counts
+- ROM count
+- Save and save-state counts
+- Screenshot count
+- RomM user count
+- Storage usage
 
-![Bot Status](.github/screenshots/BotStatus.png)
+Voice channel names are only updated when the underlying stat changes. The bot will create new channels and delete old ones to avoid duplicates.
+
+### Bot status
+
+The bot updates its "Now Playing" / status with the total ROM count whenever it refreshes API data.
+
+---
 
 ## Emojis
 
-Automatic Emoji management. Provides:
-- Upon first boot or joining Discord server (if bot booted before joining) a list of 50 custom emojis is grabbed and uploaded to the server
-- Emojis appear automatically next to platform names across bot responses if matching emoji is on the server
-- Nitro awareness - bot can detect if Nitro is present on the server and if found uploads extended list of emojis (mostly more obscure consoles and variants)
-- If the bot detects Nitro is removed it reverts back to the standard list of 50, so none of the more commonly used emojis are deleted when the limit decreases
+- On first boot or when joining a server, the bot uploads a standard set of custom console emojis (default ~50).
+- If the server has boosted Nitro/extra emoji slots available, the bot can upload an extended emoji set; if Nitro is later removed the bot reverts to the standard list to preserve the most-used emojis.
+- Emojis are used throughout bot responses to visually identify platforms when a matching emoji exists on the server.
 
-![Nitro](.github/screenshots/Nitro.png)
-
-![3ds](.backend/emoji/3ds.png) ![arcade](.backend/emoji/arcade.png) ![dos](.backend/emoji/dos.png) ![dreamcast](.backend/emoji/dreamcast.png) ![xbox_og](.backend/emoji/xbox_og.png) 
-![wii](.backend/emoji/wii.png) ![ps](.backend/emoji/ps.png) ![psp](.backend/emoji/psp.png) ![ps2](.backend/emoji/ps2.png) ![snes](.backend/emoji/snes.png), etc
+---
 
 ## Available Commands
 
-### /platforms
-Display all available platforms with their ROM counts.
+- `/platforms` — Display all available platforms with their ROM counts.
+- `/search [platform] [game]` — Search ROMs with interactive results and optional QR code for console installs.
+- `/random [platform]` — Fetch a random ROM (platform optional).
+- `/firmware [platform]` — List firmware files with hash details and download links.
+- `/scan [option]` — Run or check scans: `full`, `platform`, `stop`, `status`, `unidentified`, `hashes`, `new_platforms`, `partial`, `summary`.
+- `/request`, `/my_requests`, `/request_admin` — Submit, view, and manage requests.
+- `/sync_users` — Admin-only user sync.
 
-![Slash Platforms](.github/screenshots/SlashPlatforms.png)
+---
 
-### /search [platform] [game]
-Search for ROMs by platform and game name. Provides:
-- Interactive selection menu listing first 25 results
-- Platform selection autofill (pulled from RomM's internal list of avalable platforms)
-- File names
-- File sizes
-- Download links pointing to your public URL or IP if configured
-- Cover images when available (if RomM's game entry is properly matched to an IGDB entry)
-- React with the :qr_code: emoji and the bot will respond with a QR code for 3DS/Vita dowloads
+## Requests (detailed)
 
-![Slash Search](.github/screenshots/SingleFile.png)
+**User features:**
+- Submit requests with platform, game name, and optional details.
+- Detect existing ROMs to avoid duplicates.
+- Attempts IGDB matching for metadata.
+- Per-user request cap (default: 25).
+- DM notifications when requests are fulfilled or rejected.
 
-### /random [platfom]*
-- Finds random rom in your collection and displays info outlined in /search command
-- *Platform input is optional, if not set it will grab a random rom from a random platform
+**Admin features:**
+- View, filter, and manage pending requests.
+- Fulfill/reject/add notes directly or via the web dashboard.
 
-### /firmware [platform]
-List available firmware files for a specific platform. Shows:
-- File names
-- File sizes
-- Hash details (CRC, MD5, SHA1)
-- Download links pointing to your public URL or IP
+**Dashboard:**
+- Filter requests by status, platform, user, or fulfillment method.
+- Admins can manually manage requests from a browser.
 
-![Slash Firmware](.github/screenshots/SlashFirmware.png)
+---
 
-### /scan [option]
-Trigger RomM library scan. Options are:
-- [platform] [platform name]: Scan a specific platform
-- [full]: Perform a full system scan
-- [stop]: Stop the current scan
-- [status]: Check current scan status
-- [unidentified]: Scan unidentified ROMs
-- [hashes]: Update ROM hashes
-- [new_platforms]: Scan new platforms only
-- [partial]: Scan ROMs with partial metadata
-- [summary]: View last scan summary
+## User Manager
 
-![Slash Scan](.github/screenshots/SlashScanStatus.png)
+- `/sync_users` — Sync Discord users who have the auto-register role (admin only).
 
-### Requests
-- /request - Submit a new request
-- /my_requests - View and manage your requests
-- /request_admin - Admin commands (fulfill/reject/add note)
+**Account creation:**
+- Creates RomM accounts automatically when role is added.
+- Uses Discord display name + suffixes.
+- Generates a random password and DMs the user.
+- Preserves and warns on existing admin accounts.
 
-![Request](.github/screenshots/RequestSubmitted.png)
+**Role removal:**
+- Deletes RomM accounts created by the bot when the role is removed.
+- Skips admin accounts and logs protected deletions.
 
-<img width="400" height="881" alt="490832758-744767e4-b722-4af4-8072-9acd6fa35a52" src="https://github.com/user-attachments/assets/b9f6de4a-674b-4878-bf07-1ed4fa71a5ff" />
-<br/>
-<img width="400" height="603" alt="image" src="https://github.com/user-attachments/assets/61f3a78f-13aa-443a-a49b-1bd054f0ea6f" />
-<br/>
-<img width="400" height="283" alt="image" src="https://github.com/user-attachments/assets/513b41fd-080f-4489-887b-e467c7cd50e6" />
-<br/>
-<img width="400" height="628" alt="490832588-e6e98c52-a73d-4eba-815e-c30cb19c57cb" src="https://github.com/user-attachments/assets/0ca0408f-ef55-4a98-86bd-a5b9ad58b140" />
-<br/>
-<img width="400" height="1049" alt="image" src="https://github.com/user-attachments/assets/4e1ce285-8926-441d-bb5f-761f0956ad56" />
-
-![RrequestFulfulledDM](.github/screenshots/RequestFulfilledDM.png)
-
-Request System Features:
-- Users can submit ROM requests with platform, game name, and optional details as text
-- Searches for existing ROM names in the RomM database to see if there is already a ROM present with the requested game name to avoid unnecessary requests
-- Matches request with IGDB entry if possible, if IGDB match is not found user can still submit "Platform, Game" request with added details (see GTA III example above)
-- Limit of 25 pending requests per user, so requests do not get overwhelming
-- DM notifications to users when their requests are fulfilled/rejected either automatically after a RomM system scan or manually via admin
-- Users can view and manage their own requests
-
-Admin Features:
-- List all pending requests with game and requester info
-- Fulfill, reject or add notes to requests
-
-Request Dashboard:
-- Shows list of requests filterable by status, fulfillment method (auto by bot or manual), platform, user and game name
-- Admin can manually fulfill, reject, or delete requests and add notes
-
-<img width="600" height="961" alt="image" src="https://github.com/user-attachments/assets/6f0863fd-b975-470f-94b6-a84b31881b0b" />
-
-### User Manager
-- /sync_users - Sync all users who have auto-register role (Admin only)
-
-Account Creation:
-- Creates RomM account when role specified in `AUTO_REGISTER_ROLE_ID` is assigned to Discord user
-- Uses Discord display name for RomM username (_1/2/3 etc. if dupe)
-- Handles existing accounts, asks user if they have a RomM account and promps them to link accounts before creating new account
-- Always creates new accounts as regular users with 'viewer' permissions in RomM
-- Generates random password and notifies new user by DM, gives RomM domain info and instructs them to log in and change password
-- Preserves existing admin accounts
-- Adds warning notifications for admin account links
-
-Role Removal:
-- Deletes RomM user account when role is removed from Discord user
-- Sends DM notification
-- Logs deletion
-- Only affects users created by the bot
-- Checks if user is admin before deletion
-- Preserves admin accounts even if role is removed
-- Logs attempted deletions of admin accounts
-- Notifies server admins of protection
-
-![UserManagerMessages](.github/screenshots/UserManagerMessages.png)
-
-![UserNotification](.github/screenshots/UserNotification.png)
+---
 
 ## Error Handling
 
-The bot includes comprehensive error handling and logging:
-- API connection issues
-- Rate limit management
-- Discord API errors
-- Data validation
-- Cache management
+- Handles API connectivity issues, rate limits, data validation, and caching errors.
+- Logs are descriptive but avoid exposing sensitive info.
+
+---
 
 ## Security
 
-- OAuth2 bearer tokens for API requests using http
-- Environment variable configuration instead of storing passwors in code
-- No sensitive data logging (passwords, etc)
-- Proper permission checking
+- Uses OAuth2 bearer tokens for RomM API.
+- Secrets configured in environment variables.
+- No password logging.
+- Strict permission checks.
+
+---
 
 ## Troubleshooting
 
-- Check Discord bot token
-- Verify bot permissions on Discord's end
-- Check API connectivity to RomM
-- Check logs for error messages, I tried to meticulously report errors
-- Verify configuration settings in the env
+- Verify the Discord bot token and permissions.
+- Check API connectivity (`API_URL`).
+- Review logs for issues.
+- Confirm `.env` configuration.
+- For flood noise during imports, temporarily disable recent-ROM posting.
 
+---
 
+## Gallery
 
+### Platform & Search
+![Platforms](.github/screenshots/SlashPlatforms.png)
+![Search Results](.github/screenshots/SingleFile.png)
 
+### Random & Firmware
+![Random Search](.github/screenshots/BotStatus.png)
+![Firmware](.github/screenshots/SlashFirmware.png)
 
+### Scans
+![Scan Status](.github/screenshots/SlashScanStatus.png)
 
+### Requests
+![Request Submitted](.github/screenshots/RequestSubmitted.png)
+![Request Fulfilled](.github/screenshots/RequestFulfilledDM.png)
 
+### User Manager
+![User Manager Messages](.github/screenshots/UserManagerMessages.png)
+![User Notification](.github/screenshots/UserNotification.png)
 
+### Emojis & Nitro Support
+![Nitro Emojis](.github/screenshots/Nitro.png)
 
+---
 
+## Contributing
 
+Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
-
-
-
-
-
-
-
-
-
-
-
-
+---
