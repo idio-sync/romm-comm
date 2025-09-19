@@ -276,7 +276,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 
 ## Gallery
 <p align="center">
-  <img src=".github/screenshots/VC Stats.png" width="50%">
+  <img src=".github/screenshots/VC Stats.png" width="10%">
 </p>
 
 ---
@@ -286,6 +286,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
