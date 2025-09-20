@@ -42,7 +42,7 @@ A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) A
 - **Request system**: Submit and manage ROM requests entirely from Discord. Requests are enriched with IGDB metadata when available.
 - **Request dashboard**: Optional web dashboard for admins to manage requests.
 - **Emojis**: Uploads custom console emojis on install; uses emojis in responses and stats. Nitro-aware to expand/revert the emoji set.
-- **QR code generation**: Generate QR codes for 3DS/Vita installs (requires download endpoint auth to be disabled on the RomM instance).
+- **QR code generation**: Generate QR codes for 3DS/Vita installs by reacting to /search replies with QR emoji (requires download endpoint auth to be disabled on the RomM instance).
 - **RomM user management**: Auto-create RomM accounts for Discord users with a configured role and optionally delete accounts when the role is removed.
 - **Switch Shop info**: Command to display instructions for connecting to a Tinfoil endpoint (download endpoint auth must be disabled).
 - **Rate-limited Discord interactions**: Built-in rate limiting to avoid overloading the Discord API.
@@ -279,3 +279,4 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
