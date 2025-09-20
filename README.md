@@ -35,18 +35,16 @@ A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) A
 
 - **Recently Added**: Posts recently added ROM updates to a configured channel (batched when multiple ROMs are added).
 - **Stats**: Near real-time collection statistics shown in voice channel names, the bot "Now Playing" status, and via commands.
-- **Search**: Platform-specific searches and a random ROM roll. Results include download links, file information, and cover images when available.
+- **Search**: Platform-specific searches and a random ROM roll. Results include metadata and download links.
 - **Multi-file support**: Searches support multi-file games; users can select one, several, or all files to download.
 - **Firmware search**: Lists firmware files for a platform with names, sizes, hashes, and download links.
 - **Scans**: Start/stop/status for different RomM scan types. The bot reports progress and a summary on completion.
 - **Request system**: Submit and manage ROM requests entirely from Discord. Requests are enriched with IGDB metadata when available.
-- **Request dashboard**: Optional web dashboard for admins to manage requests.
 - **Emojis**: Uploads custom console emojis on install; uses emojis in responses and stats. Nitro-aware to expand/revert the emoji set.
 - **QR code generation**: Generate QR codes for 3DS/Vita installs by reacting to /search replies with QR emoji (requires download endpoint auth to be disabled on the RomM instance).
-- **RomM user management**: Auto-create RomM accounts for Discord users with a configured role and optionally delete accounts when the role is removed.
+- **RomM user management**: Auto-create RomM accounts for Discord users via role assignment; manage Romm > Discord user linking via gui in Discord.
 - **Switch Shop info**: Command to display instructions for connecting to a Tinfoil endpoint (download endpoint auth must be disabled).
 - **Rate-limited Discord interactions**: Built-in rate limiting to avoid overloading the Discord API.
-- **Caching**: Only fetches stats that have changed since the last fetch to reduce load.
 
 ### Planned
 
@@ -129,9 +127,6 @@ UPDATE_VOICE_NAMES=true
 CHANNEL_ID=your_channel_id
 RECENT_ROMS_ENABLED=true
 RECENT_ROMS_CHANNEL_ID=your_channel_id
-WEB_DASHBOARD_ENABLED=true
-WEB_DASHBOARD_PORT=8080
-DASHBOARD_PASSWORD=yourpassword
 ```
 
 ### Configuration details
@@ -155,7 +150,6 @@ DASHBOARD_PASSWORD=yourpassword
 - `CACHE_TTL` — Cache TTL in seconds (default: `3900`).
 - `API_TIMEOUT` — API request timeout in seconds (default: `10`).
 - `RECENT_ROMS_*` — Controls for recent-ROM posting (enabled, channel id, intervals, batch size, thresholds).
-- `WEB_DASHBOARD_*` — Dashboard enable/host/port/password settings.
 
 ---
 
@@ -223,17 +217,14 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 - View, filter, and manage pending requests.
 - Fulfill/reject/add notes directly or via the web dashboard.
 
-**Dashboard:**
-- Filter requests by status, platform, user, or fulfillment method.
-- Admins can manually manage requests from a browser.
-
 ---
 
 ## User Manager
 
 - `/manage_users` — Manage Romm and Discord users (admin only).
-- Discord users can be linked to Romm users. Linking is useful for keeping track of who on the server has a Romm account.
-- Unlinking accounts removes Romm user from server.
+- Discord users can be linked to Romm users, entries in dropdown show if a user is linked or not (and to what user names)
+- Linking is useful for keeping track of who on the server has a Romm account, also for enriching request information in the request manager.
+- Unlinking accounts removes Romm user from server (unless user is an admin).
 - Select Discord user and hit 'Create New Romm Account' button to manually onboard user to Romm via DM (see Account Creation).
 
 **Account creation:**
@@ -279,4 +270,5 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
