@@ -98,7 +98,7 @@ class RequestAdminView(discord.ui.View):
         self.fulfill_button.disabled = not is_pending
         self.reject_button.disabled = not is_pending
     
-    def create_request_embed(self, req):
+    def create_request_embed(self, req, user_avatar_url=None):
         """Create an embed for a request with status indication"""
         # Parse details for IGDB metadata
         details = req[5] if req[5] else ""
@@ -201,7 +201,11 @@ class RequestAdminView(discord.ui.View):
         if cover_url and cover_url != 'None':
             embed.set_image(url=cover_url)
         
-        embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
+        # Set user avatar as thumbnail
+        if user_avatar_url:
+            embed.set_thumbnail(url=user_avatar_url)
+        else:
+            embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
         
         # Genre field if available
         if "Genres" in game_data and game_data["Genres"] != "Unknown":
@@ -307,7 +311,21 @@ class RequestAdminView(discord.ui.View):
         if self.current_index > 0:
             self.current_index -= 1
             self.update_button_states()
-            embed = self.create_request_embed(self.requests[self.current_index])
+            
+            # Fetch user avatar
+            user_avatar_url = None
+            try:
+                user = self.bot.get_user(self.requests[self.current_index][1])
+                if not user:
+                    user = await self.bot.fetch_user(self.requests[self.current_index][1])
+                if user and user.avatar:
+                    user_avatar_url = user.avatar.url
+                elif user:
+                    user_avatar_url = user.default_avatar.url
+            except:
+                pass
+            
+            embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
             await interaction.response.edit_message(embed=embed, view=self)
     
     async def forward_callback(self, interaction: discord.Interaction):
@@ -319,7 +337,21 @@ class RequestAdminView(discord.ui.View):
         if self.current_index < len(self.requests) - 1:
             self.current_index += 1
             self.update_button_states()
-            embed = self.create_request_embed(self.requests[self.current_index])
+            
+            # Fetch user avatar
+            user_avatar_url = None
+            try:
+                user = self.bot.get_user(self.requests[self.current_index][1])
+                if not user:
+                    user = await self.bot.fetch_user(self.requests[self.current_index][1])
+                if user and user.avatar:
+                    user_avatar_url = user.avatar.url
+                elif user:
+                    user_avatar_url = user.default_avatar.url
+            except:
+                pass
+            
+            embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
             await interaction.response.edit_message(embed=embed, view=self)
     
     async def fulfill_callback(self, interaction: discord.Interaction):
@@ -365,7 +397,21 @@ class RequestAdminView(discord.ui.View):
             
             # Update view
             self.update_button_states()
-            embed = self.create_request_embed(self.requests[self.current_index])
+            
+            # Fetch user avatar
+            user_avatar_url = None
+            try:
+                user = self.bot.get_user(self.requests[self.current_index][1])
+                if not user:
+                    user = await self.bot.fetch_user(self.requests[self.current_index][1])
+                if user and user.avatar:
+                    user_avatar_url = user.avatar.url
+                elif user:
+                    user_avatar_url = user.default_avatar.url
+            except:
+                pass
+            
+            embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
             await interaction.followup.edit_message(message_id=self.message.id, embed=embed, view=self)
             
         except Exception as e:
@@ -542,7 +588,20 @@ class RequestAdminView(discord.ui.View):
             self.update_button_states()
             
             if self.requests:
-                embed = self.create_request_embed(self.requests[self.current_index])
+                # Fetch user avatar for current request
+                user_avatar_url = None
+                try:
+                    user = self.bot.get_user(self.requests[self.current_index][1])
+                    if not user:
+                        user = await self.bot.fetch_user(self.requests[self.current_index][1])
+                    if user and user.avatar:
+                        user_avatar_url = user.avatar.url
+                    elif user:
+                        user_avatar_url = user.default_avatar.url
+                except:
+                    pass
+                
+                embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
                 await interaction.followup.edit_message(
                     message_id=self.message.id,
                     content=None,
@@ -650,7 +709,7 @@ class UserRequestsView(discord.ui.View):
             self.cancel_button.label = "Cancel Request"
             self.cancel_button.style = discord.ButtonStyle.danger  # Red for cancel action
     
-    def create_request_embed(self, req):
+    def create_request_embed(self, req, user_avatar_url=None):
         """Create an embed for a request with status indication"""
         # Parse details for IGDB metadata
         details = req[5] if req[5] else ""
@@ -752,7 +811,10 @@ class UserRequestsView(discord.ui.View):
         if cover_url and cover_url != 'None':
             embed.set_image(url=cover_url)
         
-        embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
+        if user_avatar_url:
+            embed.set_thumbnail(url=user_avatar_url)
+        else:
+            embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
         
         # Genre field if available
         if "Genres" in game_data and game_data["Genres"] != "Unknown":
@@ -872,7 +934,21 @@ class UserRequestsView(discord.ui.View):
         if self.current_index > 0:
             self.current_index -= 1
             self.update_button_states()
-            embed = self.create_request_embed(self.requests[self.current_index])
+            
+            # Fetch user avatar
+            user_avatar_url = None
+            try:
+                user = self.bot.get_user(self.requests[self.current_index][1])
+                if not user:
+                    user = await self.bot.fetch_user(self.requests[self.current_index][1])
+                if user and user.avatar:
+                    user_avatar_url = user.avatar.url
+                elif user:
+                    user_avatar_url = user.default_avatar.url
+            except:
+                pass
+            
+            embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
             await interaction.response.edit_message(embed=embed, view=self)
     
     async def forward_callback(self, interaction: discord.Interaction):
@@ -884,7 +960,21 @@ class UserRequestsView(discord.ui.View):
         if self.current_index < len(self.requests) - 1:
             self.current_index += 1
             self.update_button_states()
-            embed = self.create_request_embed(self.requests[self.current_index])
+            
+            # Fetch user avatar
+            user_avatar_url = None
+            try:
+                user = self.bot.get_user(self.requests[self.current_index][1])
+                if not user:
+                    user = await self.bot.fetch_user(self.requests[self.current_index][1])
+                if user and user.avatar:
+                    user_avatar_url = user.avatar.url
+                elif user:
+                    user_avatar_url = user.default_avatar.url
+            except:
+                pass
+            
+            embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
             await interaction.response.edit_message(embed=embed, view=self)
     
     async def cancel_callback(self, interaction: discord.Interaction):
@@ -915,51 +1005,56 @@ class UserRequestsView(discord.ui.View):
                 )
                 self.add_item(self.reason)
             
-            async def callback(self, modal_interaction: discord.Interaction):
-                await modal_interaction.response.defer()
-                
-                request_id = self.request_data[0]
-                reason = self.reason.value or "Cancelled by user"
-                
-                try:
-                    db_path = Path('data') / 'requests.db'
-                    async with aiosqlite.connect(str(db_path)) as db:
-                        await db.execute(
-                            """
-                            UPDATE requests 
-                            SET status = 'cancelled', 
-                                notes = ?,
-                                updated_at = CURRENT_TIMESTAMP 
-                            WHERE id = ?
-                            """,
-                            (reason, request_id)
-                        )
-                        await db.commit()
-                    
-                    # Update the request in our list
-                    updated_request = list(self.request_data)
-                    updated_request[6] = 'cancelled'
-                    updated_request[11] = reason
-                    self.view.requests[self.view.current_index] = tuple(updated_request)
-                    
-                    # Update view
-                    self.view.update_button_states()
-                    embed = self.view.create_request_embed(self.view.requests[self.view.current_index])
-                    await modal_interaction.followup.edit_message(
-                        message_id=self.view.message.id, 
-                        embed=embed, 
-                        view=self.view
-                    )
-                    
-                except Exception as e:
-                    logger.error(f"Error cancelling request: {e}")
-                    await modal_interaction.followup.send(
-                        "❌ An error occurred while cancelling the request.", 
-                        ephemeral=True
-                    )
+    async def callback(self, modal_interaction: discord.Interaction):
+        await modal_interaction.response.defer()
         
-        modal = CancelConfirmModal(self, current_request)
-        await interaction.response.send_modal(modal)
+        request_id = self.request_data[0]
+        note = self.note.value
+        
+        try:
+            db_path = Path('data') / 'requests.db'
+            async with aiosqlite.connect(str(db_path)) as db:
+                await db.execute(
+                    "UPDATE requests SET notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (note, request_id)
+                )
+                await db.commit()
+            
+            # Update the request in our list
+            updated_request = list(self.request_data)
+            updated_request[11] = note
+            self.view.requests[self.view.current_index] = tuple(updated_request)
+            
+            # Fetch user avatar
+            user_avatar_url = None
+            try:
+                user = self.view.bot.get_user(self.view.requests[self.view.current_index][1])
+                if not user:
+                    user = await self.view.bot.fetch_user(self.view.requests[self.view.current_index][1])
+                if user and user.avatar:
+                    user_avatar_url = user.avatar.url
+                elif user:
+                    user_avatar_url = user.default_avatar.url
+            except:
+                pass
+            
+            # Update view
+            embed = self.view.create_request_embed(self.view.requests[self.view.current_index], user_avatar_url)
+            await modal_interaction.followup.edit_message(
+                message_id=self.view.message.id,
+                embed=embed,
+                view=self.view
+            )
+            
+        except Exception as e:
+            logger.error(f"Error adding note: {e}")
+            await modal_interaction.followup.send(
+                "❌ An error occurred while adding the note.",
+                ephemeral=True
+            )
+            
+            modal = CancelConfirmModal(self, current_request)
+            await interaction.response.send_modal(modal)
     
     async def note_callback(self, interaction: discord.Interaction):
         """Add or edit a note on the current request"""
@@ -991,35 +1086,70 @@ class UserRequestsView(discord.ui.View):
                 await modal_interaction.response.defer()
                 
                 request_id = self.request_data[0]
-                note = self.note.value
+                reason = self.reason.value or None
                 
                 try:
                     db_path = Path('data') / 'requests.db'
                     async with aiosqlite.connect(str(db_path)) as db:
-                        # Only update notes, don't change status
                         await db.execute(
-                            "UPDATE requests SET notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                            (note, request_id)
+                            """
+                            UPDATE requests 
+                            SET status = 'reject', 
+                                fulfilled_by = ?, 
+                                fulfiller_name = ?, 
+                                notes = ?,
+                                updated_at = CURRENT_TIMESTAMP 
+                            WHERE id = ?
+                            """,
+                            (modal_interaction.user.id, str(modal_interaction.user), reason, request_id)
                         )
                         await db.commit()
+                        
+                        # Notify user
+                        try:
+                            user = await self.view.bot.fetch_user(self.request_data[1])
+                            message = f"❌ Your request for '{self.request_data[4]}' has been rejected."
+                            if reason:
+                                message += f"\nReason: {reason}"
+                            await user.send(message)
+                        except:
+                            logger.warning(f"Could not DM user {self.request_data[1]}")
                     
                     # Update the request in our list
                     updated_request = list(self.request_data)
-                    updated_request[11] = note
+                    updated_request[6] = 'reject'
+                    updated_request[9] = modal_interaction.user.id
+                    updated_request[10] = str(modal_interaction.user)
+                    updated_request[11] = reason
                     self.view.requests[self.view.current_index] = tuple(updated_request)
                     
                     # Update view
-                    embed = self.view.create_request_embed(self.view.requests[self.view.current_index])
+                    self.view.update_button_states()
+                    
+                    # Fetch user avatar
+                    user_avatar_url = None
+                    try:
+                        user = self.view.bot.get_user(self.view.requests[self.view.current_index][1])
+                        if not user:
+                            user = await self.view.bot.fetch_user(self.view.requests[self.view.current_index][1])
+                        if user and user.avatar:
+                            user_avatar_url = user.avatar.url
+                        elif user:
+                            user_avatar_url = user.default_avatar.url
+                    except:
+                        pass
+                    
+                    embed = self.view.create_request_embed(self.view.requests[self.view.current_index], user_avatar_url)
                     await modal_interaction.followup.edit_message(
-                        message_id=self.view.message.id,
-                        embed=embed,
+                        message_id=self.view.message.id, 
+                        embed=embed, 
                         view=self.view
                     )
                     
                 except Exception as e:
-                    logger.error(f"Error adding note: {e}")
+                    logger.error(f"Error rejecting request: {e}")
                     await modal_interaction.followup.send(
-                        "❌ An error occurred while updating the note.",
+                        "❌ An error occurred while rejecting the request.", 
                         ephemeral=True
                     )
         
@@ -2317,7 +2447,21 @@ class Request(commands.Cog):
 
                 # Create paginated view
                 view = RequestAdminView(self.bot, requests, ctx.author.id)
-                embed = view.create_request_embed(requests[0])
+                
+                # Fetch user avatar for the first request
+                user_avatar_url = None
+                try:
+                    user = self.bot.get_user(requests[0][1])  # requests[0][1] is user_id
+                    if not user:
+                        user = await self.bot.fetch_user(requests[0][1])
+                    if user and user.avatar:
+                        user_avatar_url = user.avatar.url
+                    elif user:
+                        user_avatar_url = user.default_avatar.url
+                except:
+                    pass
+
+                embed = view.create_request_embed(requests[0], user_avatar_url)  # Pass avatar URL
                 
                 # Add viewing mode indicator to the message
                 mode_text = "📋 **Viewing: All Requests**" if show_all else "⏳ **Viewing: Pending Requests Only**"
