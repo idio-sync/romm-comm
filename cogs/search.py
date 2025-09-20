@@ -639,6 +639,7 @@ class ROM_View(discord.ui.View):
                     self.message.embeds and  # Original message should have embed
                     referenced_message.embeds[0].title == self.message.embeds[0].title  # Compare embed titles
                 )  
+            
             def reaction_check(reaction, user):
                 # List of accepted emoji names and Unicode emojis
                 valid_emojis = {
@@ -652,6 +653,7 @@ class ROM_View(discord.ui.View):
                     reaction.message.embeds[0].title == self.message.embeds[0].title and  # Compare embeds
                     (getattr(reaction.emoji, 'name', str(reaction.emoji)).lower() in valid_emojis)  # Check emoji safely
                 )
+            
             # Create tasks for both events
             message_task = asyncio.create_task(
                 self.bot.wait_for(
@@ -676,16 +678,23 @@ class ROM_View(discord.ui.View):
                     return_when=asyncio.FIRST_COMPLETED
                 )
 
-                # Cancel pending tasks
+                # Cancel pending tasks and properly handle their exceptions
                 for task in pending:
                     task.cancel()
                     try:
                         await task
-                    except asyncio.CancelledError:
+                    except (asyncio.CancelledError, asyncio.TimeoutError):
+                        # Both exceptions are expected when cancelling tasks
                         pass
 
                 # Get the result from the completed task
-                result = done.pop().result()
+                completed_task = done.pop()
+                try:
+                    result = completed_task.result()
+                except asyncio.TimeoutError:
+                    # This task also timed out
+                    logger.info("QR code trigger watch timed out")
+                    return
                 
                 if isinstance(result, discord.Message):
                     trigger_type = "message reply"
@@ -846,6 +855,7 @@ class Search(commands.Cog):
             'Pokémon mini': ['pokemon_mini'],
             'Sega 32X': ['32x'],
             'Sega CD': ['sega_cd'],
+            'Segacd': ['sega_cd'],
             'Sega Game Gear': ['game_gear'],
             'Sega Master System/Mark III': ['master_system'],
             'Sega Mega Drive/Genesis': ['genesis', 'genesis_2', 'nomad'],
