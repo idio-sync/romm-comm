@@ -1170,7 +1170,8 @@ class Search(commands.Cog):
                                 initial_message = await initial_message.original_response()
                             
                             view.message = initial_message
-                            self.bot.loop.create_task(view.watch_for_qr_triggers(ctx.interaction))
+                            task = self.bot.loop.create_task(view.watch_for_qr_triggers(ctx.interaction))
+                            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
                             return
 
                     except Exception as e:
@@ -1225,7 +1226,8 @@ class Search(commands.Cog):
                             initial_message = await initial_message.original_response()
                         
                         view.message = initial_message
-                        self.bot.loop.create_task(view.watch_for_qr_triggers(ctx.interaction))
+                        task = self.bot.loop.create_task(view.watch_for_qr_triggers(ctx.interaction))
+                        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
                         return
 
                     logger.info(f"Random ROM attempt {attempt + 1} with ID {random_rom_id} failed")
