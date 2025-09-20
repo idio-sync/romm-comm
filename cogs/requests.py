@@ -164,9 +164,14 @@ class RequestAdminView(discord.ui.View):
         )
         
         # Platform field
+        search_cog = self.bot.get_cog('Search')
+        platform_display = req[3]
+        if search_cog:
+            platform_display = search_cog.get_platform_with_emoji(req[3])
+
         embed.add_field(
             name="Platform",
-            value=req[3],
+            value=platform_display,
             inline=True
         )
         
@@ -710,9 +715,14 @@ class UserRequestsView(discord.ui.View):
         )
         
         # Platform field
+        search_cog = self.bot.get_cog('Search')
+        platform_display = req[3]
+        if search_cog:
+            platform_display = search_cog.get_platform_with_emoji(req[3])
+
         embed.add_field(
             name="Platform",
-            value=req[3],
+            value=platform_display,
             inline=True
         )
         
@@ -1159,8 +1169,9 @@ class GameSelect(discord.ui.Select):
         await self.view.update_view_for_selection(selected_game)
 
 class GameSelectView(discord.ui.View):
-    def __init__(self, matches, platform_name=None):
+    def __init__(self, bot, matches, platform_name=None):
         super().__init__()
+        self.bot = bot
         self.matches = matches
         self.selected_game = None
         self.message = None
@@ -1209,9 +1220,14 @@ class GameSelectView(discord.ui.View):
             embed.set_image(url=game['cover_url'])
         
         # Always use the platform_name from the request
+        search_cog = self.bot.get_cog('Search')
+        platform_display = self.platform_name
+        if search_cog:
+            platform_display = search_cog.get_platform_with_emoji(self.platform_name)
+
         embed.add_field(
             name="Platform",
-            value=self.platform_name,
+            value=platform_display,
             inline=True
         )
         
@@ -1377,6 +1393,14 @@ class ExistingGameView(discord.ui.View):
                     rom_data.update(detailed_rom)
         except Exception as e:
             logger.error(f"Error fetching detailed ROM data: {e}")
+        
+        # Platform emoji matching
+        search_cog = self.bot.get_cog('Search')
+        if search_cog and self.platform_name:
+            platform_display = search_cog.get_platform_with_emoji(self.platform_name)
+        else:
+            platform_display = self.platform_name
+
         
         # Create ROM_View instance to use its embed creation
         rom_view = ROM_View(self.bot, [rom_data], self.author_id, self.platform_name)
@@ -1821,7 +1845,7 @@ class Request(commands.Cog):
                 await db.commit()
 
                 if message and selected_game:
-                    view = GameSelectView(matches=[selected_game], platform_name=platform_name)
+                    view = GameSelectView(self.bot, matches=[selected_game], platform_name=platform_name)
                     embed = view.create_game_embed(selected_game)
                     embed.set_footer(text=f"Request submitted by {author_name}")
                     await message.edit(embed=embed)
@@ -1849,7 +1873,7 @@ class Request(commands.Cog):
         
         if igdb_matches:
             # Show IGDB selection
-            select_view = GameSelectView(igdb_matches, platform_display_name)
+            select_view = GameSelectView(self.bot, igdb_matches, platform_display_name)
             initial_embed = select_view.create_game_embed(igdb_matches[0])
             select_view.message = await ctx.followup.send(
                 "Please select the correct game from the list below:",
@@ -1916,8 +1940,9 @@ class Request(commands.Cog):
                     
             if not platform_id:
                 # Show available platforms with display names
+                search_cog = self.bot.get_cog('Search')
                 platforms_list = "\n".join(
-                    f"• {self.bot.get_cog('Search').get_platform_with_emoji(self.bot.get_platform_display_name(p))}" 
+                    f"• {search_cog.get_platform_with_emoji(self.bot.get_platform_display_name(p)) if search_cog else self.bot.get_platform_display_name(p)}" 
                     for p in sorted(raw_platforms, key=lambda x: self.bot.get_platform_display_name(x))
                 )
                 await ctx.respond(f"❌ Platform '{platform}' not found. Available platforms:\n{platforms_list}")
@@ -1937,9 +1962,12 @@ class Request(commands.Cog):
             
             if exists:
                 # Create embed showing games found
+                search_cog = self.bot.get_cog('Search')
+                platform_with_emoji = search_cog.get_platform_with_emoji(platform_display_name) if search_cog else platform_display_name
+
                 embed = discord.Embed(
                     title="Similar Games Found in Collection",
-                    description=f"Found {len(matches)} game(s) matching '{game}' that are already available:",
+                    description=f"Found {len(matches)} game(s) matching '{game}' for platform '{platform_with_emoji}' that are already available:",
                     color=discord.Color.blue()
                 )
                                 
@@ -2049,9 +2077,12 @@ class Request(commands.Cog):
                     view = ExistingGameView(self.bot, matches, platform_display_name, game, ctx.author.id)
                     
                     # Add match details to embed
+                    search_cog = self.bot.get_cog('Search')
+                    platform_with_emoji = search_cog.get_platform_with_emoji(platform_display_name) if search_cog else platform_display_name
+
                     embed = discord.Embed(
                         title="Similar Games Found in Collection",
-                        description=f"Found {len(matches)} game(s) matching '{game}' that are already available:",
+                        description=f"Found {len(matches)} game(s) matching '{game}' for platform '{platform_with_emoji}' that are already available:",
                         color=discord.Color.blue()
                     )
                     
@@ -2102,7 +2133,7 @@ class Request(commands.Cog):
 
             # If we get here, either the game doesn't exist or user confirmed different version needed
             if igdb_matches:
-                select_view = GameSelectView(igdb_matches, platform_display_name)
+                select_view = GameSelectView(self.bot, igdb_matches, platform_display_name)
                 select_embed = discord.Embed(
                     title="Game Selection",
                     description="Please select the correct game from the list below:",
