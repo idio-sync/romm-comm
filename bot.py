@@ -397,8 +397,8 @@ class RommBot(discord.Bot):
             'cogs.scan', 
             'cogs.requests',
             'cogs.user_manager',
-            'cogs.recent_roms',
-            'cogs.web_dashboard'
+           #'cogs.web_dashboard',     Commenting out for now, will likely use third party dash in the future
+            'cogs.recent_roms'
         ]
         
         # Dependencies for each cog
@@ -409,8 +409,8 @@ class RommBot(discord.Bot):
             'cogs.scan': ['socketio'],
             'cogs.requests': ['aiosqlite'],
             'cogs.user_manager': ['aiohttp','aiosqlite'],
-            'cogs.recent_roms': ['aiosqlite'],
-            'cogs.web_dashboard': ['aiohttp', 'aiosqlite']
+            # 'cogs.web_dashboard': ['aiohttp', 'aiosqlite'],        Commenting out for now, will likely use third party dash in the future
+            'cogs.recent_roms': ['aiosqlite']
         }
 
         for cog in cogs_to_load:
@@ -734,3 +734,4 @@ if __name__ == "__main__":
         logger.info("Bot shutting down...")
     except Exception as e:
         logger.error("Error running bot:", exc_info=True)
+
