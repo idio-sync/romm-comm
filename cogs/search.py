@@ -13,6 +13,7 @@ from io import BytesIO
 import asyncio
 import time
 from urllib.parse import quote
+from collections import defaultdict
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -51,12 +52,31 @@ class ROM_View(discord.ui.View):
                 size_bytes = sum(f.get('file_size_bytes', 0) for f in rom['files'])
             file_size = self.format_file_size(size_bytes)
             
-            truncated_filename = (file_name[:47] + '...') if len(file_name) > 50 else file_name
+            # Check if files are in subfolders for the description
+            subfolder_types = set()
+            if rom.get('files'):
+                for f in rom['files']:
+                    subfolder = self.get_file_subfolder(f)
+                    if subfolder:
+                        subfolder_types.add(subfolder)
+            
+            # Build description
+            if subfolder_types:
+                subfolder_text = f"[{', '.join(sorted(subfolder_types))}] "
+                truncated_filename = (file_name[:40] + '...') if len(file_name) > 43 else file_name
+                description = f"{truncated_filename} + {subfolder_text} ({file_size})"
+            else:
+                truncated_filename = (file_name[:47] + '...') if len(file_name) > 50 else file_name
+                description = f"{truncated_filename} ({file_size})"
+            
+            # Ensure description doesn't exceed Discord's limit (100 chars)
+            if len(description) > 100:
+                description = description[:97] + "..."
             
             self.select.add_option(
                 label=display_name,
                 value=str(rom['id']),
-                description=f"{truncated_filename} ({file_size})"
+                description=description
             )
         
         self.select.callback = self.select_callback
@@ -75,6 +95,41 @@ class ROM_View(discord.ui.View):
             size_value /= 1024
             unit_index += 1
         return f"{size_value:.2f} {units[unit_index]}"
+        
+    @staticmethod
+    def get_file_subfolder(file_info: Dict) -> Optional[str]:
+        # First prefer backend category field
+        if file_info.get('category'):
+            return file_info['category'].lower()
+        
+        # Fallback to path parsing if no category
+        file_path = file_info.get('file_path', '')
+        if not file_path:
+            return None
+
+        known_subfolders = ['hack', 'dlc', 'manual', 'mod', 'patch', 'update', 'demo', 'translation', 'prototype']
+        path_parts = file_path.split('/')
+        for part in path_parts:  # include all parts
+            if part.lower() in known_subfolders:
+                return part.lower()
+        return None
+    
+    @staticmethod
+    def get_subfolder_icon(subfolder: Optional[str]) -> str:
+        """Get icon for subfolder type"""
+        icons = {
+            'hack': '🔧',
+            'dlc':'⬇️',
+            'manual': '📖',
+            'mod': '🎨',
+            'patch': '📝',
+            'update': '🔄',
+            'demo': '🎮',
+            'translation': '🌐',
+            'prototype': '🔬',
+            None: '📄'  # Default for main/root files
+        }
+        return icons.get(subfolder, '📁')
 
     async def create_rom_embed(self, rom_data: Dict) -> discord.Embed:
         try:
@@ -177,99 +232,116 @@ class ROM_View(discord.ui.View):
                 f"[Romm]({romm_url})",
                 f"[IGDB]({igdb_url})"
             ]
+            
+            if ra_id := rom_data.get('ra_id'):
+                ra_url = f"https://retroachievements.org/game/{ra_id}"
+                links.append(f"[RetroAchievements]({ra_url})")
+            
             embed.add_field(name="Links", value=" • ".join(links), inline=True)
             
             # File information
             if rom_data.get('multi') and rom_data.get('files'):
                 files = rom_data.get('files', [])
                 total_size = sum(f.get('file_size_bytes', 0) for f in files)
+                
+                # Group files by subfolder
+                files_by_subfolder = defaultdict(list)
+                for file_info in files:
+                    subfolder = self.get_file_subfolder(file_info)
+                    files_by_subfolder[subfolder].append(file_info)
+                
+                # Sort subfolders with None (main) first
+                sorted_subfolders = sorted(files_by_subfolder.keys(), key=lambda x: (x is not None, x))
+                
                 files_info = []
                 total_length = 0
                 files_shown = 0
                 total_files = len(files)
-                max_length = 800  # Leave buffer for Discord's limit
-
-                def would_exceed_limit(current_text: str, new_line: str) -> bool:
-                    """Check if adding a new line would exceed Discord's limit"""
-                    potential_total = len('\n'.join(current_text + [new_line]))
-                    return potential_total > max_length
+                max_length = 800
                 
-                # Sort files based on count
-                if len(files) > 10:
+                for subfolder in sorted_subfolders:
+                    subfolder_files = files_by_subfolder[subfolder]
+                    
+                    # Add subfolder header if not main files
+                    if files_info and len(sorted_subfolders) > 1:  # Add spacing between groups
+                        if total_length + 1 < max_length:
+                            files_info.append("")
+                            total_length += 1
+                    
+                    if subfolder:
+                        icon = self.get_subfolder_icon(subfolder)
+                        # Special handling for acronyms that should be all caps
+                        acronyms = {'dlc': 'DLC'}
+                        display_name = acronyms.get(subfolder, subfolder.capitalize())
+                        header_line = f"{icon} **{display_name}**"
+                        if total_length + len(header_line) + 1 > max_length:
+                            files_info.append("...")
+                            break
+                        files_info.append(header_line)
+                        total_length += len(header_line) + 1
+                    
+                    # Sort files in this subfolder
                     sorted_files = sorted(
-                        files, 
-                        key=lambda x: x.get('file_size_bytes', 0), 
-                        reverse=True
-                    )[:10]
-                else:
-                    sorted_files = sorted(
-                        files,
+                        subfolder_files,
+                        key=lambda x: (x.get('file_size_bytes', 0), x.get('file_name', '').lower()),
+                        reverse=(len(subfolder_files) > 10)
+                    )[:10] if len(subfolder_files) > 10 else sorted(
+                        subfolder_files,
                         key=lambda x: x.get('file_name', '').lower()
                     )
-
-                # Process each file
-                for file_info in sorted_files:
-                    # Get file size
-                    size_bytes = file_info.get('file_size_bytes', 0)
-                    size_str = self.format_file_size(size_bytes)
-
-                    # Create file line
-                    file_line = f"• {file_info['file_name']} ({size_str})"
-                    line_length = len(file_line) + 1  # +1 for newline
                     
-                    if total_length + line_length > max_length:
-                        files_info.append("...")
+                    # Add files from this subfolder
+                    for file_info in sorted_files:
+                        size_bytes = file_info.get('file_size_bytes', 0)
+                        size_str = self.format_file_size(size_bytes)
+                        file_line = f"• {file_info['file_name']} ({size_str})"
+                        line_length = len(file_line) + 1
+                        
+                        if total_length + line_length > max_length:
+                            files_info.append("...")
+                            break
+                        
+                        files_info.append(file_line)
+                        total_length += line_length
+                        files_shown += 1
+                    
+                    if total_length >= max_length:
                         break
-                    
-                    # Add file line
-                    files_info.append(file_line)
-                    total_length += line_length
-                    files_shown += 1  # Increment counter when file is actually added
-                 
+                
                 # Create field name
                 field_name = f"Files (Total: {self.format_file_size(total_size)}"
                 if len(files) > files_shown:
-                    field_name += f" - Showing {files_shown} of {(total_files)} files)"
+                    field_name += f" - Showing {files_shown} of {total_files} files)"
                 else:
                     field_name += ")"
-
-                 # Verify final length
-                final_text = "\n".join(files_info)
-                if len(final_text) > 1024:
-                    # If somehow still too long, truncate and show fewer files
-                    files_info = files_info[:len(files_info)//2]
-                    if files_info[-1] != "...":
-                        files_info.append("...")
-                    final_text = "\n".join(files_info)
-                    files_shown = sum(1 for line in files_info if line.startswith("•"))
-                    
-                    # Update field name with new count
-                    field_name = f"Files (Total: {self.format_file_size(total_size)}"
-                    if len(files) > files_shown:
-                        field_name += f" - Showing {files_shown} of {len(files)} files)"
-                    else:
-                        field_name += ")"
                 
                 # Add field to embed
                 embed.add_field(
                     name=field_name,
-                    value="\n".join(files_info),
+                    value="\n".join(files_info) if files_info else "No files to display",
                     inline=False
                 )
             else:
                 # Single file display
                 file_size = self.format_file_size(rom_data.get('fs_size_bytes', 0))
-                file_name = rom_data.get('fs_name' , 'unknown_file')
+                file_name = rom_data.get('fs_name', 'unknown_file')
                 
-                # Add filename and hash values to embed
-                file_info = [f"• {file_name}"]
+                # Check if single file is in a subfolder
+                subfolder = None
+                if rom_data.get('files') and len(rom_data.get('files', [])) == 1:
+                    subfolder = self.get_file_subfolder(rom_data['files'][0])
+                
+                file_info_text = f"• {file_name}"
+                if subfolder:
+                    icon = self.get_subfolder_icon(subfolder)
+                    file_info_text = f"{icon} [{subfolder.capitalize()}]\n• {file_name}"
                 
                 embed.add_field(
                     name=f"File ({file_size})",
-                    value="\n".join(file_info),
+                    value=file_info_text,
                     inline=False
                 )
-
+                
             return embed
         except Exception as e:
             logger.error(f"Error creating ROM embed: {e}")
@@ -358,42 +430,51 @@ class ROM_View(discord.ui.View):
                 if not files:
                     return
                 
-                # Sort files based on count
-                if len(files) > 10:
-                    sorted_files = sorted(
-                        files, 
-                        key=lambda x: x.get('file_size_bytes', 0),
-                        reverse=True
-                    )[:10]
-                else:
-                    sorted_files = sorted(
-                        files,
-                        key=lambda x: x.get('file_name', '').lower()
-                    )
+                # Sort files - group by subfolder first, then by size/name
+                files_with_subfolder = [(f, self.get_file_subfolder(f)) for f in files]
+                files_with_subfolder.sort(key=lambda x: (x[1] is not None, x[1], x[0].get('file_name', '').lower()))
+                
+                # Limit to 25 files for dropdown (Discord limit)
+                display_files = files_with_subfolder[:25]
                 
                 # Create file select with appropriate max_values
                 self.file_select = discord.ui.Select(
                     placeholder="Select files to download",
                     custom_id="file_select",
                     min_values=1,
-                    max_values=min(len(sorted_files), 25)
+                    max_values=min(len(display_files), 25)
                 )
                 
-                # Add file options using shortened values
-                for i, file_info in enumerate(sorted_files):
-                    # Get size from file info
+                # Add file options with subfolder in label
+                for i, (file_info, subfolder) in enumerate(display_files):
                     size_bytes = file_info.get('file_size_bytes', 0)
                     size = self.format_file_size(size_bytes)
+                    
+                    # Format label with subfolder prefix if present
+                    file_name = file_info['file_name'][:75]
+                    if subfolder:
+                        label = f"[{subfolder}] {file_name} ({size})"
+                    else:
+                        label = f"{file_name} ({size})"
+                    
+                    # Truncate label if too long (Discord has a 100 char limit for labels)
+                    if len(label) > 100:
+                        # Truncate filename portion to fit
+                        max_name_len = 100 - len(f"[{subfolder}]  ({size})") if subfolder else 100 - len(f" ({size})")
+                        truncated_name = file_name[:max_name_len-3] + "..."
+                        if subfolder:
+                            label = f"[{subfolder}] {truncated_name} ({size})"
+                        else:
+                            label = f"{truncated_name} ({size})"
                     
                     # Create shortened value and map it to full filename AND file ID
                     short_value = f"file_{i}"
                     self.filename_map[short_value] = file_info['file_name']
-                    self.file_id_map[short_value] = str(file_info.get('id'))  # Store as string
+                    self.file_id_map[short_value] = str(file_info.get('id'))
                     
                     self.file_select.add_option(
-                        label=file_info['file_name'][:75],
-                        value=short_value,
-                        description=f"Size: {size}"
+                        label=label,
+                        value=short_value
                     )
                 
                 self.file_select.callback = self.file_select_callback
