@@ -897,6 +897,168 @@ class ROM_View(discord.ui.View):
             logger.error(f"Error in select callback: {e}")
             await interaction.followup.send("❌ An error occurred while processing your selection", ephemeral=True)
                 
+class NoResultsView(discord.ui.View):
+    """View shown when search returns no results, offering to request the game"""
+    
+    def __init__(self, bot, platform_name: str, game_name: str, author_id: int):
+        super().__init__(timeout=60)
+        self.bot = bot
+        self.platform_name = platform_name
+        self.game_name = game_name
+        self.author_id = author_id
+        
+        # Add "Request This Game" button
+        request_button = discord.ui.Button(
+            label="Request This Game",
+            style=discord.ButtonStyle.primary,
+            emoji="📝"
+        )
+        request_button.callback = self.request_game_callback
+        self.add_item(request_button)
+        
+        # Add "Search Tips" button for help
+        tips_button = discord.ui.Button(
+            label="💡 Search Tips",
+            style=discord.ButtonStyle.secondary
+        )
+        tips_button.callback = self.search_tips_callback
+        self.add_item(tips_button)
+    
+    async def request_game_callback(self, interaction: discord.Interaction):
+        """Handle the request button click"""
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This button isn't for you!", ephemeral=True)
+            return
+        
+        await interaction.response.defer()
+        
+        # Get the Request cog
+        request_cog = self.bot.get_cog('Request')
+        if not request_cog:
+            await interaction.followup.send("❌ Request system is not available", ephemeral=True)
+            return
+        
+        # Check if requests are enabled
+        if not request_cog.requests_enabled:
+            await interaction.followup.send("❌ The request system is currently disabled.", ephemeral=True)
+            return
+        
+        try:
+            # Check if game already exists (double-check with broader search)
+            exists, matches = await request_cog.check_if_game_exists(self.platform_name, self.game_name)
+            
+            # Search IGDB for metadata if available
+            igdb_matches = []
+            if request_cog.igdb_enabled:
+                try:
+                    igdb_matches = await request_cog.igdb.search_game(self.game_name, self.platform_name)
+                except Exception as e:
+                    logger.error(f"Error fetching IGDB data: {e}")
+            
+            if exists and matches:
+                # Game was found with broader search - show it
+                from .requests import ExistingGameView
+                view = ExistingGameView(self.bot, matches, self.platform_name, self.game_name, self.author_id)
+                
+                embed = discord.Embed(
+                    title="Game Found!",
+                    description=f"A broader search found {len(matches)} matching game(s) for '{self.game_name}':",
+                    color=discord.Color.blue()
+                )
+                
+                for i, rom in enumerate(matches[:3]):
+                    embed.add_field(
+                        name=rom.get('name', 'Unknown'),
+                        value=f"File: {rom.get('fs_name', 'Unknown')}",
+                        inline=False
+                    )
+                
+                if len(matches) > 3:
+                    embed.set_footer(text=f"...and {len(matches) - 3} more")
+                
+                message = await interaction.followup.send(embed=embed, view=view)
+                view.message = message
+                
+            elif igdb_matches:
+                # Show IGDB selection
+                from .requests import GameSelectView
+                select_view = GameSelectView(self.bot, igdb_matches, self.platform_name)
+                initial_embed = select_view.create_game_embed(igdb_matches[0])
+                select_view.message = await interaction.followup.send(
+                    "Select the correct game from IGDB:",
+                    embed=initial_embed,
+                    view=select_view
+                )
+                
+                await select_view.wait()
+                
+                if select_view.selected_game and select_view.selected_game != "manual":
+                    await request_cog.process_request(
+                        interaction, 
+                        self.platform_name, 
+                        self.game_name, 
+                        None,  # No additional details
+                        select_view.selected_game, 
+                        select_view.message
+                    )
+            else:
+                # Direct request without IGDB
+                await request_cog.process_request(
+                    interaction,
+                    self.platform_name,
+                    self.game_name,
+                    None,  # No additional details
+                    None,  # No IGDB data
+                    None   # No message to update
+                )
+                
+            # Disable buttons after use
+            for item in self.children:
+                item.disabled = True
+            
+            try:
+                await interaction.message.edit(view=self)
+            except:
+                pass  # Message might have been deleted
+                
+        except Exception as e:
+            logger.error(f"Error processing request from search: {e}")
+            await interaction.followup.send("❌ An error occurred while processing your request", ephemeral=True)
+    
+    async def search_tips_callback(self, interaction: discord.Interaction):
+        """Show search tips"""
+        embed = discord.Embed(
+            title="💡 Search Tips",
+            description="Here are some tips for better search results:",
+            color=discord.Color.blue()
+        )
+        
+        embed.add_field(
+            name="1. Try shorter search terms",
+            value="Instead of 'The Legend of Zelda: Ocarina of Time', try 'Zelda Ocarina' or just 'Ocarina'",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="2. Check the platform name",
+            value="Make sure you're using the exact platform name from the autocomplete",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="3. Try alternate names",
+            value="Some games have different regional names (e.g., 'Mega Man' vs 'Rockman')",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="4. Remove special characters",
+            value="Try searching without colons, apostrophes, or other punctuation",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
 class Search(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -1429,7 +1591,24 @@ class Search(commands.Cog):
                     break  # Found results, stop trying
 
             if not search_results or not isinstance(search_results, list) or len(search_results) == 0:
-                await ctx.respond(f"No ROMs found matching '{game}' for platform '{platform_display_name}'")
+                # Create an embed for no results
+                embed = discord.Embed(
+                    title="No Results Found",
+                    description=f"No ROMs found matching '**{game}**' for platform '**{self.get_platform_with_emoji(platform_display_name)}**'",
+                    color=discord.Color.orange()
+                )
+                
+                embed.add_field(
+                    name="What would you like to do?",
+                    value="• Click **Request This Game** to submit a request for this ROM\n"
+                          "• Click **Search Tips** for help improving your search\n"
+                          "• Try searching again with different terms or check the platform name",
+                    inline=False
+                )
+                
+                # Add the no results view with request button
+                view = NoResultsView(self.bot, platform_display_name, game, ctx.author.id)
+                await ctx.respond(embed=embed, view=view)
                 return
 
             # Sort results
