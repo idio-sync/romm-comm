@@ -1365,34 +1365,50 @@ class Search(commands.Cog):
 
             # Search for ROMs
             search_term = game.strip()
-            search_response = await self.bot.fetch_api_endpoint(
-                f'roms?platform_id={platform_id}&search_term={search_term}&limit=25'
-            )
+            search_results = []
 
-            # Handle paginated response
-            if search_response and isinstance(search_response, dict) and 'items' in search_response:
-                search_results = search_response['items']
-            elif search_response and isinstance(search_response, list):
-                search_results = search_response
-            else:
-                search_results = []
+            # Try multiple search strategies
+            search_attempts = [
+                search_term,  # Original search
+            ]
 
-            # If no results, try with modified search term
-            if not search_results or len(search_results) == 0:
-                search_words = search_term.split()  # Define search_words here
-                if len(search_words) > 1:
-                    search_term = ' '.join(search_words)
-                    search_response = await self.bot.fetch_api_endpoint(
-                        f'roms?platform_id={platform_id}&search_term={search_term}&limit=25'
-                    )
-                    
-                    # Handle paginated response for retry
-                    if search_response and isinstance(search_response, dict) and 'items' in search_response:
-                        search_results = search_response['items']
-                    elif search_response and isinstance(search_response, list):
-                        search_results = search_response
-                    else:
-                        search_results = []
+            # If the search term has multiple words, try searching for key parts
+            words = search_term.split()
+            if len(words) > 1:
+                # Add first word only (often the main game name)
+                search_attempts.append(words[0])
+                
+                # If last word is a number, try first word + number (for sequels)
+                if words[-1].isdigit():
+                    search_attempts.append(f"{words[0]} {words[-1]}")
+
+            # Try each search strategy
+            for attempt in search_attempts:
+                search_response = await self.bot.fetch_api_endpoint(
+                    f'roms?platform_id={platform_id}&search_term={attempt}&limit=100'
+                )
+                
+                # Handle paginated response
+                if search_response and isinstance(search_response, dict) and 'items' in search_response:
+                    all_results = search_response['items']
+                elif search_response and isinstance(search_response, list):
+                    all_results = search_response
+                else:
+                    all_results = []
+                
+                # If we're on a broader search, filter results to match original intent
+                if attempt != search_term and all_results:
+                    # Filter to games that contain all important words from original search
+                    important_words = [w.lower() for w in words if not w.lower() in ['the', 'of', 'and']]
+                    search_results = [
+                        rom for rom in all_results
+                        if all(word in rom['name'].lower() for word in important_words)
+                    ][:25]  # Limit to 25 results
+                else:
+                    search_results = all_results[:25]
+                
+                if search_results:
+                    break  # Found results, stop trying
 
             if not search_results or not isinstance(search_results, list) or len(search_results) == 0:
                 await ctx.respond(f"No ROMs found matching '{game}' for platform '{platform_display_name}'")
