@@ -34,12 +34,12 @@ A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) A
 ### Current
 
 - **Recently Added**: Posts recently added ROM updates to a configured channel (batched when multiple ROMs are added).
-- **Stats**: Near real-time collection statistics shown in voice channel names, the bot "Now Playing" status, and via commands.
+- **Request system**: Submit and manage ROM requests entirely from Discord. Requests are enriched with IGDB metadata when available.
 - **Search**: Platform-specific searches and a random ROM roll. Results include metadata and download links.
+- **Stats**: Near real-time collection statistics shown in voice channel names, the bot "Now Playing" status, and via commands.
 - **Multi-file support**: Searches support multi-file games; users can select one, several, or all files to download.
 - **Firmware search**: Lists firmware files for a platform with names, sizes, hashes, and download links.
 - **Scans**: Start/stop/status for different RomM scan types. The bot reports progress and a summary on completion.
-- **Request system**: Submit and manage ROM requests entirely from Discord. Requests are enriched with IGDB metadata when available.
 - **Emojis**: Uploads custom console emojis on install; uses emojis in responses and stats. Nitro-aware to expand/revert the emoji set.
 - **QR code generation**: Generate QR codes for 3DS/Vita installs by reacting to /search replies with QR emoji (requires download endpoint auth to be disabled on the RomM instance).
 - **RomM user management**: Auto-create RomM accounts for Discord users via role assignment; manage Romm > Discord user linking via gui in Discord.
@@ -203,19 +203,20 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 
 ---
 
-## Requests System
+## Requests
 
 **User features:**
 - Submit requests with platform, game name, and optional details.
-- Detect existing ROMs to avoid duplicates.
+- Detect existing ROMs to avoid unnecisary requests.
+- Handles duplicate requests, additional requesters will be notified if game is added. 
 - Attempts IGDB matching for metadata.
-- Per-user request cap (default: 25).
+- User request cap (currently 25 pending).
 - DM notifications when requests are fulfilled or rejected.
-- Requests can be filled automatically during Romm filesystem scan or manually by admin
+- Requests can be filled automatically during Romm filesystem scan or manually by admin.
 
 **Admin features:**
 - View, filter, and manage pending requests.
-- Fulfill/reject/add notes directly or via the web dashboard.
+- Fulfill, reject or add notes.
 
 ---
 
@@ -270,5 +271,6 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
