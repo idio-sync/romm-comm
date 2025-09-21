@@ -753,43 +753,47 @@ class ROM_View(discord.ui.View):
             )
 
             # Wait for either task to complete
-            try:
-                done, pending = await asyncio.wait(
-                    [message_task, reaction_task],
-                    return_when=asyncio.FIRST_COMPLETED
-                )
+            done, pending = await asyncio.wait(
+                [message_task, reaction_task],
+                return_when=asyncio.FIRST_COMPLETED,
+                timeout=60.0  # Add overall timeout to wait()
+            )
 
-                # Cancel pending tasks and properly handle their exceptions
-                for task in pending:
-                    task.cancel()
-                    try:
-                        await task
-                    except (asyncio.CancelledError, asyncio.TimeoutError):
-                        # Both exceptions are expected when cancelling tasks
-                        pass
+            # Cancel pending tasks
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    # Both exceptions are expected when cancelling tasks
+                    pass
 
-                # Get the result from the completed task
+            # Process completed task if any
+            if done:
                 completed_task = done.pop()
                 try:
-                    result = completed_task.result()
+                    result = await completed_task
+                    
+                    if isinstance(result, discord.Message):
+                        trigger_type = "message reply"
+                    else:
+                        reaction, user = result
+                        trigger_type = f"reaction {reaction.emoji}"
+                    
+                    await self.handle_qr_trigger(interaction, trigger_type)
+                    
                 except asyncio.TimeoutError:
-                    # This task also timed out
-                    logger.info("QR code trigger watch timed out")
-                    return
-                
-                if isinstance(result, discord.Message):
-                    trigger_type = "message reply"
-                else:
-                    reaction, user = result
-                    emoji_identifier = str(reaction.emoji.name) if hasattr(reaction.emoji, 'name') else str(reaction.emoji)
-                    trigger_type = f"reaction {reaction.emoji}"
-                
-                await self.handle_qr_trigger(interaction, trigger_type)
+                    # Individual task timed out
+                    logger.debug("QR code trigger watch timed out")
+                except Exception as e:
+                    logger.error(f"Error processing QR trigger result: {e}")
+            else:
+                # Both tasks timed out (no task completed)
+                logger.debug("QR code trigger watch timed out")
 
-            except asyncio.TimeoutError:
-                logger.info("QR code trigger watch timed out")
-                return
-
+        except asyncio.TimeoutError:
+            # Overall timeout from wait()
+            logger.debug("QR code trigger watch timed out")
         except Exception as e:
             logger.error(f"Error watching for triggers: {e}")
 
@@ -798,8 +802,22 @@ class ROM_View(discord.ui.View):
         if not self.message:
             logger.warning("No message reference for QR code triggers")
             return
-            
-        await self.start_watching_triggers(interaction)
+        
+        # Create task but don't await it - let it run in background
+        task = asyncio.create_task(self.start_watching_triggers(interaction))
+        
+        # Add error handler to prevent unhandled exceptions
+        def handle_task_exception(task):
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                pass  # Task was cancelled, this is fine
+            except asyncio.TimeoutError:
+                pass  # Task timed out normally, this is fine
+            except Exception as e:
+                logger.error(f"Unexpected error in QR trigger task: {e}")
+        
+        task.add_done_callback(handle_task_exception)
 
     def message_check(self, m):
         """Check if a message is a valid QR trigger"""
