@@ -1020,56 +1020,72 @@ class UserRequestsView(discord.ui.View):
                 )
                 self.add_item(self.reason)
             
-    async def callback(self, modal_interaction: discord.Interaction):
-        await modal_interaction.response.defer()
+            async def callback(self, modal_interaction: discord.Interaction):
+                await modal_interaction.response.defer()
+                
+                request_id = self.request_data[0]
+                reason = self.reason.value or "User cancelled"
+                
+                try:
+                    db_path = Path('data') / 'requests.db'
+                    async with aiosqlite.connect(str(db_path)) as db:
+                        await db.execute(
+                            """
+                            UPDATE requests 
+                            SET status = 'cancelled', 
+                                notes = ?,
+                                updated_at = CURRENT_TIMESTAMP 
+                            WHERE id = ?
+                            """,
+                            (reason, request_id)
+                        )
+                        await db.commit()
+                    
+                    # Update the request in our list
+                    updated_request = list(self.request_data)
+                    updated_request[6] = 'cancelled'
+                    updated_request[11] = reason
+                    self.view.requests[self.view.current_index] = tuple(updated_request)
+                    
+                    # Update button states
+                    self.view.update_button_states()
+                    
+                    # Fetch user avatar
+                    user_avatar_url = None
+                    try:
+                        user = self.view.bot.get_user(self.view.requests[self.view.current_index][1])
+                        if not user:
+                            user = await self.view.bot.fetch_user(self.view.requests[self.view.current_index][1])
+                        if user and user.avatar:
+                            user_avatar_url = user.avatar.url
+                        elif user:
+                            user_avatar_url = user.default_avatar.url
+                    except:
+                        pass
+                    
+                    # Update view with cancelled status
+                    embed = self.view.create_request_embed(self.view.requests[self.view.current_index], user_avatar_url)
+                    await modal_interaction.followup.edit_message(
+                        message_id=self.view.message.id,
+                        embed=embed,
+                        view=self.view
+                    )
+                    
+                    # Send confirmation message
+                    await modal_interaction.followup.send(
+                        f"✅ Request #{request_id} has been cancelled.",
+                        ephemeral=True
+                    )
+                    
+                except Exception as e:
+                    logger.error(f"Error cancelling request: {e}")
+                    await modal_interaction.followup.send(
+                        "❌ An error occurred while cancelling the request.",
+                        ephemeral=True
+                    )
         
-        request_id = self.request_data[0]
-        note = self.note.value
-        
-        try:
-            db_path = Path('data') / 'requests.db'
-            async with aiosqlite.connect(str(db_path)) as db:
-                await db.execute(
-                    "UPDATE requests SET notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (note, request_id)
-                )
-                await db.commit()
-            
-            # Update the request in our list
-            updated_request = list(self.request_data)
-            updated_request[11] = note
-            self.view.requests[self.view.current_index] = tuple(updated_request)
-            
-            # Fetch user avatar
-            user_avatar_url = None
-            try:
-                user = self.view.bot.get_user(self.view.requests[self.view.current_index][1])
-                if not user:
-                    user = await self.view.bot.fetch_user(self.view.requests[self.view.current_index][1])
-                if user and user.avatar:
-                    user_avatar_url = user.avatar.url
-                elif user:
-                    user_avatar_url = user.default_avatar.url
-            except:
-                pass
-            
-            # Update view
-            embed = self.view.create_request_embed(self.view.requests[self.view.current_index], user_avatar_url)
-            await modal_interaction.followup.edit_message(
-                message_id=self.view.message.id,
-                embed=embed,
-                view=self.view
-            )
-            
-        except Exception as e:
-            logger.error(f"Error adding note: {e}")
-            await modal_interaction.followup.send(
-                "❌ An error occurred while adding the note.",
-                ephemeral=True
-            )
-            
-            modal = CancelConfirmModal(self, current_request)
-            await interaction.response.send_modal(modal)
+        modal = CancelConfirmModal(self, current_request)
+        await interaction.response.send_modal(modal)
     
     async def note_callback(self, interaction: discord.Interaction):
         """Add or edit a note on the current request"""
@@ -1101,45 +1117,21 @@ class UserRequestsView(discord.ui.View):
                 await modal_interaction.response.defer()
                 
                 request_id = self.request_data[0]
-                reason = self.reason.value or None
+                note = self.note.value
                 
                 try:
                     db_path = Path('data') / 'requests.db'
                     async with aiosqlite.connect(str(db_path)) as db:
                         await db.execute(
-                            """
-                            UPDATE requests 
-                            SET status = 'reject', 
-                                fulfilled_by = ?, 
-                                fulfiller_name = ?, 
-                                notes = ?,
-                                updated_at = CURRENT_TIMESTAMP 
-                            WHERE id = ?
-                            """,
-                            (modal_interaction.user.id, str(modal_interaction.user), reason, request_id)
+                            "UPDATE requests SET notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                            (note, request_id)
                         )
                         await db.commit()
-                        
-                        # Notify user
-                        try:
-                            user = await self.view.bot.fetch_user(self.request_data[1])
-                            message = f"❌ Your request for '{self.request_data[4]}' has been rejected."
-                            if reason:
-                                message += f"\nReason: {reason}"
-                            await user.send(message)
-                        except:
-                            logger.warning(f"Could not DM user {self.request_data[1]}")
                     
                     # Update the request in our list
                     updated_request = list(self.request_data)
-                    updated_request[6] = 'reject'
-                    updated_request[9] = modal_interaction.user.id
-                    updated_request[10] = str(modal_interaction.user)
-                    updated_request[11] = reason
+                    updated_request[11] = note
                     self.view.requests[self.view.current_index] = tuple(updated_request)
-                    
-                    # Update view
-                    self.view.update_button_states()
                     
                     # Fetch user avatar
                     user_avatar_url = None
@@ -1154,17 +1146,24 @@ class UserRequestsView(discord.ui.View):
                     except:
                         pass
                     
+                    # Update view
                     embed = self.view.create_request_embed(self.view.requests[self.view.current_index], user_avatar_url)
                     await modal_interaction.followup.edit_message(
-                        message_id=self.view.message.id, 
-                        embed=embed, 
+                        message_id=self.view.message.id,
+                        embed=embed,
                         view=self.view
                     )
                     
-                except Exception as e:
-                    logger.error(f"Error rejecting request: {e}")
+                    # Send confirmation
                     await modal_interaction.followup.send(
-                        "❌ An error occurred while rejecting the request.", 
+                        "✅ Note updated successfully.",
+                        ephemeral=True
+                    )
+                    
+                except Exception as e:
+                    logger.error(f"Error adding note: {e}")
+                    await modal_interaction.followup.send(
+                        "❌ An error occurred while adding the note.",
                         ephemeral=True
                     )
         
@@ -1549,7 +1548,7 @@ class ExistingGameView(discord.ui.View):
         
         # Create ROM_View instance to use its embed creation
         rom_view = ROM_View(self.bot, [rom_data], self.author_id, self.platform_name)
-        rom_embed = await rom_view.create_rom_embed(rom_data)
+        rom_embed, cover_file = await rom_view.create_rom_embed(rom_data)  # FIXED: Unpack tuple
         
         # Update the view to include file selection if available
         await rom_view.update_file_select(rom_data)
@@ -1601,7 +1600,8 @@ class ExistingGameView(discord.ui.View):
         cancel_button.callback = self.cancel_callback
         self.add_item(cancel_button)
         
-        return rom_embed
+        # Return both embed and file (even if file is None)
+        return rom_embed, cover_file
     
     async def select_callback(self, interaction: discord.Interaction):
         """Handle ROM selection"""
@@ -1613,15 +1613,23 @@ class ExistingGameView(discord.ui.View):
         self.selected_rom = next((rom for rom in self.matches if rom['id'] == selected_rom_id), None)
         
         if self.selected_rom:
-            # Create full ROM embed
-            rom_embed = await self.create_full_rom_view(self.selected_rom)
+            # Create full ROM embed - NOW UNPACKING TUPLE
+            rom_embed, cover_file = await self.create_full_rom_view(self.selected_rom)
             
-            # Edit the message with new embed and updated view
-            await interaction.response.edit_message(
-                content="✅ **This game is already available! You can download it now:**",
-                embed=rom_embed,
-                view=self
-            )
+            # Edit the message with new embed and updated view, including file if available
+            if cover_file:
+                await interaction.response.edit_message(
+                    content="✅ **This game is already available! You can download it now:**",
+                    embed=rom_embed,
+                    view=self,
+                    file=cover_file
+                )
+            else:
+                await interaction.response.edit_message(
+                    content="✅ **This game is already available! You can download it now:**",
+                    embed=rom_embed,
+                    view=self
+                )
     
     async def request_different_callback(self, interaction: discord.Interaction):
         """User wants to request a different version - show modal"""
@@ -2375,8 +2383,8 @@ class Request(commands.Cog):
                     rom_view.remove_item(rom_view.select)  # Remove selection since single item
                     rom_view._selected_rom = rom_data
                     
-                    # Create embed using ROM_View's method
-                    rom_embed = await rom_view.create_rom_embed(rom_data)
+                    # Create embed using ROM_View's method - NOW UNPACKING TUPLE
+                    rom_embed, cover_file = await rom_view.create_rom_embed(rom_data)  # Unpack the tuple
                     await rom_view.update_file_select(rom_data)
                     
                     # Collect all download buttons and file select
@@ -2447,11 +2455,20 @@ class Request(commands.Cog):
                     cancel_btn.callback = cancel_callback
                     rom_view.add_item(cancel_btn)
                     
-                    message = await ctx.respond(
-                        "✅ This game is already available! You can download it now:",
-                        embed=rom_embed,
-                        view=rom_view
-                    )
+                    # Send message with file if available
+                    if cover_file:
+                        message = await ctx.respond(
+                            "✅ This game is already available! You can download it now:",
+                            embed=rom_embed,  # Now correctly using just the embed
+                            view=rom_view,
+                            file=cover_file  # Include the cover file
+                        )
+                    else:
+                        message = await ctx.respond(
+                            "✅ This game is already available! You can download it now:",
+                            embed=rom_embed,  # Now correctly using just the embed
+                            view=rom_view
+                        )
                     
                     if isinstance(message, discord.Interaction):
                         message = await message.original_response()
