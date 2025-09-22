@@ -3,7 +3,7 @@ import discord
 import logging
 import re
 from datetime import datetime
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Tuple
 import random
 import qrcode
 from PIL import Image
@@ -131,7 +131,43 @@ class ROM_View(discord.ui.View):
         }
         return icons.get(subfolder, '📁')
 
-    async def create_rom_embed(self, rom_data: Dict) -> discord.Embed:
+    async def download_cover_image(self, rom_data: Dict) -> Optional[discord.File]:
+        """Download cover image from Romm API and return as Discord File"""
+        try:
+            # Check if we have url_cover at all
+            if not rom_data.get('url_cover'):
+                return None
+                
+            # Build the direct cover URL from Romm API
+            platform_id = rom_data.get('platform_id')
+            rom_id = rom_data.get('id')
+            
+            if not platform_id or not rom_id:
+                logger.warning("Missing platform_id or rom_id for cover download")
+                return None
+            
+            # Construct the direct cover URL
+            cover_url = f"{self.bot.config.API_BASE_URL}/assets/romm/resources/roms/{platform_id}/{rom_id}/cover/big.png"
+            
+            logger.debug(f"Downloading cover from: {cover_url}")
+            
+            # Download the image
+            async with aiohttp.ClientSession() as session:
+                async with session.get(cover_url) as response:
+                    if response.status == 200:
+                        image_data = await response.read()
+                        byte_arr = BytesIO(image_data)
+                        byte_arr.seek(0)
+                        return discord.File(byte_arr, filename="cover.png")
+                    else:
+                        logger.warning(f"Failed to download cover: HTTP {response.status}")
+                        return None
+                        
+        except Exception as e:
+            logger.error(f"Error downloading cover image: {e}")
+            return None
+    
+    async def create_rom_embed(self, rom_data: Dict) -> tuple[discord.Embed, Optional[discord.File]]:
         try:
             # When creating the download URL in the embed
             raw_file_name = rom_data.get('fs_name', 'unknown_file')
@@ -157,9 +193,13 @@ class ROM_View(discord.ui.View):
             # Set romm logo as thumbnail
             embed.set_thumbnail(url=logo_url)
             
-            # Add cover image
-            if cover_url := rom_data.get('url_cover'):
-                embed.set_image(url=cover_url)
+            # Download cover image if available
+            cover_file = None
+            if rom_data.get('url_cover'):
+                cover_file = await self.download_cover_image(rom_data)
+                if cover_file:
+                    # Set the image to use the attachment
+                    embed.set_image(url="attachment://cover.png")
             
             # Get platform name if not provided
             platform_name = self.platform_name
@@ -188,7 +228,7 @@ class ROM_View(discord.ui.View):
                     platform_display = platform_name
                 embed.add_field(name="Platform", value=platform_display, inline=True)
             
-            # Add other metadata fields
+            # Rest of the embed creation remains the same...
             if metadatum := rom_data.get('metadatum'):
                 if genres := metadatum.get('genres'):
                     if isinstance(genres, list):
@@ -239,7 +279,7 @@ class ROM_View(discord.ui.View):
             
             embed.add_field(name="Links", value=" • ".join(links), inline=True)
             
-            # File information
+            # File information (rest remains the same as original)
             if rom_data.get('multi') and rom_data.get('files'):
                 files = rom_data.get('files', [])
                 total_size = sum(f.get('file_size_bytes', 0) for f in files)
@@ -342,7 +382,7 @@ class ROM_View(discord.ui.View):
                     inline=False
                 )
                 
-            return embed
+            return embed, cover_file
         except Exception as e:
             logger.error(f"Error creating ROM embed: {e}")
             raise
@@ -869,7 +909,7 @@ class ROM_View(discord.ui.View):
                     logger.error(f"Error fetching detailed ROM data: {e}")
                 
                 self._selected_rom = selected_rom
-                embed = await self.create_rom_embed(selected_rom)
+                embed, cover_file = await self.create_rom_embed(selected_rom)
                 
                 # Remove all file-related components first
                 components_to_remove = []
@@ -883,11 +923,20 @@ class ROM_View(discord.ui.View):
                 # Update file components for both single and multi-file ROMs
                 await self.update_file_select(selected_rom)
                 
-                edited_message = await interaction.message.edit(
-                    content=interaction.message.content,
-                    embed=embed,
-                    view=self
-                )
+                # Edit message with file parameter (not attachments)
+                if cover_file:
+                    edited_message = await interaction.message.edit(
+                        content=interaction.message.content,
+                        embed=embed,
+                        view=self,
+                        file=cover_file  # Use file parameter, not attachments
+                    )
+                else:
+                    edited_message = await interaction.message.edit(
+                        content=interaction.message.content,
+                        embed=embed,
+                        view=self
+                    )
                 
                 self.message = edited_message
                 await self.watch_for_qr_triggers(interaction)
@@ -1428,14 +1477,23 @@ class Search(commands.Cog):
                             view = ROM_View(self.bot, [rom_data], ctx.author.id, platform_display_name)
                             view.remove_item(view.select)
                             view._selected_rom = rom_data
-                            embed = await view.create_rom_embed(rom_data)
+                            embed, cover_file = await view.create_rom_embed(rom_data)  # Changed to unpack tuple
                             await view.update_file_select(rom_data)
 
-                            initial_message = await ctx.respond(
-                                f"🎲 Found a random ROM from {self.get_platform_with_emoji(platform_display_name)}:",
-                                embed=embed,
-                                view=view
-                            )
+                            # Send with file if available
+                            if cover_file:
+                                initial_message = await ctx.respond(
+                                    f"🎲 Found a random ROM from {self.get_platform_with_emoji(platform_display_name)}:",
+                                    embed=embed,
+                                    view=view,
+                                    file=cover_file  # Add the file
+                                )
+                            else:
+                                initial_message = await ctx.respond(
+                                    f"🎲 Found a random ROM from {self.get_platform_with_emoji(platform_display_name)}:",
+                                    embed=embed,
+                                    view=view
+                                )
 
                             if isinstance(initial_message, discord.Interaction):
                                 initial_message = await initial_message.original_response()
@@ -1484,14 +1542,24 @@ class Search(commands.Cog):
                         view = ROM_View(self.bot, [rom_data], ctx.author.id, platform_name)
                         view.remove_item(view.select)
                         view._selected_rom = rom_data
-                        embed = await view.create_rom_embed(rom_data)
+                        embed, cover_file = await view.create_rom_embed(rom_data)  # Changed to unpack tuple
                         await view.update_file_select(rom_data)
 
-                        initial_message = await ctx.respond(
-                            f"🎲 Found a random ROM" + (f" from {self.get_platform_with_emoji(platform_name)}" if platform_name else "") + ":",
-                            embed=embed,
-                            view=view
-                        )
+                        # Send with file if available
+                        message_content = f"🎲 Found a random ROM" + (f" from {self.get_platform_with_emoji(platform_name)}" if platform_name else "") + ":"
+                        if cover_file:
+                            initial_message = await ctx.respond(
+                                message_content,
+                                embed=embed,
+                                view=view,
+                                file=cover_file  # Add the file
+                            )
+                        else:
+                            initial_message = await ctx.respond(
+                                message_content,
+                                embed=embed,
+                                view=view
+                            )
 
                         if isinstance(initial_message, discord.Interaction):
                             initial_message = await initial_message.original_response()
