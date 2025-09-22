@@ -516,7 +516,7 @@ class RommBot(discord.Bot):
         if not bypass_cache:
             cached_data = self.cache.get(endpoint)
             if cached_data:
-                logger.info(f"Returning cached data for {endpoint}")
+                logger.debug(f"Returning cached data for {endpoint}")
                 return cached_data
 
         try:
@@ -734,4 +734,5 @@ if __name__ == "__main__":
         logger.info("Bot shutting down...")
     except Exception as e:
         logger.error("Error running bot:", exc_info=True)
+
 
