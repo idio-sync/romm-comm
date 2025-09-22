@@ -167,7 +167,7 @@ class ROM_View(discord.ui.View):
             logger.error(f"Error downloading cover image: {e}")
             return None
     
-    async def create_rom_embed(self, rom_data: Dict) -> tuple[discord.Embed, Optional[discord.File]]:
+    async def create_rom_embed(self, rom_data: Dict) -> Tuple[discord.Embed, Optional[discord.File]]:
         try:
             # When creating the download URL in the embed
             raw_file_name = rom_data.get('fs_name', 'unknown_file')
