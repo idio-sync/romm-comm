@@ -158,7 +158,7 @@ RECENT_ROMS_FLOOD_THRESHOLD=25
 ---
 
 ## Recently Added ROM Notifications
-<img align="right" width="200" height="200" src=".github/screenshots/recent_single_rom.png">
+<img align="right" width="250" height="250" src=".github/screenshots/recent_single_rom.png">
 
 - When enabled (`RECENT_ROMS_ENABLED=true`) the bot posts newly added ROMs to the configured channel.
 - Multiple ROMs that occur within the configured batch window are grouped into a single batched response by platform.
@@ -171,7 +171,7 @@ RECENT_ROMS_FLOOD_THRESHOLD=25
 ## Visible Statistics
 
 ### Voice channel stats
-<img align="right" width="200" height="200" src=".github/screenshots/VC%20Stats.png">
+<img align="right" width="250" height="250" src=".github/screenshots/VC%20Stats.png">
 
 When enabled (`UPDATE_VOICE_NAMES=true`) the bot creates voice channels to display:
 - Platform counts
@@ -184,14 +184,14 @@ When enabled (`UPDATE_VOICE_NAMES=true`) the bot creates voice channels to displ
 Voice channel names are only updated when the underlying stat changes. The bot will create new channels and delete old ones to avoid duplicates.
 
 ### Bot status
-<img align="right" width="200" height="200" src=".github/screenshots/Rich%20Presence.png">
+<img align="right" width="250" height="250" src=".github/screenshots/Rich%20Presence.png">
 
 The bot updates its "Now Playing" / status with the total ROM count whenever it refreshes API data.
 
 ---
 
 ## Emojis
-<img align="right" width="200" height="200" src=".github/screenshots/Basic%20Emojis.png">
+<img align="right" width="250" height="250" src=".github/screenshots/Basic%20Emojis.png">
 
 - On first boot or when joining a server, the bot uploads a standard set of custom console emojis (default ~50).
 - If the server has boosted Nitro/extra emoji slots available, the bot can upload an extended emoji set; if Nitro is later removed the bot reverts to the standard list to preserve the most-used emojis.
@@ -279,6 +279,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
