@@ -170,7 +170,7 @@ RECENT_ROMS_FLOOD_THRESHOLD=25
 ## Visible Statistics
 
 ### Voice channel stats
-
+<img align="right" width="100" height="100" src="[https://github.com/idio-sync/romm-comm/blob/main/.github/screenshots/VC%20Stats.png]">
 When enabled (`UPDATE_VOICE_NAMES=true`) the bot creates voice channels to display:
 - Platform counts
 - ROM count
@@ -275,6 +275,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
