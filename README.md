@@ -170,7 +170,7 @@ RECENT_ROMS_FLOOD_THRESHOLD=25
 ## Visible Statistics
 
 ### Voice channel stats
-<img align="right" width="150" height="150" src="[.github/VC%20Stats.png]">
+<img align="right" width="150" height="150" src="[.github/screenshots/VC%20Stats.png]">
 When enabled (`UPDATE_VOICE_NAMES=true`) the bot creates voice channels to display:
 - Platform counts
 - ROM count
@@ -275,6 +275,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
