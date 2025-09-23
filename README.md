@@ -3,7 +3,7 @@
 A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) API to provide information about your ROM collection, handle user ROM requsts, and control RomM from Discord.
 
 <p align="center">
-  <img src=".github/Demo.gif" width="50%">
+  <img src=".github/Demo.gif" width="60%">
 </p>
 
 ---
@@ -55,14 +55,7 @@ A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) A
 ## Requirements
 
 - Python 3.8+
-- py-cord
-- aiohttp
-- python-dotenv
-- qrcode
-- Pillow
-- python-socketio
-- requests
-- aiosqlite
+- Python dependancies (see non-Docker installation below)
 
 ---
 
@@ -72,7 +65,7 @@ A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) A
 
 1. `docker pull idiosync000/romm-comm:latest`
 2. Pass the environment variables (see [Configuration](#configuration)).
-3. Mount `/app/data` to a host directory — this stores the request DB and emoji sync status.
+3. Mount `/app/data` to a host directory — this stores the user/request DB and emoji sync status.
 
 ### Non-Docker (local)
 
@@ -280,6 +273,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
