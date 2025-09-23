@@ -120,8 +120,6 @@ UPDATE_VOICE_NAMES=true
 CHANNEL_ID=your_channel_id
 RECENT_ROMS_ENABLED=true
 RECENT_ROMS_CHANNEL_ID=your_channel_id
-RECENT_ROMS_CHECK_MINUTES=5
-RECENT_ROMS_BATCH_MINUTES=1
 RECENT_ROMS_MAX_PER_POST=10
 RECENT_ROMS_FLOOD_THRESHOLD=25
 ```
@@ -146,7 +144,7 @@ RECENT_ROMS_FLOOD_THRESHOLD=25
 - `CHANNEL_ID` — Channel for sync results and user manager logs.
 - `CACHE_TTL` — Cache TTL in seconds (default: `3900`).
 - `API_TIMEOUT` — API request timeout in seconds (default: `10`).
-- `RECENT_ROMS_*` — Controls for recent-ROM posting (enabled, channel id, intervals, batch size, thresholds).
+- `RECENT_ROMS_*` — Controls for recent-ROM posting (enabled, channel id, thresholds).
 
 ---
 
@@ -273,6 +271,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
