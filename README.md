@@ -158,20 +158,20 @@ RECENT_ROMS_FLOOD_THRESHOLD=25
 ---
 
 ## Recently Added ROM Notifications
-<img align="right" width="250" height="250" src=".github/screenshots/recent_single_rom.png">
+<img align="right" width="300" height="300" src=".github/screenshots/recent_single_rom.png">
 
 - When enabled (`RECENT_ROMS_ENABLED=true`) the bot posts newly added ROMs to the configured channel.
 - Multiple ROMs that occur within the configured batch window are grouped into a single batched response by platform.
 - Large imports can trigger flood protection; thresholds for maximum listed ROMs and flood limits are adjustable via env vars.
 
-**Note:** Only enable recent-ROM posting on installations where most ROMs are already scanned in. Fresh, long-running imports may overload the bot or cause noisy notifications, I haven't tested it with a new library.
+**Note:** Avoid enabling recent-ROM notifications before initial scans. Long-running imports may overload the bot or cause noisy notifications, I haven't tested it with a new library.
 
 ---
 
 ## Visible Statistics
 
 ### Voice channel stats
-<img align="right" width="250" height="250" src=".github/screenshots/VC%20Stats.png">
+<img align="right" width="300" height="300" src=".github/screenshots/VC%20Stats.png">
 
 When enabled (`UPDATE_VOICE_NAMES=true`) the bot creates voice channels to display:
 - Platform counts
@@ -184,14 +184,14 @@ When enabled (`UPDATE_VOICE_NAMES=true`) the bot creates voice channels to displ
 Voice channel names are only updated when the underlying stat changes. The bot will create new channels and delete old ones to avoid duplicates.
 
 ### Bot status
-<img align="right" width="250" height="250" src=".github/screenshots/Rich%20Presence.png">
+<img align="right" width="300" height="300" src=".github/screenshots/Rich%20Presence.png">
 
 The bot updates its "Now Playing" / status with the total ROM count whenever it refreshes API data.
 
 ---
 
 ## Emojis
-<img align="right" width="250" height="250" src=".github/screenshots/Basic%20Emojis.png">
+<img align="right" width="300" height="300" src=".github/screenshots/Basic%20Emojis.png">
 
 - On first boot or when joining a server, the bot uploads a standard set of custom console emojis (default ~50).
 - If the server has boosted Nitro/extra emoji slots available, the bot can upload an extended emoji set; if Nitro is later removed the bot reverts to the standard list to preserve the most-used emojis.
@@ -201,51 +201,51 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 
 ## Available Commands
 
-- `/platforms` — Display all available platforms with their ROM counts.
 - `/search [platform] [game]` — Search ROMs with interactive results and optional QR code for console installs.
+- `/request`, `/my_requests`, `/request_admin` — Submit, view, and manage requests.
 - `/random [platform]` — Fetch a random ROM (platform optional).
 - `/firmware [platform]` — List firmware files with hash details and download links.
 - `/scan [option]` — Run or check scans (admin only): `full`, `platform`, `stop`, `status`, `unidentified`, `hashes`, `new_platforms`, `partial`, `summary`.
-- `/request`, `/my_requests`, `/request_admin` — Submit, view, and manage requests.
+- `/platforms` — Display all available platforms with their ROM counts.
 - `/user_manager` — Manage Romm and Discord users (linking, new account prompting, etc.) (admin only).
 
 ---
 
 ## Requests
-<img align="right" width="250" height="250" src=".github/screenshots/RequestManager.png">
+
+<img align="right" width="300" height="450" src=".github/screenshots/RequestManager.png">
 
 **User features:**
 - Submit requests with platform, game name, and optional details.
-- Detect existing ROMs to avoid unnecisary requests.
-- Handles duplicate requests, additional requesters will be notified if game is added. 
-- Attempts IGDB matching for metadata.
-- User request cap (currently 25 pending).
-- DM notifications when requests are fulfilled or rejected.
+- Platforms match to IGDB, attempts IGDB matching for fetching metadata. 
+- Non-matching requests will still go through for things like rom hacks or unrealeased games, just without metadata.
+- Detect existing ROMs in Romm to avoid unnecissary requests and brings up /search results automatically if found.
+- DMs requester notification when requests are avalable.
+- Handles duplicate requests, additional requesters will also be notified if game is added. 
+- Per user request cap (currently 25 pending each).
 - Requests can be filled automatically during Romm filesystem scan or manually by admin.
 
 **Admin features:**
 - View, filter, and manage pending requests.
-- Fulfill, reject or add notes.
+- Manually mark as fulfilled, reject or add notes.
+- Requester's Discord avatar is present in the request embed as the thumbnail.
 
 ---
 
 ## User Manager
 
+<img align="right" width="300" height="425" src=".github/screenshots/UserManager.png">
+
 - `/manage_users` — Manage Romm and Discord users (admin only).
-- Discord users can be linked to Romm users, entries in dropdown show if a user is linked or not (and to what user names)
+- Discord users can be linked to Romm users, entries in dropdown show if a user is linked or not (and to what user names).
 - Linking is useful for keeping track of who on the server has a Romm account, also for enriching request information in the request manager.
 - Unlinking accounts removes Romm user from server (unless user is an admin).
-- Select Discord user and hit 'Create New Romm Account' button to manually onboard user to Romm via DM (see Account Creation).
+- Select Discord user and hit 'Create New Romm Account' button to manually onboard user to Romm via DM (see Onboarding via role).
 
-**Account creation:**
-- Creates RomM accounts automatically when role is added to Discord user.
-- Uses Discord display name + suffixes.
-- Generates a random password and DMs the user.
-- Preserves and warns on existing admin accounts.
-
-**Role removal:**
-- Deletes RomM accounts created by the bot when the role is removed.
-- Skips admin accounts and logs protected deletions.
+**Onboarding via role:**
+- Creates RomM accounts automatically when specified role is added to Discord user.
+- Uses Discord display name + suffixes, generates a random password and DMs the user their login info.
+- Deletes RomM accounts created by the bot when the role is removed, skips admin accounts.
 
 ---
 
@@ -280,6 +280,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
