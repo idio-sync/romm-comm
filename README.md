@@ -164,7 +164,7 @@ RECENT_ROMS_FLOOD_THRESHOLD=25
 - Multiple ROMs that occur within the configured batch window are grouped into a single batched response by platform.
 - Large imports can trigger flood protection; thresholds for maximum listed ROMs and flood limits are adjustable via env vars.
 
-**Note:** Avoid enabling recent-ROM notifications before initial scans. Long-running imports may overload the bot or cause noisy notifications, I haven't tested it with a new library.
+**Note:** Avoid enabling recent-ROM notifications before initial scans. Long-running imports may overload the bot or cause noisy notifications.
 
 ---
 
@@ -280,6 +280,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
