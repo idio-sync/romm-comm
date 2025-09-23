@@ -212,6 +212,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 ---
 
 ## Requests
+<img align="right" width="250" height="250" src=".github/screenshots/RequestManager.png">
 
 **User features:**
 - Submit requests with platform, game name, and optional details.
@@ -279,6 +280,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
