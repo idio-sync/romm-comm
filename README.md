@@ -183,6 +183,7 @@ When enabled (`UPDATE_VOICE_NAMES=true`) the bot creates voice channels to displ
 Voice channel names are only updated when the underlying stat changes. The bot will create new channels and delete old ones to avoid duplicates.
 
 ### Bot status
+<img align="right" width="200" height="200" src=".github/screenshots/Rich%20Presence.png">
 
 The bot updates its "Now Playing" / status with the total ROM count whenever it refreshes API data.
 
@@ -277,6 +278,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
