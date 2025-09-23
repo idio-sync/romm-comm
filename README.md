@@ -81,7 +81,7 @@ pip install py-cord aiohttp python-dotenv qrcode Pillow python-socketio requests
 ## Discord Bot Token Creation
 
 - See the Pycord docs for bot creation and permission setup: https://docs.pycord.dev/en/stable/discord.html
-- Enable **Privileged Gateway Intents** in the bot settings as required by your bot features.
+- Enable **Privileged Gateway Intents** in the bot settings.
 
 ---
 
@@ -273,6 +273,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
