@@ -188,7 +188,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 ---
 
 ## Emojis
-
+<img align="right" width="200" height="200" src=".github/screenshots/Basic%20Emojis.png">
 - On first boot or when joining a server, the bot uploads a standard set of custom console emojis (default ~50).
 - If the server has boosted Nitro/extra emoji slots available, the bot can upload an extended emoji set; if Nitro is later removed the bot reverts to the standard list to preserve the most-used emojis.
 - Emojis are used throughout bot responses to visually identify platforms when a matching emoji exists on the server. The extended emoji set covers less popular consoles as well as variants.
@@ -275,6 +275,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
