@@ -1,0 +1,980 @@
+[
+  {
+    "display_name": "1292 Advanced Programmable Video System",
+    "folder_name": "1292-advanced-programmable-video-system",
+    "igdb_slug": "1292-advanced-programmable-video-system",
+    "moby_slug": "1292-advanced-programmable-video-system"
+  },
+  {
+    "display_name": "3DO Interactive Multiplayer",
+    "folder_name": "3do",
+    "igdb_slug": "3do",
+    "moby_slug": "3do"
+  },
+  {
+    "display_name": "ABC 80",
+    "folder_name": "abc-80",
+    "igdb_slug": null,
+    "moby_slug": "abc-80"
+  },
+  {
+    "display_name": "APF MP1000/Imagination Machine",
+    "folder_name": "apf",
+    "igdb_slug": null,
+    "moby_slug": "apf"
+  },
+  {
+    "display_name": "Acorn Archimedes",
+    "folder_name": "acorn-archimedes",
+    "igdb_slug": "acorn-archimedes",
+    "moby_slug": "acorn-32-bit"
+  },
+  {
+    "display_name": "Acorn Electron",
+    "folder_name": "acorn-electron",
+    "igdb_slug": "acorn-electron",
+    "moby_slug": "electron"
+  },
+  {
+    "display_name": "Adventure Vision",
+    "folder_name": "adventure-vision",
+    "igdb_slug": null,
+    "moby_slug": "adventure-vision"
+  },
+  {
+    "display_name": "Amiga",
+    "folder_name": "amiga",
+    "igdb_slug": "amiga",
+    "moby_slug": "amiga"
+  },
+  {
+    "display_name": "Amiga CD32",
+    "folder_name": "amiga-cd32",
+    "igdb_slug": "amiga-cd32",
+    "moby_slug": "amiga-cd32"
+  },
+  {
+    "display_name": "Amstrad CPC",
+    "folder_name": "acpc",
+    "igdb_slug": "acpc",
+    "moby_slug": "cpc"
+  },
+  {
+    "display_name": "Amstrad PCW",
+    "folder_name": "amstrad-pcw",
+    "igdb_slug": "amstrad-pcw",
+    "moby_slug": "amstrad-pcw"
+  },
+  {
+    "display_name": "Android",
+    "folder_name": "android",
+    "igdb_slug": "android",
+    "moby_slug": "android"
+  },
+  {
+    "display_name": "Apple II",
+    "folder_name": "appleii",
+    "igdb_slug": "appleii",
+    "moby_slug": "apple-ii"
+  },
+  {
+    "display_name": "Apple IIGS",
+    "folder_name": "apple-iigs",
+    "igdb_slug": "apple-iigs",
+    "moby_slug": "apple-iigs"
+  },
+  {
+    "display_name": "Apple Pippin",
+    "folder_name": "apple-pippin",
+    "igdb_slug": "apple-pippin",
+    "moby_slug": "pippin"
+  },
+  {
+    "display_name": "Arcade",
+    "folder_name": "arcade",
+    "igdb_slug": "arcade",
+    "moby_slug": "arcade"
+  },
+  {
+    "display_name": "Arcadia 2001",
+    "folder_name": "arcadia-2001",
+    "igdb_slug": "arcadia-2001",
+    "moby_slug": "arcadia-2001"
+  },
+  {
+    "display_name": "Arduboy",
+    "folder_name": "arduboy",
+    "igdb_slug": "arduboy",
+    "moby_slug": "arduboy"
+  },
+  {
+    "display_name": "Atari 2600",
+    "folder_name": "atari2600",
+    "igdb_slug": "atari2600",
+    "moby_slug": "atari-2600"
+  },
+  {
+    "display_name": "Atari 5200",
+    "folder_name": "atari5200",
+    "igdb_slug": "atari5200",
+    "moby_slug": "atari-5200"
+  },
+  {
+    "display_name": "Atari 7800",
+    "folder_name": "atari7800",
+    "igdb_slug": "atari7800",
+    "moby_slug": "atari-7800"
+  },
+  {
+    "display_name": "Atari 8-bit",
+    "folder_name": "atari8bit",
+    "igdb_slug": "atari8bit",
+    "moby_slug": "atari-8-bit"
+  },
+  {
+    "display_name": "Atari Jaguar",
+    "folder_name": "jaguar",
+    "igdb_slug": "jaguar",
+    "moby_slug": "jaguar"
+  },
+  {
+    "display_name": "Atari Jaguar CD",
+    "folder_name": "atari-jaguar-cd",
+    "igdb_slug": "atari-jaguar-cd",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Atari Lynx",
+    "folder_name": "lynx",
+    "igdb_slug": "lynx",
+    "moby_slug": "lynx"
+  },
+  {
+    "display_name": "Atari ST/STE",
+    "folder_name": "atari-st",
+    "igdb_slug": "atari-st",
+    "moby_slug": "atari-st"
+  },
+  {
+    "display_name": "Atari VCS",
+    "folder_name": "atari-vcs",
+    "igdb_slug": null,
+    "moby_slug": "atari-vcs"
+  },
+  {
+    "display_name": "BBC Microcomputer System",
+    "folder_name": "bbcmicro",
+    "igdb_slug": "bbcmicro",
+    "moby_slug": "bbc-micro"
+  },
+  {
+    "display_name": "Bally Astrocade",
+    "folder_name": "astrocade",
+    "igdb_slug": "astrocade",
+    "moby_slug": "bally-astrocade"
+  },
+  {
+    "display_name": "BlackBerry OS",
+    "folder_name": "blackberry",
+    "igdb_slug": "blackberry",
+    "moby_slug": "blackberry"
+  },
+  {
+    "display_name": "ColecoVision",
+    "folder_name": "colecovision",
+    "igdb_slug": "colecovision",
+    "moby_slug": "colecovision"
+  },
+  {
+    "display_name": "Commodore 16",
+    "folder_name": "c16",
+    "igdb_slug": "c16",
+    "moby_slug": "commodore-16-plus4"
+  },
+  {
+    "display_name": "Commodore C64/128/MAX",
+    "folder_name": "c64",
+    "igdb_slug": "c64",
+    "moby_slug": "c64"
+  },
+  {
+    "display_name": "Commodore CDTV",
+    "folder_name": "commodore-cdtv",
+    "igdb_slug": "commodore-cdtv",
+    "moby_slug": "cdtv"
+  },
+  {
+    "display_name": "Commodore PET",
+    "folder_name": "cpet",
+    "igdb_slug": "cpet",
+    "moby_slug": "pet"
+  },
+  {
+    "display_name": "Commodore Plus/4",
+    "folder_name": "c-plus-4",
+    "igdb_slug": "c-plus-4",
+    "moby_slug": "commodore-16-plus4"
+  },
+  {
+    "display_name": "Commodore VIC-20",
+    "folder_name": "vic-20",
+    "igdb_slug": "vic-20",
+    "moby_slug": "vic-20"
+  },
+  {
+    "display_name": "DOS",
+    "folder_name": "dos",
+    "igdb_slug": "dos",
+    "moby_slug": "dos"
+  },
+  {
+    "display_name": "Dragon 32/64",
+    "folder_name": "dragon-32-slash-64",
+    "igdb_slug": "dragon-32-slash-64",
+    "moby_slug": "dragon-32-slash-64"
+  },
+  {
+    "display_name": "Dreamcast",
+    "folder_name": "dc",
+    "igdb_slug": "dc",
+    "moby_slug": "dreamcast"
+  },
+  {
+    "display_name": "Epoch Cassette Vision",
+    "folder_name": "epoch-cassette-vision",
+    "igdb_slug": "epoch-cassette-vision",
+    "moby_slug": "epoch-cassette-vision"
+  },
+  {
+    "display_name": "Epoch Super Cassette Vision",
+    "folder_name": "epoch-super-cassette-vision",
+    "igdb_slug": "epoch-super-cassette-vision",
+    "moby_slug": "epoch-super-cassette-vision"
+  },
+  {
+    "display_name": "Evercade",
+    "folder_name": "evercade",
+    "igdb_slug": "evercade",
+    "moby_slug": "evercade"
+  },
+  {
+    "display_name": "FM Towns",
+    "folder_name": "fm-towns",
+    "igdb_slug": "fm-towns",
+    "moby_slug": "fmtowns"
+  },
+  {
+    "display_name": "FM-7",
+    "folder_name": "fm-7",
+    "igdb_slug": "fm-7",
+    "moby_slug": "fm-7"
+  },
+  {
+    "display_name": "Fairchild Channel F",
+    "folder_name": "fairchild-channel-f",
+    "igdb_slug": "fairchild-channel-f",
+    "moby_slug": "channel-f"
+  },
+  {
+    "display_name": "Family Computer",
+    "folder_name": "famicom",
+    "igdb_slug": "famicom",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Family Computer Disk System",
+    "folder_name": "fds",
+    "igdb_slug": "fds",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Gamate",
+    "folder_name": "gamate",
+    "igdb_slug": "gamate",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Game & Watch",
+    "folder_name": "g-and-w",
+    "igdb_slug": "g-and-w",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Game Boy",
+    "folder_name": "gb",
+    "igdb_slug": "gb",
+    "moby_slug": "gameboy"
+  },
+  {
+    "display_name": "Game Boy Advance",
+    "folder_name": "gba",
+    "igdb_slug": "gba",
+    "moby_slug": "gameboy-advance"
+  },
+  {
+    "display_name": "Game Boy Color",
+    "folder_name": "gbc",
+    "igdb_slug": "gbc",
+    "moby_slug": "gameboy-color"
+  },
+  {
+    "display_name": "Game.com",
+    "folder_name": "game-dot-com",
+    "igdb_slug": "game-dot-com",
+    "moby_slug": "game-com"
+  },
+  {
+    "display_name": "Gizmondo",
+    "folder_name": "gizmondo",
+    "igdb_slug": "gizmondo",
+    "moby_slug": "gizmondo"
+  },
+  {
+    "display_name": "Google Stadia",
+    "folder_name": "stadia",
+    "igdb_slug": "stadia",
+    "moby_slug": "stadia"
+  },
+  {
+    "display_name": "HyperScan",
+    "folder_name": "hyperscan",
+    "igdb_slug": "hyperscan",
+    "moby_slug": "hyperscan"
+  },
+  {
+    "display_name": "Intellivision",
+    "folder_name": "intellivision",
+    "igdb_slug": "intellivision",
+    "moby_slug": "intellivision"
+  },
+  {
+    "display_name": "Intellivision Amico",
+    "folder_name": "intellivision-amico",
+    "igdb_slug": "intellivision-amico",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Interton VC 4000",
+    "folder_name": "vc-4000",
+    "igdb_slug": "vc-4000",
+    "moby_slug": null
+  },
+  {
+    "display_name": "LeapTV",
+    "folder_name": "leaptv",
+    "igdb_slug": "leaptv",
+    "moby_slug": "leaptv"
+  },
+  {
+    "display_name": "Leapster",
+    "folder_name": "leapster",
+    "igdb_slug": "leapster",
+    "moby_slug": "leapster"
+  },
+  {
+    "display_name": "Linux",
+    "folder_name": "linux",
+    "igdb_slug": "linux",
+    "moby_slug": "linux"
+  },
+  {
+    "display_name": "MSX",
+    "folder_name": "msx",
+    "igdb_slug": "msx",
+    "moby_slug": "msx"
+  },
+  {
+    "display_name": "MSX2",
+    "folder_name": "msx2",
+    "igdb_slug": "msx2",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Mac",
+    "folder_name": "mac",
+    "igdb_slug": "mac",
+    "moby_slug": "macintosh"
+  },
+  {
+    "display_name": "Mega Duck/Cougar Boy",
+    "folder_name": "mega-duck-slash-cougar-boy",
+    "igdb_slug": "mega-duck-slash-cougar-boy",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Meta Quest 2",
+    "folder_name": "meta-quest-2",
+    "igdb_slug": "meta-quest-2",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Meta Quest 3",
+    "folder_name": "meta-quest-3",
+    "igdb_slug": "meta-quest-3",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Microvision",
+    "folder_name": "microvision--1",
+    "igdb_slug": "microvision--1",
+    "moby_slug": "microvision"
+  },
+  {
+    "display_name": "N-Gage",
+    "folder_name": "ngage",
+    "igdb_slug": "ngage",
+    "moby_slug": "ngage"
+  },
+  {
+    "display_name": "NEC PC-6000 Series",
+    "folder_name": "nec-pc-6000-series",
+    "igdb_slug": "nec-pc-6000-series",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Neo Geo AES",
+    "folder_name": "neogeoaes",
+    "igdb_slug": "neogeoaes",
+    "moby_slug": "neo-geo"
+  },
+  {
+    "display_name": "Neo Geo CD",
+    "folder_name": "neo-geo-cd",
+    "igdb_slug": "neo-geo-cd",
+    "moby_slug": "neo-geo-cd"
+  },
+  {
+    "display_name": "Neo Geo MVS",
+    "folder_name": "neogeomvs",
+    "igdb_slug": "neogeomvs",
+    "moby_slug": "neo-geo"
+  },
+  {
+    "display_name": "Neo Geo Pocket",
+    "folder_name": "neo-geo-pocket",
+    "igdb_slug": "neo-geo-pocket",
+    "moby_slug": "neo-geo-pocket"
+  },
+  {
+    "display_name": "Neo Geo Pocket Color",
+    "folder_name": "neo-geo-pocket-color",
+    "igdb_slug": "neo-geo-pocket-color",
+    "moby_slug": "neo-geo-pocket-color"
+  },
+  {
+    "display_name": "Neo Geo X",
+    "folder_name": "neo-geo-x",
+    "igdb_slug": null,
+    "moby_slug": "neo-geo-x"
+  },
+  {
+    "display_name": "New Nintendo 3DS",
+    "folder_name": "new-nintendo-3ds",
+    "igdb_slug": "new-nintendo-3ds",
+    "moby_slug": "new-nintendo-3ds"
+  },
+  {
+    "display_name": "Nintendo 3DS",
+    "folder_name": "3ds",
+    "igdb_slug": "3ds",
+    "moby_slug": "3ds"
+  },
+  {
+    "display_name": "Nintendo 64",
+    "folder_name": "n64",
+    "igdb_slug": "n64",
+    "moby_slug": "n64"
+  },
+  {
+    "display_name": "Nintendo 64DD",
+    "folder_name": "nintendo-64dd",
+    "igdb_slug": "nintendo-64dd",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Nintendo DS",
+    "folder_name": "nds",
+    "igdb_slug": "nds",
+    "moby_slug": "nintendo-ds"
+  },
+  {
+    "display_name": "Nintendo DSi",
+    "folder_name": "nintendo-dsi",
+    "igdb_slug": "nintendo-dsi",
+    "moby_slug": "nintendo-dsi"
+  },
+  {
+    "display_name": "Nintendo Entertainment System",
+    "folder_name": "nes",
+    "igdb_slug": "nes",
+    "moby_slug": "nes"
+  },
+  {
+    "display_name": "Nintendo GameCube",
+    "folder_name": "ngc",
+    "igdb_slug": "ngc",
+    "moby_slug": "gamecube"
+  },
+  {
+    "display_name": "Nintendo Switch",
+    "folder_name": "switch",
+    "igdb_slug": "switch",
+    "moby_slug": "switch"
+  },
+  {
+    "display_name": "Nuon",
+    "folder_name": "nuon",
+    "igdb_slug": "nuon",
+    "moby_slug": "nuon"
+  },
+  {
+    "display_name": "Oculus Go",
+    "folder_name": "oculus-go",
+    "igdb_slug": "oculus-go",
+    "moby_slug": "oculus-go"
+  },
+  {
+    "display_name": "Oculus Quest",
+    "folder_name": "oculus-quest",
+    "igdb_slug": "oculus-quest",
+    "moby_slug": "oculus-quest"
+  },
+  {
+    "display_name": "Oculus Rift",
+    "folder_name": "oculus-rift",
+    "igdb_slug": "oculus-rift",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Odyssey",
+    "folder_name": "odyssey--1",
+    "igdb_slug": "odyssey--1",
+    "moby_slug": "odyssey"
+  },
+  {
+    "display_name": "Odyssey 2/Videopac G7000",
+    "folder_name": "odyssey-2-slash-videopac-g7000",
+    "igdb_slug": "odyssey-2-slash-videopac-g7000",
+    "moby_slug": "odyssey-2"
+  },
+  {
+    "display_name": "OnLive Game System",
+    "folder_name": "onlive-game-system",
+    "igdb_slug": "onlive-game-system",
+    "moby_slug": "onlive"
+  },
+  {
+    "display_name": "Ouya",
+    "folder_name": "ouya",
+    "igdb_slug": "ouya",
+    "moby_slug": "ouya"
+  },
+  {
+    "display_name": "PC (Microsoft Windows)",
+    "folder_name": "win",
+    "igdb_slug": "win",
+    "moby_slug": "windows"
+  },
+  {
+    "display_name": "PC Engine SuperGrafx",
+    "folder_name": "supergrafx",
+    "igdb_slug": "supergrafx",
+    "moby_slug": "supergrafx"
+  },
+  {
+    "display_name": "PC-50X Family",
+    "folder_name": "pc-50x-family",
+    "igdb_slug": "pc-50x-family",
+    "moby_slug": null
+  },
+  {
+    "display_name": "PC-8800 Series",
+    "folder_name": "pc-8800-series",
+    "igdb_slug": "pc-8800-series",
+    "moby_slug": "pc88"
+  },
+  {
+    "display_name": "PC-9800 Series",
+    "folder_name": "pc-9800-series",
+    "igdb_slug": "pc-9800-series",
+    "moby_slug": "pc98"
+  },
+  {
+    "display_name": "PC-FX",
+    "folder_name": "pc-fx",
+    "igdb_slug": "pc-fx",
+    "moby_slug": "pc-fx"
+  },
+  {
+    "display_name": "Palm OS",
+    "folder_name": "palm-os",
+    "igdb_slug": "palm-os",
+    "moby_slug": "palmos"
+  },
+  {
+    "display_name": "Philips CD-i",
+    "folder_name": "philips-cd-i",
+    "igdb_slug": "philips-cd-i",
+    "moby_slug": "cd-i"
+  },
+  {
+    "display_name": "Playdate",
+    "folder_name": "playdate",
+    "igdb_slug": "playdate",
+    "moby_slug": "playdate"
+  },
+  {
+    "display_name": "Playdia",
+    "folder_name": "playdia",
+    "igdb_slug": "playdia",
+    "moby_slug": "playdia"
+  },
+  {
+    "display_name": "PlayStation",
+    "folder_name": "ps",
+    "igdb_slug": "ps",
+    "moby_slug": "playstation"
+  },
+  {
+    "display_name": "PlayStation 2",
+    "folder_name": "ps2",
+    "igdb_slug": "ps2",
+    "moby_slug": "ps2"
+  },
+  {
+    "display_name": "PlayStation 3",
+    "folder_name": "ps3",
+    "igdb_slug": "ps3",
+    "moby_slug": "ps3"
+  },
+  {
+    "display_name": "PlayStation 4",
+    "folder_name": "ps4--1",
+    "igdb_slug": "ps4--1",
+    "moby_slug": "playstation-4"
+  },
+  {
+    "display_name": "PlayStation 5",
+    "folder_name": "ps5",
+    "igdb_slug": "ps5",
+    "moby_slug": "playstation-5"
+  },
+  {
+    "display_name": "PlayStation Portable",
+    "folder_name": "psp",
+    "igdb_slug": "psp",
+    "moby_slug": "psp"
+  },
+  {
+    "display_name": "PlayStation VR",
+    "folder_name": "psvr",
+    "igdb_slug": "psvr",
+    "moby_slug": null
+  },
+  {
+    "display_name": "PlayStation VR2",
+    "folder_name": "psvr2",
+    "igdb_slug": "psvr2",
+    "moby_slug": null
+  },
+  {
+    "display_name": "PlayStation Vita",
+    "folder_name": "psvita",
+    "igdb_slug": "psvita",
+    "moby_slug": "ps-vita"
+  },
+  {
+    "display_name": "PocketStation",
+    "folder_name": "pocketstation",
+    "igdb_slug": "pocketstation",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Pokémon mini",
+    "folder_name": "pokemon-mini",
+    "igdb_slug": "pokemon-mini",
+    "moby_slug": "pokemon-mini"
+  },
+  {
+    "display_name": "R-Zone",
+    "folder_name": "r-zone",
+    "igdb_slug": "r-zone",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Satellaview",
+    "folder_name": "satellaview",
+    "igdb_slug": "satellaview",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Sega 32X",
+    "folder_name": "sega32",
+    "igdb_slug": "sega32",
+    "moby_slug": "sega-32x"
+  },
+  {
+    "display_name": "Sega CD",
+    "folder_name": "segacd",
+    "igdb_slug": "segacd",
+    "moby_slug": "sega-cd"
+  },
+  {
+    "display_name": "Sega Game Gear",
+    "folder_name": "gamegear",
+    "igdb_slug": "gamegear",
+    "moby_slug": "game-gear"
+  },
+  {
+    "display_name": "Sega Master System/Mark III",
+    "folder_name": "sms",
+    "igdb_slug": "sms",
+    "moby_slug": "sega-master-system"
+  },
+  {
+    "display_name": "Sega Mega Drive/Genesis",
+    "folder_name": "genesis-slash-megadrive",
+    "igdb_slug": "genesis-slash-megadrive",
+    "moby_slug": "genesis"
+  },
+  {
+    "display_name": "Sega Pico",
+    "folder_name": "sega-pico",
+    "igdb_slug": "sega-pico",
+    "moby_slug": "sega-pico"
+  },
+  {
+    "display_name": "Sega Saturn",
+    "folder_name": "saturn",
+    "igdb_slug": "saturn",
+    "moby_slug": "sega-saturn"
+  },
+  {
+    "display_name": "SG-1000",
+    "folder_name": "sg1000",
+    "igdb_slug": "sg1000",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Sharp MZ-2200",
+    "folder_name": "sharp-mz-2200",
+    "igdb_slug": "sharp-mz-2200",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Sharp X1",
+    "folder_name": "x1",
+    "igdb_slug": "x1",
+    "moby_slug": "sharp-x1"
+  },
+  {
+    "display_name": "Sharp X68000",
+    "folder_name": "sharp-x68000",
+    "igdb_slug": "sharp-x68000",
+    "moby_slug": "sharp-x68000"
+  },
+  {
+    "display_name": "Sinclair QL",
+    "folder_name": "sinclair-ql",
+    "igdb_slug": "sinclair-ql",
+    "moby_slug": "sinclair-ql"
+  },
+  {
+    "display_name": "Sinclair ZX81",
+    "folder_name": "sinclair-zx81",
+    "igdb_slug": "sinclair-zx81",
+    "moby_slug": "zx81"
+  },
+  {
+    "display_name": "Super Famicom",
+    "folder_name": "sfam",
+    "igdb_slug": "sfam",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Super Nintendo Entertainment System",
+    "folder_name": "snes",
+    "igdb_slug": "snes",
+    "moby_slug": "snes"
+  },
+  {
+    "display_name": "SwanCrystal",
+    "folder_name": "swancrystal",
+    "igdb_slug": "swancrystal",
+    "moby_slug": null
+  },
+  {
+    "display_name": "TRS-80",
+    "folder_name": "trs-80",
+    "igdb_slug": "trs-80",
+    "moby_slug": "trs-80"
+  },
+  {
+    "display_name": "TRS-80 Color Computer",
+    "folder_name": "trs-80-color-computer",
+    "igdb_slug": "trs-80-color-computer",
+    "moby_slug": "trs-80-coco"
+  },
+  {
+    "display_name": "Tapwave Zodiac",
+    "folder_name": "zod",
+    "igdb_slug": "zod",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Tatung Einstein",
+    "folder_name": "tatung-einstein",
+    "igdb_slug": "tatung-einstein",
+    "moby_slug": "tatung-einstein"
+  },
+  {
+    "display_name": "Texas Instruments TI-99",
+    "folder_name": "ti-99",
+    "igdb_slug": "ti-99",
+    "moby_slug": "ti-99"
+  },
+  {
+    "display_name": "Thomson MO5",
+    "folder_name": "thomson-mo5",
+    "igdb_slug": "thomson-mo5",
+    "moby_slug": "thomson-mo"
+  },
+  {
+    "display_name": "TurboGrafx-16/PC Engine",
+    "folder_name": "turbografx16--1",
+    "igdb_slug": "turbografx16--1",
+    "moby_slug": "turbo-grafx"
+  },
+  {
+    "display_name": "TurboGrafx-16/PC Engine CD",
+    "folder_name": "turbografx-16-slash-pc-engine-cd",
+    "igdb_slug": "turbografx-16-slash-pc-engine-cd",
+    "moby_slug": "turbografx-cd"
+  },
+  {
+    "display_name": "V.Smile",
+    "folder_name": "vsmile",
+    "igdb_slug": "vsmile",
+    "moby_slug": "vsmile"
+  },
+  {
+    "display_name": "Vectrex",
+    "folder_name": "vectrex",
+    "igdb_slug": "vectrex",
+    "moby_slug": "vectrex"
+  },
+  {
+    "display_name": "Virtual Boy",
+    "folder_name": "virtualboy",
+    "igdb_slug": "virtualboy",
+    "moby_slug": "virtual-boy"
+  },
+  {
+    "display_name": "Virtual Console",
+    "folder_name": "vc",
+    "igdb_slug": "vc",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Visual Memory Unit / Visual Memory System",
+    "folder_name": "visual-memory-unit-slash-visual-memory-system",
+    "igdb_slug": "visual-memory-unit-slash-visual-memory-system",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Watara/QuickShot Supervision",
+    "folder_name": "watara-slash-quickshot-supervision",
+    "igdb_slug": "watara-slash-quickshot-supervision",
+    "moby_slug": null
+  },
+  {
+    "display_name": "Web browser",
+    "folder_name": "browser",
+    "igdb_slug": "browser",
+    "moby_slug": "browser"
+  },
+  {
+    "display_name": "Wii",
+    "folder_name": "wii",
+    "igdb_slug": "wii",
+    "moby_slug": "wii"
+  },
+  {
+    "display_name": "Wii U",
+    "folder_name": "wiiu",
+    "igdb_slug": "wiiu",
+    "moby_slug": "wii-u"
+  },
+  {
+    "display_name": "Windows Mobile",
+    "folder_name": "windows-mobile",
+    "igdb_slug": "windows-mobile",
+    "moby_slug": "windowsphone"
+  },
+  {
+    "display_name": "Windows Phone",
+    "folder_name": "winphone",
+    "igdb_slug": "winphone",
+    "moby_slug": "windows-phone"
+  },
+  {
+    "display_name": "WonderSwan",
+    "folder_name": "wonderswan",
+    "igdb_slug": "wonderswan",
+    "moby_slug": "wonderswan"
+  },
+  {
+    "display_name": "WonderSwan Color",
+    "folder_name": "wonderswan-color",
+    "igdb_slug": "wonderswan-color",
+    "moby_slug": "wonderswan-color"
+  },
+  {
+    "display_name": "Xbox",
+    "folder_name": "xbox",
+    "igdb_slug": "xbox",
+    "moby_slug": "xbox"
+  },
+  {
+    "display_name": "Xbox 360",
+    "folder_name": "xbox360",
+    "igdb_slug": "xbox360",
+    "moby_slug": "xbox360"
+  },
+  {
+    "display_name": "Xbox One",
+    "folder_name": "xboxone",
+    "igdb_slug": "xboxone",
+    "moby_slug": "xbox-one"
+  },
+  {
+    "display_name": "Xbox Series X",
+    "folder_name": "series-x",
+    "igdb_slug": "series-x",
+    "moby_slug": "xbox-series"
+  },
+  {
+    "display_name": "Zeebo",
+    "folder_name": "zeebo",
+    "igdb_slug": "zeebo",
+    "moby_slug": "zeebo"
+  },
+  {
+    "display_name": "ZX Spectrum",
+    "folder_name": "zxs",
+    "igdb_slug": "zxs",
+    "moby_slug": null
+  },
+  {
+    "display_name": "iOS",
+    "folder_name": "ios",
+    "igdb_slug": "ios",
+    "moby_slug": "iphone"
+  },
+  {
+    "display_name": "visionOS",
+    "folder_name": "visionos",
+    "igdb_slug": "visionos",
+    "moby_slug": null
+  }
+]
