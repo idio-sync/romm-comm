@@ -262,7 +262,6 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 - Check API connectivity (`API_URL`).
 - Review logs for issues.
 - Confirm `.env` configuration.
-- For flood noise during imports, temporarily disable recent-ROM posting.
 
 ---
 
@@ -271,6 +270,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
