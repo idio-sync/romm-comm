@@ -86,7 +86,6 @@ zx_spectrum|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/mai
 
 # Variants
 ds_lite|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ds_lite.png
-mac_imac|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/mac_imac.png
 gameboy_advance_sp|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/gameboy_advance_sp.png
 gameboy_micro|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/gameboy_micro.png
 gameboy_pocket|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/gameboy_pocket.png
