@@ -121,7 +121,7 @@ CHANNEL_ID=your_channel_id
 RECENT_ROMS_ENABLED=true
 RECENT_ROMS_CHANNEL_ID=your_channel_id
 RECENT_ROMS_MAX_PER_POST=10
-RECENT_ROMS_FLOOD_THRESHOLD=25
+RECENT_ROMS_BULK_THRESHOLD=25
 ```
 
 ### Configuration details
@@ -271,6 +271,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
