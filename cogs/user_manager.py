@@ -874,7 +874,11 @@ class ConfirmView(discord.ui.View):
 class UserManager(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.auto_register_role_id = int(os.getenv('AUTO_REGISTER_ROLE_ID', 0))
+        auto_register_role_id_env = os.getenv('AUTO_REGISTER_ROLE_ID')
+        if auto_register_role_id_env and auto_register_role_id_env.isdigit():
+            self.auto_register_role_id = int(auto_register_role_id_env)
+        else:
+            self.auto_register_role_id = 0 
         self.log_channel_id = self.bot.config.CHANNEL_ID
         self.temp_storage = {}
         self.db_manager = AsyncUserDatabaseManager()
@@ -1413,3 +1417,4 @@ def setup(bot):
     
     bot.add_cog(UserManager(bot))
     #logger.info("UserManager Cog enabled and loaded")
+
