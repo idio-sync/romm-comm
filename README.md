@@ -84,7 +84,9 @@ pip install py-cord aiohttp python-dotenv qrcode Pillow python-socketio requests
 - Enable **Privileged Gateway Intents** in the bot settings.
 
 ### Permissions
-<img align="center" width="60%" src=".github/screenshots/BotPermissions.png">
+<p align="center">
+  <img src=".github/screenshots/BotPermissions.png" width="50%>
+</p>
 
 ---
 
@@ -273,6 +275,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
