@@ -83,6 +83,9 @@ pip install py-cord aiohttp python-dotenv qrcode Pillow python-socketio requests
 - See the Pycord docs for bot creation and permission setup: https://docs.pycord.dev/en/stable/discord.html
 - Enable **Privileged Gateway Intents** in the bot settings.
 
+### Permissions
+<img align="center" width="60%" src=".github/screenshots/BotPermissions.png">
+
 ---
 
 ## RomM Settings
@@ -270,6 +273,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
