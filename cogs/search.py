@@ -901,6 +901,8 @@ class ROM_View(discord.ui.View):
             selected_rom = next((rom for rom in self.search_results if rom['id'] == selected_rom_id), None)
             
             if selected_rom:
+                platform_name = self.platform_name or selected_rom.get('platform_name', 'Unknown')
+                logger.info(f"ROM selected - User: {interaction.user} (ID: {interaction.user.id}) | ROM: '{selected_rom['name']}' | ROM ID: #{selected_rom_id} | Platform: {platform_name}")
                 try:
                     detailed_rom = await self.bot.fetch_api_endpoint(f'roms/{selected_rom_id}')
                     if detailed_rom:
@@ -1474,6 +1476,8 @@ class Search(commands.Cog):
                             if detailed_rom:
                                 rom_data = detailed_rom
                             
+                            logger.info(f"Random ROM found - User: {ctx.author} (ID: {ctx.author.id}) | ROM: '{rom_data['name']}' | ROM ID: #{rom_data['id']} | Platform: {platform_display_name}")
+                            
                             # Create view with explicit ROM data
                             view = ROM_View(self.bot, [rom_data], ctx.author.id, platform_display_name)
                             view.remove_item(view.select)
@@ -1538,6 +1542,8 @@ class Search(commands.Cog):
                                     if p.get('id') == platform_id:
                                         platform_name = p.get('name')
                                         break
+                        
+                        logger.info(f"Random ROM found - User: {ctx.author} (ID: {ctx.author.id}) | ROM: '{rom_data['name']}' | ROM ID: #{rom_data['id']} | Platform: {platform_name or 'Unknown'}")
 
                         # Create view with explicit ROM data
                         view = ROM_View(self.bot, [rom_data], ctx.author.id, platform_name)
@@ -1590,6 +1596,7 @@ class Search(commands.Cog):
         await ctx.defer()
 
         try:
+            logger.info(f"Search command - User: {ctx.author} (ID: {ctx.author.id}) | Query: '{game}' | Platform: {platform}")
             # Get platform data
             raw_platforms = await self.bot.fetch_api_endpoint('platforms')
             if not raw_platforms:
@@ -1660,6 +1667,7 @@ class Search(commands.Cog):
                     break  # Found results, stop trying
 
             if not search_results or not isinstance(search_results, list) or len(search_results) == 0:
+                logger.info(f"Search no results - User: {ctx.author} (ID: {ctx.author.id}) | Query: '{game}' | Platform: {platform_display_name}")
                 # Create an embed for no results
                 embed = discord.Embed(
                     title="No Results Found",
