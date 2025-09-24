@@ -1,1753 +1,401 @@
-from discord.ext import commands
-import discord
-import logging
-import re
-from datetime import datetime
-from typing import Dict, List, Optional, Union, Tuple
-import random
-import qrcode
-from PIL import Image
-import io
+from typing import List, Dict, Optional, Tuple
 import aiohttp
-from io import BytesIO
-import asyncio
-import time
-from urllib.parse import quote
-from collections import defaultdict
+import logging
+from datetime import datetime, timedelta
+import os
+from dotenv import load_dotenv
+import re
 
-# Set up logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(formatter)
-logger.addHandler(console_handler)
 
-class ROM_View(discord.ui.View):
-    def __init__(self, bot, search_results: List[Dict], author_id: int, platform_name: Optional[str] = None, initial_message: Optional[discord.Message] = None):
-        super().__init__()
-        self.bot = bot
-        self.search_results = search_results
-        self.author_id = author_id
-        self.platform_name = platform_name
-        self.message = initial_message
-        self._selected_rom = None
+class IGDBClient:
+    """IGDB API client for game metadata"""
+    def __init__(self):
+        self.client_id = os.getenv('IGDB_CLIENT_ID')
+        self.client_secret = os.getenv('IGDB_CLIENT_SECRET')
+        self.access_token = None
+        self.token_expires = None
+        self._session: Optional[aiohttp.ClientSession] = None
+        self._platform_cache = {}  # Cache for platform slug to ID mapping
+        
+        if not all([self.client_id, self.client_secret]):
+            logger.warning("IGDB credentials not found in environment variables")
+            raise ValueError("IGDB credentials not found in environment variables")
 
-        # Create ROM select menu only
-        self.select = discord.ui.Select(
-            placeholder="Select result to view details",
-            custom_id="rom_select"
-        )
-        
-        # Add options to select menu
-        for rom in search_results[:25]:
-            display_name = rom['name'][:75] if len(rom['name']) > 75 else rom['name']
-            file_name = rom.get('fs_name', 'Unknown filename')
-            
-            # Get correct size for dropdown
-            size_bytes = rom.get('fs_size_bytes', 0)  # Check ROM level first
-            if not size_bytes and rom.get('files'):
-                # For multi-file ROMs, sum the sizes
-                size_bytes = sum(f.get('file_size_bytes', 0) for f in rom['files'])
-            file_size = self.format_file_size(size_bytes)
-            
-            # Check if files are in subfolders for the description
-            subfolder_types = set()
-            if rom.get('files'):
-                for f in rom['files']:
-                    subfolder = self.get_file_subfolder(f)
-                    if subfolder:
-                        subfolder_types.add(subfolder)
-            
-            # Build description
-            if subfolder_types:
-                subfolder_text = f"[{', '.join(sorted(subfolder_types))}] "
-                truncated_filename = (file_name[:40] + '...') if len(file_name) > 43 else file_name
-                description = f"{truncated_filename} + {subfolder_text} ({file_size})"
-            else:
-                truncated_filename = (file_name[:47] + '...') if len(file_name) > 50 else file_name
-                description = f"{truncated_filename} ({file_size})"
-            
-            # Ensure description doesn't exceed Discord's limit (100 chars)
-            if len(description) > 100:
-                description = description[:97] + "..."
-            
-            self.select.add_option(
-                label=display_name,
-                value=str(rom['id']),
-                description=description
-            )
-        
-        self.select.callback = self.select_callback
-        self.add_item(self.select)
+    async def ensure_session(self) -> aiohttp.ClientSession:
+        """Ensure an active session exists and return it."""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
 
-    @staticmethod
-    def format_file_size(size_bytes: Union[int, float]) -> str:
-        """Format size in bytes to human readable format"""
-        if not size_bytes or not isinstance(size_bytes, (int, float)):
-            return "Unknown size"
-        
-        units = ['B', 'KB', 'MB', 'GB', 'TB']
-        size_value = float(size_bytes)
-        unit_index = 0
-        while size_value >= 1024 and unit_index < len(units) - 1:
-            size_value /= 1024
-            unit_index += 1
-        return f"{size_value:.2f} {units[unit_index]}"
-        
-    @staticmethod
-    def get_file_subfolder(file_info: Dict) -> Optional[str]:
-        # First prefer backend category field
-        if file_info.get('category'):
-            return file_info['category'].lower()
-        
-        # Fallback to path parsing if no category
-        file_path = file_info.get('file_path', '')
-        if not file_path:
-            return None
-
-        known_subfolders = ['hack', 'dlc', 'manual', 'mod', 'patch', 'update', 'demo', 'translation', 'prototype']
-        path_parts = file_path.split('/')
-        for part in path_parts:  # include all parts
-            if part.lower() in known_subfolders:
-                return part.lower()
-        return None
-    
-    @staticmethod
-    def get_subfolder_icon(subfolder: Optional[str]) -> str:
-        """Get icon for subfolder type"""
-        icons = {
-            'hack': '🔧',
-            'dlc':'⬇️',
-            'manual': '📖',
-            'mod': '🎨',
-            'patch': '📝',
-            'update': '🔄',
-            'demo': '🎮',
-            'translation': '🌐',
-            'prototype': '🔬',
-            None: '📄'  # Default for main/root files
-        }
-        return icons.get(subfolder, '📁')
-
-    async def download_cover_image(self, rom_data: Dict) -> Optional[discord.File]:
-        """Download cover image from Romm API and return as Discord File"""
+    async def get_access_token(self) -> bool:
+        """Get or refresh Twitch OAuth token for IGDB access"""
         try:
-            # Check if we have url_cover at all
-            if not rom_data.get('url_cover'):
+            if self.access_token and self.token_expires and datetime.now() < self.token_expires:
+                return True
+
+            session = await self.ensure_session()
+            url = f"https://id.twitch.tv/oauth2/token"
+            params = {
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+                "grant_type": "client_credentials"
+            }
+
+            async with session.post(url, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    self.access_token = data["access_token"]
+                    self.token_expires = datetime.now() + timedelta(seconds=data["expires_in"] - 100)
+                    return True
+                else:
+                    logger.error(f"Failed to get IGDB token: {response.status}")
+                    return False
+
+        except Exception as e:
+            logger.error(f"Error getting IGDB token: {e}")
+            return False
+
+    async def get_platform_id_from_slug(self, platform_slug: str) -> Optional[int]:
+        """Get IGDB platform ID from slug"""
+        if not platform_slug:
+            return None
+            
+        # Check cache first
+        if platform_slug in self._platform_cache:
+            return self._platform_cache[platform_slug]
+        
+        try:
+            if not await self.get_access_token():
                 return None
-                
-            # Build the direct cover URL from Romm API
-            platform_id = rom_data.get('platform_id')
-            rom_id = rom_data.get('id')
             
-            if not platform_id or not rom_id:
-                logger.warning("Missing platform_id or rom_id for cover download")
-                return None
+            session = await self.ensure_session()
+            headers = {
+                "Client-ID": self.client_id,
+                "Authorization": f"Bearer {self.access_token}"
+            }
             
-            # Construct the direct cover URL
-            cover_url = f"{self.bot.config.API_BASE_URL}/assets/romm/resources/roms/{platform_id}/{rom_id}/cover/big.png"
+            # Query IGDB platforms endpoint
+            url = "https://api.igdb.com/v4/platforms"
+            query = f'fields id,name,slug; where slug = "{platform_slug}"; limit 1;'
             
-            logger.debug(f"Downloading cover from: {cover_url}")
-            
-            # Download the image
-            async with aiohttp.ClientSession() as session:
-                async with session.get(cover_url) as response:
-                    if response.status == 200:
-                        image_data = await response.read()
-                        byte_arr = BytesIO(image_data)
-                        byte_arr.seek(0)
-                        return discord.File(byte_arr, filename="cover.png")
+            async with session.post(url, headers=headers, data=query) as response:
+                if response.status == 200:
+                    platforms = await response.json()
+                    if platforms and len(platforms) > 0:
+                        platform_id = platforms[0].get("id")
+                        # Cache the result
+                        self._platform_cache[platform_slug] = platform_id
+                        logger.debug(f"Mapped platform slug '{platform_slug}' to ID {platform_id}")
+                        return platform_id
                     else:
-                        logger.warning(f"Failed to download cover: HTTP {response.status}")
+                        logger.debug(f"No IGDB platform found for slug: {platform_slug}")
+                        # Cache the negative result too
+                        self._platform_cache[platform_slug] = None
                         return None
-                        
+                else:
+                    logger.error(f"Failed to query IGDB platforms: {response.status}")
+                    return None
+                    
         except Exception as e:
-            logger.error(f"Error downloading cover image: {e}")
-            return None
-    
-    async def create_rom_embed(self, rom_data: Dict) -> Tuple[discord.Embed, Optional[discord.File]]:
-        try:
-            # When creating the download URL in the embed
-            raw_file_name = rom_data.get('fs_name', 'unknown_file')
-            # Use plus signs for spaces - these survive Discord->Browser->Nginx
-            file_name = raw_file_name.replace(' ', '+')
-            file_name = quote(file_name, safe='+')
-            download_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_data['id']}/content/{file_name}"
-            
-            logger.debug(f"Embed download URL - raw: '{raw_file_name}'")
-            logger.debug(f"Embed download URL - encoded: '{file_name}'")
-            logger.debug(f"Embed download URL - final: {download_url}")
-            igdb_name = rom_data['name'].lower().replace(' ', '-')
-            igdb_name = re.sub(r'[^a-z0-9-]', '', igdb_name)
-            igdb_url = f"https://www.igdb.com/games/{igdb_name}"
-            romm_url = f"{self.bot.config.DOMAIN}/rom/{rom_data['id']}"
-            logo_url = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png"
-            
-            embed = discord.Embed(
-                title=f"{rom_data['name']}",
-                color=discord.Color.green()
-            )
-            
-            # Set romm logo as thumbnail
-            embed.set_thumbnail(url=logo_url)
-            
-            # Download cover image if available
-            cover_file = None
-            if rom_data.get('url_cover'):
-                cover_file = await self.download_cover_image(rom_data)
-                if cover_file:
-                    # Set the image to use the attachment
-                    embed.set_image(url="attachment://cover.png")
-            
-            # Get platform name if not provided
-            platform_name = self.platform_name
-            if not platform_name and (platform_id := rom_data.get('platform_id')):
-                # Get raw platforms data to access custom_name
-                raw_platforms_data = await self.bot.fetch_api_endpoint('platforms')
-                if raw_platforms_data:
-                    for p in raw_platforms_data:
-                        if p.get('id') == platform_id:
-                            platform_name = self.bot.get_platform_display_name(p)
-                            break
-                else:
-                    # Fallback to cached platforms data
-                    platforms_data = self.bot.cache.get('platforms')
-                    if platforms_data:
-                        for p in platforms_data:
-                            if p.get('id') == platform_id:
-                                platform_name = p.get('name', 'Unknown Platform')
-                                break
-            
-            if platform_name:
-                search_cog = self.bot.get_cog('Search')
-                if search_cog:
-                    platform_display = search_cog.get_platform_with_emoji(platform_name)
-                else:
-                    platform_display = platform_name
-                embed.add_field(name="Platform", value=platform_display, inline=True)
-            
-            # Rest of the embed creation remains the same...
-            if metadatum := rom_data.get('metadatum'):
-                if genres := metadatum.get('genres'):
-                    if isinstance(genres, list):
-                        genre_list = genres[:2]  # Take only first two genres
-                        genre_display = ", ".join(genre_list)
-                    else:
-                        genre_display = str(genres)
-                    embed.add_field(name="Genres", value=genre_display, inline=True)
-            
-            if metadatum := rom_data.get('metadatum'):
-                if release_date := metadatum.get('first_release_date'):
-                    try:
-                        # Check if timestamp is in milliseconds (if it's too large)
-                        # A reasonable date should be less than 2,000,000,000 (year 2033)
-                        if release_date > 2_000_000_000:
-                            # Convert milliseconds to seconds
-                            release_date = release_date / 1000
-                        
-                        release_datetime = datetime.fromtimestamp(int(release_date))
-                        formatted_date = release_datetime.strftime('%b %d, %Y')
-                        embed.add_field(name="Release Date", value=formatted_date, inline=True)
-                    except (ValueError, TypeError) as e:
-                        logger.error(f"Error formatting date: {e}")
-                        logger.error(f"Raw release_date value: {release_date}")
-            
-            if summary := rom_data.get('summary'):
-                trimmed_summary = self.trim_summary_to_lines(summary, max_lines=3)
-                if trimmed_summary:
-                    embed.add_field(name="Summary", value=trimmed_summary, inline=False)
-            
-            if companies := metadatum.get('companies'):
-                if isinstance(companies, list):
-                    company_list = companies[:2]  # Take only first two companies
-                    companies_str = ", ".join(company_list)
-                else:
-                    companies_str = str(companies)
-                if companies_str:
-                    embed.add_field(name="Companies", value=companies_str, inline=True)
-            
-            links = [
-                f"[Romm]({romm_url})",
-                f"[IGDB]({igdb_url})"
-            ]
-            
-            if ra_id := rom_data.get('ra_id'):
-                ra_url = f"https://retroachievements.org/game/{ra_id}"
-                links.append(f"[RetroAchievements]({ra_url})")
-            
-            embed.add_field(name="Links", value=" • ".join(links), inline=True)
-            
-            # File information (rest remains the same as original)
-            if rom_data.get('multi') and rom_data.get('files'):
-                files = rom_data.get('files', [])
-                total_size = sum(f.get('file_size_bytes', 0) for f in files)
-                
-                # Group files by subfolder
-                files_by_subfolder = defaultdict(list)
-                for file_info in files:
-                    subfolder = self.get_file_subfolder(file_info)
-                    files_by_subfolder[subfolder].append(file_info)
-                
-                # Sort subfolders with None (main) first
-                sorted_subfolders = sorted(files_by_subfolder.keys(), key=lambda x: (x is not None, x))
-                
-                files_info = []
-                total_length = 0
-                files_shown = 0
-                total_files = len(files)
-                max_length = 800
-                
-                for subfolder in sorted_subfolders:
-                    subfolder_files = files_by_subfolder[subfolder]
-                    
-                    # Add subfolder header if not main files
-                    if files_info and len(sorted_subfolders) > 1:  # Add spacing between groups
-                        if total_length + 1 < max_length:
-                            files_info.append("")
-                            total_length += 1
-                    
-                    if subfolder:
-                        icon = self.get_subfolder_icon(subfolder)
-                        # Special handling for acronyms that should be all caps
-                        acronyms = {'dlc': 'DLC'}
-                        display_name = acronyms.get(subfolder, subfolder.capitalize())
-                        header_line = f"{icon} **{display_name}**"
-                        if total_length + len(header_line) + 1 > max_length:
-                            files_info.append("...")
-                            break
-                        files_info.append(header_line)
-                        total_length += len(header_line) + 1
-                    
-                    # Sort files in this subfolder
-                    sorted_files = sorted(
-                        subfolder_files,
-                        key=lambda x: (x.get('file_size_bytes', 0), x.get('file_name', '').lower()),
-                        reverse=(len(subfolder_files) > 10)
-                    )[:10] if len(subfolder_files) > 10 else sorted(
-                        subfolder_files,
-                        key=lambda x: x.get('file_name', '').lower()
-                    )
-                    
-                    # Add files from this subfolder
-                    for file_info in sorted_files:
-                        size_bytes = file_info.get('file_size_bytes', 0)
-                        size_str = self.format_file_size(size_bytes)
-                        file_line = f"• {file_info['file_name']} ({size_str})"
-                        line_length = len(file_line) + 1
-                        
-                        if total_length + line_length > max_length:
-                            files_info.append("...")
-                            break
-                        
-                        files_info.append(file_line)
-                        total_length += line_length
-                        files_shown += 1
-                    
-                    if total_length >= max_length:
-                        break
-                
-                # Create field name
-                field_name = f"Files (Total: {self.format_file_size(total_size)}"
-                if len(files) > files_shown:
-                    field_name += f" - Showing {files_shown} of {total_files} files)"
-                else:
-                    field_name += ")"
-                
-                # Add field to embed
-                embed.add_field(
-                    name=field_name,
-                    value="\n".join(files_info) if files_info else "No files to display",
-                    inline=False
-                )
-            else:
-                # Single file display
-                file_size = self.format_file_size(rom_data.get('fs_size_bytes', 0))
-                file_name = rom_data.get('fs_name', 'unknown_file')
-                
-                # Check if single file is in a subfolder
-                subfolder = None
-                if rom_data.get('files') and len(rom_data.get('files', [])) == 1:
-                    subfolder = self.get_file_subfolder(rom_data['files'][0])
-                
-                file_info_text = f"• {file_name}"
-                if subfolder:
-                    icon = self.get_subfolder_icon(subfolder)
-                    file_info_text = f"{icon} [{subfolder.capitalize()}]\n• {file_name}"
-                
-                embed.add_field(
-                    name=f"File ({file_size})",
-                    value=file_info_text,
-                    inline=False
-                )
-                
-            return embed, cover_file
-        except Exception as e:
-            logger.error(f"Error creating ROM embed: {e}")
-            raise
-
-    def trim_summary_to_lines(self, summary: str, max_lines: int = 3, chars_per_line: int = 60) -> str:
-        """Trim summary text to specified number of lines"""
-        if not summary:
-            return ""
-            
-        # Split existing newlines first
-        lines = summary.split('\n')
-        if len(lines) > max_lines:
-            lines = lines[:max_lines]
-            summary = '\n'.join(lines)
-            if len(lines) == max_lines:
-                summary += "..."
-            return summary
-            
-        # If we have fewer physical lines, check length-based wrapping
-        current_line = 1
-        current_length = 0
-        result = []
-        words = summary.replace('\n', ' ').split(' ')
-        
-        for word in words:
-            # Check if adding this word would start a new line
-            if current_length + len(word) + 1 > chars_per_line:
-                current_line += 1
-                current_length = len(word)
-                # If this would exceed our max lines, stop here
-                if current_line > max_lines:
-                    result.append('...')
-                    break
-                result.append(word)
-            else:
-                current_length += len(word) + 1
-                result.append(word)
-                
-            if current_line > max_lines:
-                break
-                
-        return ' '.join(result)
-    
-    async def generate_qr(self, url: str) -> discord.File:
-        """Generate QR code for download URL"""
-        try:
-            qr = qrcode.QRCode(
-                version=1,
-                error_correction=qrcode.constants.ERROR_CORRECT_L,
-                box_size=10,
-                border=2,
-            )
-            qr.add_data(url)
-            qr.make(fit=True)
-            
-            qr_img = qr.make_image(fill_color="black", back_color="white")
-            
-            byte_arr = BytesIO()
-            qr_img.save(byte_arr, format='PNG')
-            byte_arr.seek(0)
-            
-            return discord.File(byte_arr, filename="download_qr.png")
-        except Exception as e:
-            logger.error(f"Error generating QR code: {e}")
+            logger.error(f"Error getting platform ID for slug '{platform_slug}': {e}")
             return None
 
-    async def update_file_select(self, rom_data: Dict):
-        """Update the file selection menu with available files"""
-        try:
-            # Remove existing file components if they exist
-            components_to_remove = []
-            for item in self.children:
-                if isinstance(item, (discord.ui.Button, discord.ui.Select)) and item != self.select:
-                    components_to_remove.append(item)
-            
-            for item in components_to_remove:
-                self.remove_item(item)
-
-            # Initialize filename and ID maps as instance variables
-            self.filename_map = {}
-            self.file_id_map = {}
-
-            if rom_data.get('multi') and rom_data.get('files'):
-                files = rom_data.get('files', [])
-                if not files:
-                    return
-                
-                # Sort files - group by subfolder first, then by size/name
-                files_with_subfolder = [(f, self.get_file_subfolder(f)) for f in files]
-                files_with_subfolder.sort(key=lambda x: (x[1] is not None, x[1], x[0].get('file_name', '').lower()))
-                
-                # Limit to 25 files for dropdown (Discord limit)
-                display_files = files_with_subfolder[:25]
-                
-                # Create file select with appropriate max_values
-                self.file_select = discord.ui.Select(
-                    placeholder="Select files to download",
-                    custom_id="file_select",
-                    min_values=1,
-                    max_values=min(len(display_files), 25)
-                )
-                
-                # Add file options with subfolder in label
-                for i, (file_info, subfolder) in enumerate(display_files):
-                    size_bytes = file_info.get('file_size_bytes', 0)
-                    size = self.format_file_size(size_bytes)
-                    
-                    # Format label with subfolder prefix if present
-                    file_name = file_info['file_name'][:75]
-                    if subfolder:
-                        label = f"[{subfolder}] {file_name} ({size})"
-                    else:
-                        label = f"{file_name} ({size})"
-                    
-                    # Truncate label if too long (Discord has a 100 char limit for labels)
-                    if len(label) > 100:
-                        # Truncate filename portion to fit
-                        max_name_len = 100 - len(f"[{subfolder}]  ({size})") if subfolder else 100 - len(f" ({size})")
-                        truncated_name = file_name[:max_name_len-3] + "..."
-                        if subfolder:
-                            label = f"[{subfolder}] {truncated_name} ({size})"
-                        else:
-                            label = f"{truncated_name} ({size})"
-                    
-                    # Create shortened value and map it to full filename AND file ID
-                    short_value = f"file_{i}"
-                    self.filename_map[short_value] = file_info['file_name']
-                    self.file_id_map[short_value] = str(file_info.get('id'))
-                    
-                    self.file_select.add_option(
-                        label=label,
-                        value=short_value
-                    )
-                
-                self.file_select.callback = self.file_select_callback
-                self.add_item(self.file_select)
-
-                # Create proper base URL for multi-file downloads
-                file_name = quote(rom_data.get('fs_name', 'unknown_file'))
-                base_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_data['id']}/content/{file_name}"
-
-                # Download Selected button starts disabled
-                self.download_selected = discord.ui.Button(
-                    label="Download Selected",
-                    style=discord.ButtonStyle.link,
-                    url=base_url,  # Will be updated when files are selected
-                    disabled=True
-                )
-                self.add_item(self.download_selected)
-
-                # Download All button - no file_ids parameter means all files
-                self.download_all = discord.ui.Button(
-                    label="Download All",
-                    style=discord.ButtonStyle.link,
-                    url=base_url  # No file_ids parameter = download all
-                )
-                self.add_item(self.download_all)
-
-            else:
-                # Single file download button
-                file_name = quote(rom_data.get('fs_name', 'unknown_file'))
-                file_size = self.format_file_size(rom_data.get('fs_size_bytes', 0))
-                download_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_data['id']}/content/{file_name}"
-                
-                self.download_all = discord.ui.Button(
-                    label=f"Download ({file_size})",
-                    style=discord.ButtonStyle.link,
-                    url=download_url
-                )
-                self.add_item(self.download_all)
-
-        except Exception as e:
-            logger.error(f"Error updating file select: {e}")
-            logger.error(f"ROM data: {rom_data}")
-            raise
-
-    async def file_select_callback(self, interaction: discord.Interaction):
-        """Handle file selection"""
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message("This selection isn't for you!", ephemeral=True)
-            return
-
-        try:
-            selected_short_values = interaction.data['values']
-            logger.debug(f"Selected short values: {selected_short_values}")
-            logger.debug(f"File ID map: {self.file_id_map}")
-            
-            if selected_short_values and hasattr(self, 'file_id_map'):
-                # Get the file IDs for selected files
-                selected_file_ids = [self.file_id_map[short_value] for short_value in selected_short_values]
-                
-                # Create the download URL with file_ids parameter
-                file_name = quote(self._selected_rom.get('fs_name', 'unknown_file'))
-                base_url = f"{self.bot.config.DOMAIN}/api/roms/{self._selected_rom['id']}/content/{file_name}"
-                
-                if selected_file_ids:
-                    # Use file_ids parameter as expected by backend
-                    file_ids_param = ','.join(selected_file_ids)
-                    download_url = f"{base_url}?file_ids={file_ids_param}"
-                else:
-                    download_url = base_url
-                
-                logger.debug(f"Generated download URL: {download_url}")
-                
-                # Remove old download buttons
-                for item in self.children[:]:
-                    if isinstance(item, discord.ui.Button):
-                        self.remove_item(item)
-                
-                # Add new download selected button with updated URL
-                self.download_selected = discord.ui.Button(
-                    label="Download Selected",
-                    style=discord.ButtonStyle.link,
-                    url=download_url,
-                    disabled=False
-                )
-                self.add_item(self.download_selected)
-
-                # Re-add download all button (no file_ids = all files)
-                all_raw_filename = self._selected_rom.get('fs_name', 'unknown_file')
-                all_file_name = quote(all_raw_filename, safe='')
-                download_all_url = f"{self.bot.config.DOMAIN}/api/roms/{self._selected_rom['id']}/content/{all_file_name}"
-                self.download_all = discord.ui.Button(
-                    label="Download All",
-                    style=discord.ButtonStyle.link,
-                    url=download_all_url
-                )
-                self.add_item(self.download_all)
-                
-                await interaction.response.edit_message(view=self)
-            else:
-                # Disable download selected button if no files selected
-                for item in self.children[:]:
-                    if isinstance(item, discord.ui.Button) and item.label == "Download Selected":
-                        item.disabled = True
-                await interaction.response.edit_message(view=self)
-                
-        except Exception as e:
-            logger.error(f"Error in file select callback: {e}")
-            logger.error(f"Selected values: {selected_short_values if 'selected_short_values' in locals() else 'undefined'}")
-            logger.error(f"ROM data: {self._selected_rom if hasattr(self, '_selected_rom') else 'No ROM selected'}")
-            try:
-                await interaction.response.defer(ephemeral=True)
-                await interaction.followup.send("An error occurred while processing your selection", ephemeral=True)
-            except discord.errors.InteractionResponded:
-                await interaction.followup.send("An error occurred while processing your selection", ephemeral=True)
-
-    async def download_selected_callback(self, interaction: discord.Interaction):
-        """Handle downloading selected files"""
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message("This button isn't for you!", ephemeral=True)
-            return
-
-        await interaction.response.defer(ephemeral=True)
+    def prepare_search_term(self, game_name: str) -> str:
+        """Prepare search term for IGDB - handle common issues"""
+        # Remove special characters that might cause issues but keep apostrophes and hyphens
+        cleaned = re.sub(r'[^\w\s\'-]', '', game_name)
         
-        if not self._selected_rom:
-            await interaction.followup.send("Please select a ROM first!", ephemeral=True)
-            return
-
-        # Get selected values from the select menu
-        selected_values = []
-        for child in self.children:
-            if isinstance(child, discord.ui.Select) and child.custom_id == "file_select":
-                selected_values = child.values
-                break
-
-        if not selected_values:
-            await interaction.followup.send("Please select files to download!", ephemeral=True)
-            return
-        
-        file_name = self._selected_rom.get('fs_name', 'unknown_file').replace(' ', '%20')
-        download_url = f"{self.bot.config.DOMAIN}/roms/{self._selected_rom['id']}/content/{file_name}?files={','.join(selected_values)}"
-        
-        await interaction.followup.send(
-            f"Download link for selected files:\n{download_url}",
-            ephemeral=True
-        )
-
-    def get_download_url(self, rom_id: int, file_name: str, selected_files: Optional[List[str]] = None) -> str:
-        """Helper method to generate properly encoded download URLs"""
-        try:
-            base_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_id}/content/{quote(file_name)}"
-            
-            if selected_files:
-                # Double encode: first each filename, then the entire parameter
-                encoded_files = [quote(f) for f in selected_files]
-                files_param = quote(','.join(encoded_files))
-                return f"{base_url}?files={files_param}"
-            
-            return base_url
-            
-        except Exception as e:
-            logger.error(f"Error generating download URL: {e}")
-            return ""
-    
-    async def download_all_callback(self, interaction: discord.Interaction):
-        """Handle downloading all files"""
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message("This button isn't for you!", ephemeral=True)
-            return
-
-        await interaction.response.defer(ephemeral=True)
-        
-        if not self._selected_rom:
-            await interaction.followup.send("Please select a ROM first!", ephemeral=True)
-            return
-
-        file_name = self._selected_rom.get('fs_name', 'unknown_file').replace(' ', '%20')
-        download_url = f"{self.bot.config.DOMAIN}/api/roms/{self._selected_rom['id']}/content/{file_name}"
-        
-        await interaction.followup.send(
-            f"Download link for all files:\n{download_url}",
-            ephemeral=True
-        )
-
-    async def handle_qr_trigger(self, interaction: discord.Interaction, trigger_type: str):
-        """Handle QR code generation and sending"""
-        try:
-            # For search results with multiple ROMs
-            if len(self.search_results) > 1 and not self._selected_rom:
-                await interaction.channel.send("Please select a ROM first!")
-                return
-
-            # Get the ROM data
-            selected_rom = self._selected_rom if self._selected_rom else self.search_results[0]
-            
-            if not selected_rom:
-                await interaction.channel.send("❌ Unable to find ROM data")
-                return
-
-            file_name = selected_rom.get('fs_name', 'unknown_file').replace(' ', '%20')
-            download_url = f"{self.bot.config.DOMAIN}/api/roms/{selected_rom['id']}/content/{file_name}"
-                
-            qr_file = await self.generate_qr(download_url)
-            if qr_file:
-                embed = discord.Embed(
-                    title=f"📱 QR Code for {selected_rom['name']}",
-                    description=f"Triggered by {trigger_type}",
-                    color=discord.Color.blue()
-                )
-                embed.set_image(url="attachment://download_qr.png")
-                
-                await interaction.channel.send(
-                    embed=embed,
-                    file=qr_file
-                )
-            else:
-                await interaction.channel.send("❌ Failed to generate QR code")
-        except Exception as e:
-            logger.error(f"Error handling QR code request: {e}")
-            await interaction.channel.send("❌ An error occurred while generating the QR code")
-
-    async def start_watching_triggers(self, interaction: discord.Interaction):
-        """Start watching for QR code triggers"""
-        try:
-            # Ensure we have a valid message reference
-            if not self.message:
-                logger.warning("No message reference for QR code triggers")
-                return
-
-            def message_check(m):
-                # First verify the reference exists
-                if not m.reference or not hasattr(m.reference, 'cached_message'):
-                    return False
-                    
-                referenced_message = m.reference.cached_message
-                # Make sure we can access the referenced message
-                if not referenced_message:
-                    return False
-                    
-                return (
-                    any(keyword in m.content.lower() for keyword in {'qr'}) and
-                    referenced_message.author.id == self.bot.user.id and  # Check if referencing our bot
-                    referenced_message.embeds and  # Referenced message should have embed
-                    self.message.embeds and  # Original message should have embed
-                    referenced_message.embeds[0].title == self.message.embeds[0].title  # Compare embed titles
-                )  
-            
-            def reaction_check(reaction, user):
-                # List of accepted emoji names and Unicode emojis
-                valid_emojis = {
-                    'qr_code',  # Custom emoji names
-                    '📱', 'qr'  # Unicode emojis and text alternatives
-                }
-                return (
-                    user.id == self.author_id and
-                    reaction.message.embeds and  # Ensure message has embeds
-                    self.message.embeds and  # Ensure original message has embeds
-                    reaction.message.embeds[0].title == self.message.embeds[0].title and  # Compare embeds
-                    (getattr(reaction.emoji, 'name', str(reaction.emoji)).lower() in valid_emojis)  # Check emoji safely
-                )
-            
-            # Create tasks for both events
-            message_task = asyncio.create_task(
-                self.bot.wait_for(
-                    'message',
-                    timeout=60.0,
-                    check=message_check
-                )
-            )
-            
-            reaction_task = asyncio.create_task(
-                self.bot.wait_for(
-                    'reaction_add',
-                    timeout=60.0,
-                    check=reaction_check
-                )
-            )
-
-            # Wait for either task to complete
-            done, pending = await asyncio.wait(
-                [message_task, reaction_task],
-                return_when=asyncio.FIRST_COMPLETED,
-                timeout=60.0  # Add overall timeout to wait()
-            )
-
-            # Cancel pending tasks
-            for task in pending:
-                task.cancel()
-                try:
-                    await task
-                except (asyncio.CancelledError, asyncio.TimeoutError):
-                    # Both exceptions are expected when cancelling tasks
-                    pass
-
-            # Process completed task if any
-            if done:
-                completed_task = done.pop()
-                try:
-                    result = await completed_task
-                    
-                    if isinstance(result, discord.Message):
-                        trigger_type = "message reply"
-                    else:
-                        reaction, user = result
-                        trigger_type = f"reaction {reaction.emoji}"
-                    
-                    await self.handle_qr_trigger(interaction, trigger_type)
-                    
-                except asyncio.TimeoutError:
-                    # Individual task timed out
-                    logger.debug("QR code trigger watch timed out")
-                except Exception as e:
-                    logger.error(f"Error processing QR trigger result: {e}")
-            else:
-                # Both tasks timed out (no task completed)
-                logger.debug("QR code trigger watch timed out")
-
-        except asyncio.TimeoutError:
-            # Overall timeout from wait()
-            logger.debug("QR code trigger watch timed out")
-        except Exception as e:
-            logger.error(f"Error watching for triggers: {e}")
-
-    async def watch_for_qr_triggers(self, interaction: discord.Interaction):
-        """Start watching for QR code triggers after ROM selection"""
-        if not self.message:
-            logger.warning("No message reference for QR code triggers")
-            return
-        
-        # Create task but don't await it - let it run in background
-        task = asyncio.create_task(self.start_watching_triggers(interaction))
-        
-        # Add error handler to prevent unhandled exceptions
-        def handle_task_exception(task):
-            try:
-                task.result()
-            except asyncio.CancelledError:
-                pass  # Task was cancelled, this is fine
-            except asyncio.TimeoutError:
-                pass  # Task timed out normally, this is fine
-            except Exception as e:
-                logger.error(f"Unexpected error in QR trigger task: {e}")
-        
-        task.add_done_callback(handle_task_exception)
-
-    def message_check(self, m):
-        """Check if a message is a valid QR trigger"""
-        if not m.reference or not hasattr(m.reference, 'cached_message'):
-            return False
-            
-        referenced_message = m.reference.cached_message
-        if not referenced_message:
-            return False
-            
-        return (
-            any(keyword in m.content.lower() for keyword in {'qr'}) and
-            referenced_message.author.id == self.bot.user.id and
-            referenced_message.embeds and
-            self.message.embeds and
-            referenced_message.embeds[0].title == self.message.embeds[0].title
-        )
-        
-    def reaction_check(self, reaction, user):
-        """Check if a reaction is a valid QR trigger"""
-        valid_emojis = {'qr_code', '📱', 'qr'}
-        return (
-            user.id == self.author_id and
-            reaction.message.embeds and
-            self.message.embeds and
-            reaction.message.embeds[0].title == self.message.embeds[0].title and
-            (getattr(reaction.emoji, 'name', str(reaction.emoji)).lower() in valid_emojis)
-        )    
-    
-    
-    async def select_callback(self, interaction: discord.Interaction):
-        """Handle ROM selection"""
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message("This selection menu isn't for you!", ephemeral=True)
-            return
-            
-        await interaction.response.defer()
-        
-        try:
-            selected_rom_id = int(interaction.data['values'][0])
-            selected_rom = next((rom for rom in self.search_results if rom['id'] == selected_rom_id), None)
-            
-            if selected_rom:
-                platform_name = self.platform_name or selected_rom.get('platform_name', 'Unknown')
-                logger.info(f"ROM selected - User: {interaction.user} (ID: {interaction.user.id}) | ROM: '{selected_rom['name']}' | ROM ID: #{selected_rom_id} | Platform: {platform_name}")
-                try:
-                    detailed_rom = await self.bot.fetch_api_endpoint(f'roms/{selected_rom_id}')
-                    if detailed_rom:
-                        selected_rom.update(detailed_rom)
-                except Exception as e:
-                    logger.error(f"Error fetching detailed ROM data: {e}")
-                
-                self._selected_rom = selected_rom
-                embed, cover_file = await self.create_rom_embed(selected_rom)
-                
-                # Remove all file-related components first
-                components_to_remove = []
-                for item in self.children[:]:
-                    if isinstance(item, (discord.ui.Button, discord.ui.Select)) and item != self.select:
-                        components_to_remove.append(item)
-                
-                for item in components_to_remove:
-                    self.remove_item(item)
-                
-                # Update file components for both single and multi-file ROMs
-                await self.update_file_select(selected_rom)
-                
-                # Edit message with file parameter (not attachments)
-                if cover_file:
-                    edited_message = await interaction.message.edit(
-                        content=interaction.message.content,
-                        embed=embed,
-                        view=self,
-                        file=cover_file  # Use file parameter, not attachments
-                    )
-                else:
-                    edited_message = await interaction.message.edit(
-                        content=interaction.message.content,
-                        embed=embed,
-                        view=self
-                    )
-                
-                self.message = edited_message
-                await self.watch_for_qr_triggers(interaction)
-            else:
-                await interaction.followup.send("❌ Error retrieving ROM details", ephemeral=True)
-        except Exception as e:
-            logger.error(f"Error in select callback: {e}")
-            await interaction.followup.send("❌ An error occurred while processing your selection", ephemeral=True)
-                
-class NoResultsView(discord.ui.View):
-    """View shown when search returns no results, offering to request the game"""
-    
-    def __init__(self, bot, platform_name: str, game_name: str, author_id: int):
-        super().__init__(timeout=60)
-        self.bot = bot
-        self.platform_name = platform_name
-        self.game_name = game_name
-        self.author_id = author_id
-        
-        # Add "Request This Game" button
-        request_button = discord.ui.Button(
-            label="Request This Game",
-            style=discord.ButtonStyle.primary,
-            emoji="📝"
-        )
-        request_button.callback = self.request_game_callback
-        self.add_item(request_button)
-        
-        # Add "Search Tips" button for help
-        tips_button = discord.ui.Button(
-            label="💡 Search Tips",
-            style=discord.ButtonStyle.secondary
-        )
-        tips_button.callback = self.search_tips_callback
-        self.add_item(tips_button)
-    
-    async def request_game_callback(self, interaction: discord.Interaction):
-        """Handle the request button click"""
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message("This button isn't for you!", ephemeral=True)
-            return
-        
-        await interaction.response.defer()
-        
-        # Get the Request cog
-        request_cog = self.bot.get_cog('Request')
-        if not request_cog:
-            await interaction.followup.send("❌ Request system is not available", ephemeral=True)
-            return
-        
-        # Check if requests are enabled
-        if not request_cog.requests_enabled:
-            await interaction.followup.send("❌ The request system is currently disabled.", ephemeral=True)
-            return
-        
-        try:
-            # Check if game already exists (double-check with broader search)
-            exists, matches = await request_cog.check_if_game_exists(self.platform_name, self.game_name)
-            
-            # Search IGDB for metadata if available
-            igdb_matches = []
-            if request_cog.igdb_enabled:
-                try:
-                    igdb_matches = await request_cog.igdb.search_game(self.game_name, self.platform_name)
-                except Exception as e:
-                    logger.error(f"Error fetching IGDB data: {e}")
-            
-            if exists and matches:
-                # Game was found with broader search - show it
-                from .requests import ExistingGameView
-                view = ExistingGameView(self.bot, matches, self.platform_name, self.game_name, self.author_id)
-                
-                embed = discord.Embed(
-                    title="Game Found!",
-                    description=f"A broader search found {len(matches)} matching game(s) for '{self.game_name}':",
-                    color=discord.Color.blue()
-                )
-                
-                for i, rom in enumerate(matches[:3]):
-                    embed.add_field(
-                        name=rom.get('name', 'Unknown'),
-                        value=f"File: {rom.get('fs_name', 'Unknown')}",
-                        inline=False
-                    )
-                
-                if len(matches) > 3:
-                    embed.set_footer(text=f"...and {len(matches) - 3} more")
-                
-                message = await interaction.followup.send(embed=embed, view=view)
-                view.message = message
-                
-            elif igdb_matches:
-                # Show IGDB selection
-                from .requests import GameSelectView
-                select_view = GameSelectView(self.bot, igdb_matches, self.platform_name)
-                initial_embed = select_view.create_game_embed(igdb_matches[0])
-                select_view.message = await interaction.followup.send(
-                    "Select the correct game from IGDB:",
-                    embed=initial_embed,
-                    view=select_view
-                )
-                
-                await select_view.wait()
-                
-                if select_view.selected_game and select_view.selected_game != "manual":
-                    await request_cog.process_request(
-                        interaction, 
-                        self.platform_name, 
-                        self.game_name, 
-                        None,  # No additional details
-                        select_view.selected_game, 
-                        select_view.message
-                    )
-            else:
-                # Direct request without IGDB
-                await request_cog.process_request(
-                    interaction,
-                    self.platform_name,
-                    self.game_name,
-                    None,  # No additional details
-                    None,  # No IGDB data
-                    None   # No message to update
-                )
-                
-            # Disable buttons after use
-            for item in self.children:
-                item.disabled = True
-            
-            try:
-                await interaction.message.edit(view=self)
-            except:
-                pass  # Message might have been deleted
-                
-        except Exception as e:
-            logger.error(f"Error processing request from search: {e}")
-            await interaction.followup.send("❌ An error occurred while processing your request", ephemeral=True)
-    
-    async def search_tips_callback(self, interaction: discord.Interaction):
-        """Show search tips"""
-        embed = discord.Embed(
-            title="💡 Search Tips",
-            description="Here are some tips for better search results:",
-            color=discord.Color.blue()
-        )
-        
-        embed.add_field(
-            name="1. Try shorter search terms",
-            value="Instead of 'The Legend of Zelda: Ocarina of Time', try 'Zelda Ocarina' or just 'Ocarina'",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="2. Check the platform name",
-            value="Make sure you're using the exact platform name from the autocomplete",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="3. Try alternate names",
-            value="Some games have different regional names (e.g., 'Mega Man' vs 'Rockman')",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="4. Remove special characters",
-            value="Try searching without colons, apostrophes, or other punctuation",
-            inline=False
-        )
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-class Search(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-        self.platform_emoji_names = {}  # Will be populated from API data
-        # Map of common platform name variations
-        self.platform_variants = {
-            '3DO Interactive Multiplayer': ['3do'],
-            'Apple II': ['apple_ii'],
-            'Amiga CD32': ['cd32'],
-            'Amstrad CPC': ['amstrad'],
-            'Apple Pippin':['pippin'],
-            'Arcade - MAME': ['arcade'],
-            'Arcade - PC Based': ['arcade'],
-            'Arcade - FinalBurn Neo': ['arcade'],
-            'Atari 2600': ['2600'],
-            'Atari 5200': ['5200'],
-            'Atari 7800': ['7800'],
-            'Atari Jaguar': ['jaguar'],
-            'Atari Lynx': ['lynx'],
-            'Commodore C64/128/MAX': ['c64'],
-            'Dreamcast': ['dreamcast'],
-            'Family Computer Disk System': ['fds'],
-            'FM Towns': ['fm_towns'],
-            'Game & Watch':['game_and_watch'],
-            'Game Boy': ['gameboy', 'gameboy_pocket'],
-            'Game Boy Advance': ['gameboy_advance', 'gameboy_advance_sp', 'gameboy_micro'],
-            'Game Boy Color': ['gameboy_color'],
-            'J2ME': ['cell_java'],
-            'Mac': ['mac', 'mac_imac'],
-            'MSX': ['msx'],
-            'N-Gage': ['n_gage'],
-            'Neo Geo AES': ['neogeo_aes'],
-            'Neo Geo CD': ['neogeo_cd'],
-            'Neo Geo Pocket':['neogeo_pocket'],
-            'Neo Geo Pocket Color': ['neogeo_pocket_color'],
-            'Nintendo 3DS': ['3ds'],
-            'Nintendo 64': ['n64'],
-            'Nintendo 64Dd': ['n64_dd'],
-            'Nintendo 64DD': ['n64_dd'],
-            'Nintendo DS': ['ds', 'ds_lite'],
-            'Nintendo DSi': ['dsi'],
-            'Nintendo Entertainment System': ['nes'],
-            'Nintendo GameCube': ['gamecube'],
-            'Nintendo Switch': ['switch', 'switch_docked'],
-            'PC-8800 Series': ['pc_88'],
-            'PC-9800 Series': ['pc_98'],
-            'PC (Microsoft Windows)': ['pc'],
-            'PC - DOS': ['dos'],
-            'PC - Win3X': ['win_3x_gui', 'pc'],
-            'PC - Windows': ['pc', 'win_9x'],
-            'Philips CD-i': ['cd_i'],
-            'PlayStation': ['ps', 'ps_one'],
-            'PlayStation 2': ['ps2', 'ps2_slim'],
-            'PlayStation 3': ['ps3', 'ps3_slim'],
-            'PlayStation 4': ['ps4'],
-            'PlayStation Portable': ['psp', 'psp_go'],
-            'PlayStation Vita': ['vita'],
-            'Pokémon mini': ['pokemon_mini'],
-            'Sega 32X': ['32x'],
-            'Sega CD': ['sega_cd'],
-            'Segacd': ['sega_cd'],
-            'Sega Game Gear': ['game_gear'],
-            'Sega Master System/Mark III': ['master_system'],
-            'Sega Mega Drive/Genesis': ['genesis', 'genesis_2', 'nomad'],
-            'Sega Saturn': ['saturn_2'],
-            'Sharp X68000': ['x68000'],
-            'Sinclair Zxs': ['zx_spectrum'],
-            'Super Nintendo Entertainment System': ['snes'],
-            'Switch': ['switch', 'switch_docked'],
-            'Turbografx-16/PC Engine CD': ['tg_16_cd'],
-            'TurboGrafx-16/PC Engine': ['tg_16', 'turboduo', 'turboexpress'],
-            'Vectrex': ['vectrex'],
-            'Virtual Boy': ['virtual_boy'],
-            'Visual Memory Unit / Visual Memory System': ['vmu'],
-            'Wii': ['wii'],
-            'Windows': ['pc'],
-            'WonderSwan': ['wonderswan'],
-            'Xbox': ['xbox_og'],
-            'Xbox 360': ['xbox_360'],
+        # Handle Roman numerals and common abbreviations
+        replacements = {
+            ' ii ': ' 2 ',
+            ' iii ': ' 3 ',
+            ' iv ': ' 4 ',
+            ' v ': ' 5 ',
+            ' vi ': ' 6 ',
+            ' vii ': ' 7 ',
+            ' viii ': ' 8 ',
+            ' ix ': ' 9 ',
+            ' x ': ' 10 ',
         }
-        bot.loop.create_task(self.initialize_platform_emoji_mappings())
-    
-    async def initialize_platform_emoji_mappings(self):
-        """Initialize platform -> emoji mappings using API data"""
-        await self.bot.wait_until_ready()
         
+        cleaned_lower = ' ' + cleaned.lower() + ' '
+        for roman, arabic in replacements.items():
+            cleaned_lower = cleaned_lower.replace(roman, arabic)
+        
+        return cleaned_lower.strip()
+
+    async def search_game(self, game_name: str, platform_slug: str = None) -> List[Dict]:
+        """Search for a game on IGDB with platform filtering"""
         try:
-            # Get platforms from API
-            raw_platforms = await self.bot.fetch_api_endpoint('platforms')
-            if not raw_platforms:
-                print("Warning: Could not fetch platforms for emoji mapping")
-                return
-                
-            # Don't sanitize here, we need the full platform data including custom_name
-            mapped_count = 0
+            if not await self.get_access_token():
+                return []
+
+            # Get platform ID from slug if provided
+            platform_id = None
+            if platform_slug:
+                platform_id = await self.get_platform_id_from_slug(platform_slug)
+                # If we can't map the platform, log but continue search without platform filter
+                if platform_id is None:
+                    logger.info(f"Platform slug '{platform_slug}' not found in IGDB, searching all platforms")
+
+            all_results = []
+            seen_ids = set()
             
-            for platform in raw_platforms:
-                if 'name' in platform:
-                    platform_name = platform['name']
-                    # Use custom name for mapping if available
-                    display_name = self.bot.get_platform_display_name(platform)
-                    
-                    variants = self.platform_variants.get(platform_name, [])
-                    
-                    # Try each variant
-                    mapped = False
-                    for variant in variants:
-                        if variant in self.bot.emoji_dict:
-                            # Store mapping for both regular and custom names
-                            self.platform_emoji_names[platform_name] = variant
-                            if display_name != platform_name:
-                                self.platform_emoji_names[display_name] = variant
-                            mapped = True
-                            mapped_count += 1
-                            break
-                    
-                    # If no variant worked, try simple name
-                    if not mapped:
-                        simple_name = platform_name.lower().replace(' ', '_').replace('-', '_')
-                        if simple_name in self.bot.emoji_dict:
-                            self.platform_emoji_names[platform_name] = simple_name
-                            if display_name != platform_name:
-                                self.platform_emoji_names[display_name] = simple_name
-                            mapped_count += 1
+            # Prepare multiple search attempts
+            search_attempts = []
             
-            print(f"Successfully mapped {mapped_count} platform(s) to custom emoji(s)")
+            # 1. Original search term
+            search_attempts.append(game_name.strip())
             
-            # Print unmapped platforms
-            unmapped = [p['name'] for p in raw_platforms if p['name'] not in self.platform_emoji_names]
-            if unmapped:
-                print("\nUnmapped platforms:")
-                for name in sorted(unmapped):
-                    print(f"- {name}")
+            # 2. Cleaned/prepared search term
+            prepared_term = self.prepare_search_term(game_name)
+            if prepared_term != game_name.strip():
+                search_attempts.append(prepared_term)
             
-        except Exception as e:
-            print(f"Error initializing platform emoji mappings: {e}")
-    
-    def get_platform_with_emoji(self, platform_name: str) -> str:
-        """Returns platform name with its emoji if available."""
-        if not platform_name or not hasattr(self.bot, 'emoji_dict'):
-            return platform_name
-
-        # Get the variant names - platform_variants returns a list
-        variant_names = self.platform_variants.get(platform_name, [platform_name.lower().replace(' ', '_').replace('-', '_')])
-
-        # If variant_names is a list (which it should be), use it directly
-        # If somehow it's not a list, wrap it in a list
-        variants_to_check = variant_names if isinstance(variant_names, list) else [variant_names]
-
-        # Try to find a matching custom emoji
-        for variant in variants_to_check:
-            if variant in self.bot.emoji_dict:
-                return f"{platform_name} {self.bot.emoji_dict[variant]}"
-
-        # If no custom emoji found, use the fallback
-        return f"{platform_name} 🎮"
-        
-
-    async def platform_autocomplete(self, ctx: discord.AutocompleteContext):
-        """Autocomplete function for platform names."""
-        try:
-            # Get raw platforms to access custom_name field
-            raw_platforms = await self.bot.fetch_api_endpoint('platforms')
-            
-            if raw_platforms:
-                platform_names = []
-                for p in raw_platforms:
-                    # Prefer custom name over regular name
-                    display_name = self.bot.get_platform_display_name(p)
-                    if display_name:
-                        platform_names.append(display_name)
-                
-                user_input = ctx.value.lower()
-                return [name for name in platform_names if user_input in name.lower()][:25]
-        except Exception as e:
-            logger.error(f"Error in platform autocomplete: {e}")
-        return []
-        
-    async def find_platform_by_name(self, platform_name: str):
-        """Find platform data by name, checking both regular and custom names"""
-        raw_platforms = await self.bot.fetch_api_endpoint('platforms')
-        if not raw_platforms:
-            return None, None
-        
-        platform_lower = platform_name.lower()
-        
-        for p in raw_platforms:
-            # Check custom name first
-            custom_name = p.get('custom_name')
-            if custom_name and custom_name.lower() == platform_lower:
-                return p['id'], self.bot.get_platform_display_name(p)
-            
-            # Check regular name
-            regular_name = p.get('name', '')
-            if regular_name.lower() == platform_lower:
-                return p['id'], self.bot.get_platform_display_name(p)
-        
-        return None, None
-    
-    @commands.Cog.listener()
-    async def on_ready(self):
-        """Re-initialize emoji mappings when bot reconnects"""
-        await self.initialize_platform_emoji_mappings()
-    
-    @discord.slash_command(name="firmware", description="List firmware files available for a platform")
-    async def firmware(self, ctx: discord.ApplicationContext, 
-                      platform: discord.Option(str, "Platform to list firmware for", 
-                                            required=True, autocomplete=platform_autocomplete)):
-        """List firmware files for a specific platform."""
-        await ctx.defer()
-
-        try:
-            raw_platforms = await self.bot.fetch_api_endpoint('platforms')
-            if not raw_platforms:
-                await ctx.respond("Failed to fetch platforms data")
-                return
-
-            platform_id, platform_display_name = await self.find_platform_by_name(platform)
-
-            if not platform_id:
-                # Show available platforms with display names
-                raw_platforms = await self.bot.fetch_api_endpoint('platforms')
-                if raw_platforms:
-                    platforms_list = "\n".join(
-                        f"• {self.get_platform_with_emoji(self.bot.get_platform_display_name(p))}" 
-                        for p in raw_platforms
-                    )
-                    await ctx.respond(f"Platform '{platform}' not found. Available platforms:\n{platforms_list}")
-                else:
-                    await ctx.respond("Failed to fetch platforms data")
-                return
-
-            firmware_data = await self.bot.fetch_api_endpoint(f'firmware?platform_id={platform_id}')
-
-            if not firmware_data:
-                await ctx.respond(f"No firmware files found for platform '{platform_display_name}'")
-                return
-
-            def format_file_size(size_bytes):
-                return ROM_View.format_file_size(size_bytes)
-
-            embeds = []
-            current_embed = discord.Embed(
-                title=f"Firmware Files for {self.get_platform_with_emoji(platform_display_name)}",
-                description=f"Found {len(firmware_data)} firmware file(s) {self.bot.emoji_dict.get('bios', '🔧')}",
-                color=discord.Color.blue()
-            )
-            field_count = 0
-
-            for firmware in firmware_data:
-                file_name = firmware.get('file_name', 'unknown_file').replace(' ', '%20')
-                download_url = f"{self.bot.config.DOMAIN}/api/firmware/{firmware.get('id')}/content/{file_name}"
-
-                field_value = (
-                    f"**Size:** {format_file_size(firmware.get('file_size_bytes'))}\n"
-                    f"**CRC:** {firmware.get('crc_hash', 'N/A')}\n"
-                    f"**MD5:** {firmware.get('md5_hash', 'N/A')}\n"
-                    f"**SHA1:** {firmware.get('sha1_hash', 'N/A')}\n"
-                    f"**Download:** [Link]({download_url})"
-                )
-
-                if field_count >= 25:
-                    embeds.append(current_embed)
-                    current_embed = discord.Embed(
-                        title=f"Firmware Files for {platform_display_name} (Continued)",
-                        color=discord.Color.blue()
-                    )
-                    field_count = 0
-
-                current_embed.add_field(
-                    name=firmware.get('file_name', 'Unknown Firmware'),
-                    value=field_value,
-                    inline=False
-                )
-                field_count += 1
-
-            if field_count > 0:
-                embeds.append(current_embed)
-
-            if len(embeds) > 1:
-                for i, embed in enumerate(embeds):
-                    embed.set_footer(text=f"Page {i+1} of {len(embeds)}")
-
-            for embed in embeds:
-                await ctx.respond(embed=embed)
-
-        except Exception as e:
-            logger.error(f"Error in firmware command: {e}")
-            await ctx.respond("❌ An error occurred while fetching firmware data")
-
-    @discord.slash_command(name="random", description="Get a random ROM from the collection or a specific platform")
-    async def random(
-        self, 
-        ctx: discord.ApplicationContext,
-        platform: discord.Option(
-            str, 
-            "Platform to get random ROM from", 
-            required=False,
-            autocomplete=platform_autocomplete
-        )
-    ):
-        """Get a random ROM from the collection or a specific platform."""
-        await ctx.defer()
-        try:
-            if platform:
-                # Get platform data
-                raw_platforms = await self.bot.fetch_api_endpoint('platforms')
-                if not raw_platforms:
-                    await ctx.respond("❌ Unable to fetch platforms data")
-                    return
-            
-                # Find matching platform
-                platform_id, platform_display_name = await self.find_platform_by_name(platform)
-
-                if not platform_id:
-                    # Show available platforms with display names
-                    raw_platforms = await self.bot.fetch_api_endpoint('platforms')
-                    if raw_platforms:
-                        platforms_list = "\n".join(
-                            f"• {self.get_platform_with_emoji(self.bot.get_platform_display_name(p))}" 
-                            for p in sorted(raw_platforms, key=lambda x: self.bot.get_platform_display_name(x))
-                        )
-                        await ctx.respond(f"❌ Platform '{platform}' not found. Available platforms:\n{platforms_list}")
-                    else:
-                        await ctx.respond("❌ Unable to fetch platforms data")
-                    return
-                    
-                platform_data = None
-                raw_platforms = await self.bot.fetch_api_endpoint('platforms')
-                for p in raw_platforms:
-                    if p['id'] == platform_id:
-                        platform_data = p
-                        break
-                
-                rom_count = platform_data.get('rom_count', 0) if platform_data else 0
-                
-                if rom_count <= 0:
-                    await ctx.respond(f"❌ No ROMs found for platform '{self.get_platform_with_emoji(platform_display_name)}'")
-                    return
-
-                # Try up to 5 times to find a valid ROM for the specific platform
-                max_attempts = 5
-                for attempt in range(max_attempts):
-                    try:
-                        # Get ROMs for platform
-                        roms_response = await self.bot.fetch_api_endpoint(
-                            f'roms?platform_id={platform_id}&limit={rom_count}'
-                        )
-
-                        # Handle paginated response
-                        if roms_response and isinstance(roms_response, dict) and 'items' in roms_response:
-                            all_roms = roms_response['items']
-                        elif roms_response and isinstance(roms_response, list):
-                            all_roms = roms_response
-                        else:
-                            all_roms = []
-                        
-                        if all_roms and isinstance(all_roms, list) and len(all_roms) > 0:
-                            # Select a random ROM from the list
-                            rom_data = random.choice(all_roms)
-                            
-                            # Get full ROM data
-                            detailed_rom = await self.bot.fetch_api_endpoint(f'roms/{rom_data["id"]}')
-                            if detailed_rom:
-                                rom_data = detailed_rom
-                            
-                            logger.info(f"Random ROM found - User: {ctx.author} (ID: {ctx.author.id}) | ROM: '{rom_data['name']}' | ROM ID: #{rom_data['id']} | Platform: {platform_display_name}")
-                            
-                            # Create view with explicit ROM data
-                            view = ROM_View(self.bot, [rom_data], ctx.author.id, platform_display_name)
-                            view.remove_item(view.select)
-                            view._selected_rom = rom_data
-                            embed, cover_file = await view.create_rom_embed(rom_data)  # Changed to unpack tuple
-                            await view.update_file_select(rom_data)
-
-                            # Send with file if available
-                            if cover_file:
-                                initial_message = await ctx.respond(
-                                    f"🎲 Found a random ROM from {self.get_platform_with_emoji(platform_display_name)}:",
-                                    embed=embed,
-                                    view=view,
-                                    file=cover_file  # Add the file
-                                )
-                            else:
-                                initial_message = await ctx.respond(
-                                    f"🎲 Found a random ROM from {self.get_platform_with_emoji(platform_display_name)}:",
-                                    embed=embed,
-                                    view=view
-                                )
-
-                            if isinstance(initial_message, discord.Interaction):
-                                initial_message = await initial_message.original_response()
-                            
-                            view.message = initial_message
-                            task = self.bot.loop.create_task(view.watch_for_qr_triggers(ctx.interaction))
-                            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
-                            return
-
-                    except Exception as e:
-                        logger.error(f"Error in attempt {attempt + 1}: {e}")
-                    
-                    logger.info(f"Random ROM attempt {attempt + 1} for platform {platform_display_name} failed")
-                    await asyncio.sleep(1)
-
-            else:
-                # Random from full collection
-                stats_data = self.bot.cache.get('stats')
-                if not stats_data or 'Roms' not in stats_data:
-                    await ctx.respond("❌ Unable to fetch collection data")
-                    return
-                
-                total_roms = stats_data['Roms']
-                if total_roms <= 0:
-                    await ctx.respond("❌ No ROMs found in the collection")
-                    return
-
-                # Try up to 5 times to find a valid ROM
-                max_attempts = 5
-                for attempt in range(max_attempts):
-                    random_rom_id = random.randint(1, total_roms)
-                    rom_data = await self.bot.fetch_api_endpoint(f'roms/{random_rom_id}')
-                
-                    if rom_data and isinstance(rom_data, dict) and rom_data.get('id'):
-                        # Get platform name if available
-                        platform_name = None
-                        if platform_id := rom_data.get('platform_id'):
-                            platforms_data = self.bot.cache.get('platforms')
-                            if platforms_data:
-                                for p in platforms_data:
-                                    if p.get('id') == platform_id:
-                                        platform_name = p.get('name')
-                                        break
-                        
-                        logger.info(f"Random ROM found - User: {ctx.author} (ID: {ctx.author.id}) | ROM: '{rom_data['name']}' | ROM ID: #{rom_data['id']} | Platform: {platform_name or 'Unknown'}")
-
-                        # Create view with explicit ROM data
-                        view = ROM_View(self.bot, [rom_data], ctx.author.id, platform_name)
-                        view.remove_item(view.select)
-                        view._selected_rom = rom_data
-                        embed, cover_file = await view.create_rom_embed(rom_data)  # Changed to unpack tuple
-                        await view.update_file_select(rom_data)
-
-                        # Send with file if available
-                        message_content = f"🎲 Found a random ROM" + (f" from {self.get_platform_with_emoji(platform_name)}" if platform_name else "") + ":"
-                        if cover_file:
-                            initial_message = await ctx.respond(
-                                message_content,
-                                embed=embed,
-                                view=view,
-                                file=cover_file  # Add the file
-                            )
-                        else:
-                            initial_message = await ctx.respond(
-                                message_content,
-                                embed=embed,
-                                view=view
-                            )
-
-                        if isinstance(initial_message, discord.Interaction):
-                            initial_message = await initial_message.original_response()
-                        
-                        view.message = initial_message
-                        task = self.bot.loop.create_task(view.watch_for_qr_triggers(ctx.interaction))
-                        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
-                        return
-
-                    logger.info(f"Random ROM attempt {attempt + 1} with ID {random_rom_id} failed")
-                    await asyncio.sleep(1)
-
-            # If all attempts failed
-            await ctx.respond("❌ Failed to find a valid random ROM. Please try again.")
-
-        except Exception as e:
-            logger.error(f"Error in random command: {e}", exc_info=True)
-            await ctx.respond("❌ An error occurred while fetching a random ROM")
-
-    @discord.slash_command(name="search", description="Search for a ROM")
-    async def search(self, ctx: discord.ApplicationContext,
-                    platform: discord.Option(str, "Platform to search in", 
-                                          required=True,
-                                          autocomplete=platform_autocomplete),
-                    game: discord.Option(str, "Game name to search for", required=True)):
-        """Search for a ROM and provide download options."""
-        await ctx.defer()
-
-        try:
-            logger.info(f"Search command - User: {ctx.author} (ID: {ctx.author.id}) | Query: '{game}' | Platform: {platform}")
-            # Get platform data
-            raw_platforms = await self.bot.fetch_api_endpoint('platforms')
-            if not raw_platforms:
-                await ctx.respond("❌ Unable to fetch platforms data")
-                return
-            
-            # Find matching platform
-            platform_id, platform_display_name = await self.find_platform_by_name(platform)
-
-            if not platform_id:
-                # Show available platforms with display names
-                raw_platforms = await self.bot.fetch_api_endpoint('platforms')
-                if raw_platforms:
-                    platforms_list = "\n".join(
-                        f"• {self.get_platform_with_emoji(self.bot.get_platform_display_name(p))}" 
-                        for p in sorted(raw_platforms, key=lambda x: self.bot.get_platform_display_name(x))
-                    )
-                    await ctx.respond(f"❌ Platform '{platform}' not found. Available platforms:\n{platforms_list}")
-                else:
-                    await ctx.respond("❌ Unable to fetch platforms data")
-                return
-
-            # Search for ROMs
-            search_term = game.strip()
-            search_results = []
-
-            # Try multiple search strategies
-            search_attempts = [
-                search_term,  # Original search
-            ]
-
-            # If the search term has multiple words, try searching for key parts
-            words = search_term.split()
+            # 3. If multiple words, try key parts
+            words = game_name.strip().split()
             if len(words) > 1:
-                # Add first word only (often the main game name)
+                # Try first word only (often the main game name)
                 search_attempts.append(words[0])
                 
                 # If last word is a number, try first word + number (for sequels)
                 if words[-1].isdigit():
                     search_attempts.append(f"{words[0]} {words[-1]}")
-
+                
+                # Try without common words
+                important_words = [w for w in words if w.lower() not in ['the', 'of', 'and', 'a', 'an']]
+                if len(important_words) > 0 and len(important_words) < len(words):
+                    search_attempts.append(' '.join(important_words))
+            
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_attempts = []
+            for attempt in search_attempts:
+                if attempt.lower() not in seen:
+                    seen.add(attempt.lower())
+                    unique_attempts.append(attempt)
+            search_attempts = unique_attempts[:3]
+            
+            session = await self.ensure_session()
+            headers = {
+                "Client-ID": self.client_id,
+                "Authorization": f"Bearer {self.access_token}"
+            }
+            
             # Try each search strategy
             for attempt in search_attempts:
-                search_response = await self.bot.fetch_api_endpoint(
-                    f'roms?platform_id={platform_id}&search_term={attempt}&limit=100'
-                )
+                results = await self._perform_igdb_search(session, headers, attempt, platform_id)
                 
-                # Handle paginated response
-                if search_response and isinstance(search_response, dict) and 'items' in search_response:
-                    all_results = search_response['items']
-                elif search_response and isinstance(search_response, list):
-                    all_results = search_response
-                else:
-                    all_results = []
+                # Add unique results
+                for game in results:
+                    if game["id"] not in seen_ids:
+                        seen_ids.add(game["id"])
+                        all_results.append(game)
                 
-                # If we're on a broader search, filter results to match original intent
-                if attempt != search_term and all_results:
-                    # Filter to games that contain all important words from original search
-                    important_words = [w.lower() for w in words if not w.lower() in ['the', 'of', 'and']]
-                    search_results = [
-                        rom for rom in all_results
-                        if all(word in rom['name'].lower() for word in important_words)
-                    ][:25]  # Limit to 25 results
-                else:
-                    search_results = all_results[:25]
-                
-                if search_results:
-                    break  # Found results, stop trying
-
-            if not search_results or not isinstance(search_results, list) or len(search_results) == 0:
-                logger.info(f"Search no results - User: {ctx.author} (ID: {ctx.author.id}) | Query: '{game}' | Platform: {platform_display_name}")
-                # Create an embed for no results
-                embed = discord.Embed(
-                    title="No Results Found",
-                    description=f"No ROMs found matching '**{game}**' for platform '**{self.get_platform_with_emoji(platform_display_name)}**'",
-                    color=discord.Color.orange()
-                )
-                
-                embed.add_field(
-                    name="What would you like to do?",
-                    value="• Click **Request This Game** to submit a request for this ROM\n"
-                          "• Click **Search Tips** for help improving your search\n"
-                          "• Try searching again with different terms or check the platform name",
-                    inline=False
-                )
-                
-                # Add the no results view with request button
-                view = NoResultsView(self.bot, platform_display_name, game, ctx.author.id)
-                await ctx.respond(embed=embed, view=view)
-                return
-
-            # Sort results
-            def sort_roms(rom):
-                game_name = rom['name'].lower()
-                filename = rom.get('file_name', '').upper()
-
-                if game_name.startswith("the "):
-                    game_name = game_name[4:]
-        
-                if "(USA)" in filename or "(USA, WORLD)" in filename:
-                    if "BETA" in filename or "(PROTOTYPE)" in filename:
-                        file_priority = 2
-                    else:
-                        file_priority = 0
-                elif "(WORLD)" in filename:
-                    if "BETA" in filename or "(PROTOTYPE)" in filename:
-                        file_priority = 3
-                    else:
-                        file_priority = 1
-                elif "BETA" in filename or "(PROTOTYPE)" in filename:
-                    file_priority = 5
-                elif "(DEMO)" in filename or "PROMOTIONAL" in filename or "SAMPLE" in filename or "SAMPLER" in filename:
-                    if "BETA" in filename or "(PROTOTYPE)" in filename:
-                        file_priority = 6
-                    else:
-                        file_priority = 4
-                else:
-                    file_priority = 3
-        
-                return (game_name, file_priority, filename.lower())
-
-            search_results.sort(key=sort_roms)
-
-            # Create initial message
-            if len(search_results) >= 25:
-                initial_content = (
-                    f"Found 25+ ROMs matching '{game}' for platform '{self.get_platform_with_emoji(platform_display_name)}'. "
-                    f"Showing first 25 results.\nPlease refine your search terms for more specific results:"
-                )
-            else:
-                initial_content = f"Found {len(search_results)} ROMs matching '{game}' for platform '{self.get_platform_with_emoji(platform_display_name)}':"
-
-            # Create view first
-            view = ROM_View(self.bot, search_results, ctx.author.id, platform_display_name)
+                # Stop if we have enough good results
+                if len(all_results) >= 5:
+                    break
             
-            # Send message exactly like random command
-            initial_message = await ctx.respond(
-                initial_content,
-                view=view
-            )
+            # Sort results by relevance
+            all_results = self._sort_by_relevance(all_results, game_name, platform_id)
             
-            # Handle interaction response exactly like random command
-            if isinstance(initial_message, discord.Interaction):
-                initial_message = await initial_message.original_response()
-            
-            # Store message reference
-            view.message = initial_message
+            return all_results[:10]
             
         except Exception as e:
-            logger.error(f"Error in search command: {e}", exc_info=True)
-            await ctx.respond("❌ An error occurred while searching for ROMs")
+            logger.error(f"Error searching IGDB: {e}")
+            return []
 
-def setup(bot):
-    bot.add_cog(Search(bot))
+    async def _perform_igdb_search(self, session: aiohttp.ClientSession, headers: dict, 
+                                  search_term: str, platform_id: Optional[int] = None) -> List[Dict]:
+        """Perform a single IGDB search"""
+        try:
+            url = "https://api.igdb.com/v4/games"
+            
+            # Build the IGDB query
+            query = (
+                f'search "{search_term}"; '
+                'fields name,alternative_names.name,platforms.name,first_release_date,'
+                'summary,cover.url,game_modes.name,genres.name,involved_companies.company.name,'
+                'involved_companies.developer,involved_companies.publisher;'
+            )
+            
+            # Add platform filter if we have a valid platform ID
+            if platform_id:
+                query += f' where platforms = [{platform_id}];'
+            
+            query += " limit 20;"
+            
+            logger.debug(f"IGDB query: {query}")
+            
+            async with session.post(url, headers=headers, data=query) as response:
+                if response.status == 200:
+                    games = await response.json()
+                    processed_games = self._process_games_response(games)
+                    
+                    # Get alternative names for better matching
+                    if processed_games:
+                        await self._fetch_alternative_names(session, headers, processed_games)
+                    
+                    return processed_games
+                else:
+                    logger.debug(f"IGDB search returned status {response.status} for term: {search_term}")
+                    return []
+                    
+        except Exception as e:
+            logger.error(f"Error in IGDB search for '{search_term}': {e}")
+            return []
+
+    async def _fetch_alternative_names(self, session: aiohttp.ClientSession, headers: dict, 
+                                      processed_games: List[Dict]):
+        """Fetch and add alternative names to games"""
+        try:
+            game_ids = [g["id"] for g in processed_games if "id" in g]
+            if not game_ids:
+                return
+                
+            alt_names_url = "https://api.igdb.com/v4/alternative_names"
+            alt_names_query = f"fields name,comment,game; where game = ({','.join(map(str, game_ids))});"
+            
+            async with session.post(alt_names_url, headers=headers, data=alt_names_query) as response:
+                if response.status == 200:
+                    alt_names_data = await response.json()
+                    self._add_alternative_names(processed_games, alt_names_data)
+                    
+        except Exception as e:
+            logger.debug(f"Error fetching alternative names: {e}")
+
+    def _sort_by_relevance(self, games: List[Dict], original_query: str, platform_id: Optional[int] = None) -> List[Dict]:
+        """Sort games by relevance to the original query"""
+        def calculate_relevance(game: Dict) -> float:
+            score = 0.0
+            query_lower = original_query.lower()
+            game_name_lower = game["name"].lower()
+            
+            # Exact match
+            if game_name_lower == query_lower:
+                score += 100
+            # Starts with query
+            elif game_name_lower.startswith(query_lower):
+                score += 80
+            # Contains exact query
+            elif query_lower in game_name_lower:
+                score += 60
+            
+            # Check alternative names
+            for alt_name in game.get("alternative_names", []):
+                alt_lower = alt_name["name"].lower()
+                if alt_lower == query_lower:
+                    score += 90
+                elif alt_lower.startswith(query_lower):
+                    score += 70
+                elif query_lower in alt_lower:
+                    score += 50
+            
+            # Bonus for matching platform (if platform filter was requested)
+            if platform_id and game.get("platforms"):
+                # Check if game is on the requested platform
+                platform_names = [p.lower() for p in game.get("platforms", [])]
+                if platform_names:
+                    score += 10  # Bonus for having the platform we searched for
+            
+            # Bonus for having cover art
+            if game.get("cover_url"):
+                score += 5
+            
+            # Bonus for having release date
+            if game.get("release_date") != "Unknown":
+                score += 3
+            
+            # Bonus for having summary
+            if game.get("summary") and game["summary"] != "No summary available":
+                score += 2
+            
+            return score
+        
+        return sorted(games, key=calculate_relevance, reverse=True)
+
+    def _process_games_response(self, games: List[Dict]) -> List[Dict]:
+        """Process and format IGDB game data"""
+        processed_games = []
+        for game in games:
+            try:
+                # Format the release date
+                release_date = "Unknown"
+                if "first_release_date" in game:
+                    release_date = datetime.fromtimestamp(
+                        game["first_release_date"]
+                    ).strftime("%Y-%m-%d")
+
+                # Process cover URL if present
+                cover_url = None
+                if "cover" in game and "url" in game["cover"]:
+                    cover_url = game["cover"]["url"].replace("t_thumb", "t_cover_big")
+                    if not cover_url.startswith("https:"):
+                        cover_url = "https:" + cover_url
+
+                # Get platform names if available
+                platforms = []
+                if "platforms" in game:
+                    platforms = [p.get("name", "") for p in game["platforms"]]
+
+                # Get developers and publishers
+                developers = []
+                publishers = []
+                if "involved_companies" in game:
+                    for company in game["involved_companies"]:
+                        company_name = company.get("company", {}).get("name", "")
+                        if company.get("developer"):
+                            developers.append(company_name)
+                        if company.get("publisher"):
+                            publishers.append(company_name)
+
+                # Get genres and game modes
+                genres = [g.get("name", "") for g in game.get("genres", [])]
+                game_modes = [m.get("name", "") for m in game.get("game_modes", [])]
+
+                processed_game = {
+                    "id": game.get("id"),
+                    "name": game.get("name", "Unknown"),
+                    "platforms": platforms,
+                    "release_date": release_date,
+                    "summary": game.get("summary", "No summary available"),
+                    "cover_url": cover_url,
+                    "developers": developers,
+                    "publishers": publishers,
+                    "genres": genres,
+                    "game_modes": game_modes,
+                    "alternative_names": []
+                }
+                processed_games.append(processed_game)
+
+            except Exception as e:
+                logger.error(f"Error processing game data: {e}")
+                continue
+
+        return processed_games
+
+    def _add_alternative_names(self, processed_games: List[Dict], alt_names_data: List[Dict]):
+        """Add alternative names to processed games"""
+        # Create a mapping of game IDs to their alternative names
+        alt_names_map = {}
+        for alt_name in alt_names_data:
+            game_id = alt_name.get("game")
+            if game_id:
+                if game_id not in alt_names_map:
+                    alt_names_map[game_id] = []
+                name_info = {
+                    "name": alt_name.get("name", ""),
+                    "comment": alt_name.get("comment", "")
+                }
+                alt_names_map[game_id].append(name_info)
+
+        # Add alternative names to each processed game
+        for game in processed_games:
+            if game["id"] in alt_names_map:
+                game["alternative_names"] = alt_names_map[game["id"]]
+
+    async def close(self):
+        """Clean up resources"""
+        if self._session and not self._session.closed:
+            await self._session.close()
