@@ -149,7 +149,7 @@ RECENT_ROMS_BULK_THRESHOLD=25
 ---
 
 ## Recently Added ROM Notifications
-<img align="right" width="300" height="300" src=".github/screenshots/recent_single_rom.png">
+<img align="right" width="300" height="300" src=".github/screenshots/RecentlyAddedSingle.png">
 
 - When enabled (`RECENT_ROMS_ENABLED=true`) the bot posts newly added ROMs to the configured channel.
 - Multiple ROMs that occur within the configured batch window are grouped into a single batched response by platform.
@@ -271,6 +271,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
