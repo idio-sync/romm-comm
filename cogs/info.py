@@ -158,7 +158,7 @@ class Info(commands.Cog):
                         self.has_switch = True
                         break
                 
-                logger.info(f"Switch platform {'found' if self.has_switch else 'not found'} in platform list")
+                logger.debug(f"Switch platform {'found' if self.has_switch else 'not found'} in platform list")
         except Exception as e:
             logger.error(f"Error checking Switch platform: {e}")
             self.has_switch = False
@@ -220,48 +220,6 @@ class Info(commands.Cog):
                  
         await ctx.respond(embed=embed)
         pass
-    
-    # Stats
-    # @discord.slash_command(
-    #    name="stats",
-    #    description="Display current RomM server stats"
-    #)
-    #async def stats(self, ctx):
-    #    """Stats display command with cache usage."""
-    #    try:
-    #        stats_data = self.bot.cache.get('stats')
-    #        user_count_data = self.bot.cache.get('user_count')
-    #        
-    #        if stats_data:
-    #            # Merge user count into stats data if available
-    #            if user_count_data and 'user_count' in user_count_data:
-    #                stats_data['User Count'] = user_count_data['user_count']
-    #            
-    #            last_fetch_time = self.bot.cache.last_fetch.get('stats')
-    #            if last_fetch_time:
-    #                time_str = datetime.fromtimestamp(last_fetch_time).strftime('%Y-%m-%d %H:%M:%S')
-    #            else:
-    #                time_str = "Unknown"
-    #            
-    #            embed = discord.Embed(
-    #                title="Server Stats",
-    #                description=f"Last updated: {time_str}",
-    #                color=discord.Color.blue()
-    #            )
-    #        
-    #            # Display all stats including user count in the same format
-    #            for stat, value in stats_data.items():
-    #                emoji = STAT_EMOJIS.get(stat, "📊")
-    #                field_value = f"{value:,} TB" if stat == "Storage Size" else f"{value:,}"
-    #                embed.add_field(name=f"{emoji} {stat}", value=field_value, inline=False)
-    #        
-    #            await ctx.respond(embed=embed)
-    #        else:
-    #            await ctx.respond("No API data available! Check connection to Romm.")
-    #    except Exception as e:
-    #        if hasattr(self.bot, 'logger'):
-    #            self.bot.logger.error(f"Error in stats command: {e}", exc_info=True)
-    #        await ctx.respond("❌ An error occurred while fetching stats")
    
     # Platforms
     @discord.slash_command(
