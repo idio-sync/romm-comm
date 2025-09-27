@@ -25,261 +25,11 @@ def is_admin():
         return str(ctx.author.id) == admin_id
     return commands.check(predicate)
 
-class AsyncUserDatabaseManager:
-    def __init__(self, db_path: str = "data/users.db"):
-        self.db_path = db_path
-        self._ensure_db_directory()
-        self._initialized = False
-        
-    def _ensure_db_directory(self):
-        """Ensure the data directory exists"""
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-
-    async def initialize(self):
-        """Initialize the database with required tables"""
-        if self._initialized:
-            return
-            
-        try:
-            async with aiosqlite.connect(self.db_path) as db:
-                # First, check if the table exists and has duplicates
-                cursor = await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_links'")
-                table_exists = await cursor.fetchone()
-                
-                if table_exists:
-                    # Check for duplicates
-                    cursor = await db.execute("""
-                        SELECT discord_id, COUNT(*) as count 
-                        FROM user_links 
-                        GROUP BY discord_id 
-                        HAVING count > 1
-                    """)
-                    duplicates = await cursor.fetchall()
-                    
-                    if duplicates:
-                        logger.warning(f"Found {len(duplicates)} Discord IDs with duplicate entries. Cleaning up...")
-                        
-                        # For each duplicate, keep only the most recent entry
-                        for discord_id, count in duplicates:
-                            # Get all entries for this discord_id
-                            cursor = await db.execute("""
-                                SELECT discord_id, romm_username, romm_id, created_at 
-                                FROM user_links 
-                                WHERE discord_id = ? 
-                                ORDER BY created_at DESC
-                            """, (discord_id,))
-                            entries = await cursor.fetchall()
-                            
-                            if entries:
-                                # Keep the first (most recent) entry
-                                keep_entry = entries[0]
-                                logger.info(f"Keeping entry for Discord {discord_id}: {keep_entry[1]} (created: {keep_entry[3]})")
-                                
-                                # Delete all entries for this discord_id
-                                await db.execute("DELETE FROM user_links WHERE discord_id = ?", (discord_id,))
-                                
-                                # Re-insert the most recent entry
-                                await db.execute("""
-                                    INSERT INTO user_links (discord_id, romm_username, romm_id, created_at)
-                                    VALUES (?, ?, ?, ?)
-                                """, keep_entry)
-                        
-                        await db.commit()
-                        logger.info("Duplicate cleanup complete")
-                    
-                    # Now recreate the table with proper constraints
-                    logger.info("Recreating table with proper constraints...")
-                    
-                    # Create a new table with the correct schema
-                    await db.execute("""
-                        CREATE TABLE IF NOT EXISTS user_links_new (
-                            discord_id INTEGER PRIMARY KEY,
-                            romm_username TEXT NOT NULL,
-                            romm_id INTEGER NOT NULL,
-                            discord_username TEXT,
-                            discord_avatar TEXT,
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                        )
-                    """)
-                    
-                    # Copy data from old table to new table (without duplicates)
-                    await db.execute("""
-                        INSERT OR IGNORE INTO user_links_new (discord_id, romm_username, romm_id, discord_username, discord_avatar, created_at)
-                        SELECT discord_id, romm_username, romm_id, 
-                               COALESCE(discord_username, ''), 
-                               COALESCE(discord_avatar, ''),
-                               created_at
-                        FROM user_links
-                    """)
-                    
-                    # Drop old table and rename new one
-                    await db.execute("DROP TABLE user_links")
-                    await db.execute("ALTER TABLE user_links_new RENAME TO user_links")
-                    
-                else:
-                    # Create fresh table with proper constraints
-                    await db.execute("""
-                        CREATE TABLE user_links (
-                            discord_id INTEGER PRIMARY KEY,
-                            romm_username TEXT NOT NULL,
-                            romm_id INTEGER NOT NULL,
-                            discord_username TEXT,
-                            discord_avatar TEXT,
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                        )
-                    """)
-                
-                # Create an index on romm_username for faster lookups
-                await db.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_romm_username 
-                    ON user_links(romm_username COLLATE NOCASE)
-                """)
-                
-                await db.commit()
-                self._initialized = True
-                logger.info("Database initialized successfully with proper constraints")
-                
-        except Exception as e:
-            logger.error(f"Error initializing database: {e}", exc_info=True)
-            raise
-            
-    async def _ensure_initialized(self):
-        """Ensure database is initialized before operations"""
-        if not self._initialized:
-            await self.initialize()
-
-    async def add_user_link(self, discord_id: int, romm_username: str, romm_id: int, 
-                       discord_username: str = None, discord_avatar: str = None) -> bool:
-        """Add or update a Discord to RomM user link"""
-        try:
-            await self._ensure_initialized()
-            
-            async with aiosqlite.connect(self.db_path) as db:
-                # Check if entry exists
-                cursor = await db.execute(
-                    "SELECT discord_id FROM user_links WHERE discord_id = ?",
-                    (discord_id,)
-                )
-                existing = await cursor.fetchone()
-                
-                if existing:
-                    # Update existing entry
-                    logger.info(f"Updating existing link for Discord {discord_id} to RomM user {romm_username}")
-                    await db.execute("""
-                        UPDATE user_links 
-                        SET romm_username = ?, 
-                            romm_id = ?, 
-                            discord_username = ?, 
-                            discord_avatar = ?,  # This should be a URL now
-                            updated_at = CURRENT_TIMESTAMP
-                        WHERE discord_id = ?
-                    """, (romm_username, romm_id, discord_username, discord_avatar, discord_id))
-                else:
-                    # Insert new entry
-                    logger.info(f"Creating new link for Discord {discord_id} to RomM user {romm_username}")
-                    await db.execute("""
-                        INSERT INTO user_links 
-                        (discord_id, romm_username, romm_id, discord_username, discord_avatar, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                    """, (discord_id, romm_username, romm_id, discord_username, discord_avatar))
-                
-                await db.commit()
-                return True
-                
-        except Exception as e:
-            logger.error(f"Error adding/updating user link: {e}", exc_info=True)
-            return False
-    
-    async def get_user_link(self, discord_id: int) -> Optional[Dict[str, Any]]:
-        """Get RomM user info for a Discord user"""
-        try:
-            await self._ensure_initialized()
-            async with aiosqlite.connect(self.db_path) as db:
-                cursor = await db.execute(
-                    "SELECT romm_username, romm_id, created_at, updated_at FROM user_links WHERE discord_id = ?",
-                    (discord_id,)
-                )
-                result = await cursor.fetchone()
-                if result:
-                    return {
-                        "romm_username": result[0],
-                        "romm_id": result[1],
-                        "created_at": result[2],
-                        "updated_at": result[3] if len(result) > 3 else result[2]
-                    }
-                return None
-        except Exception as e:
-            logger.error(f"Error getting user link: {e}", exc_info=True)
-            return None
-    
-    async def get_user_link_by_romm_username(self, romm_username: str) -> Optional[Dict[str, Any]]:
-        """Get Discord user info for a RomM username"""
-        try:
-            await self._ensure_initialized()
-            async with aiosqlite.connect(self.db_path) as db:
-                # Use COLLATE NOCASE for case-insensitive comparison
-                cursor = await db.execute(
-                    "SELECT discord_id, romm_id, created_at FROM user_links WHERE romm_username = ? COLLATE NOCASE",
-                    (romm_username,)
-                )
-                result = await cursor.fetchone()
-                if result:
-                    return {
-                        "discord_id": result[0],
-                        "romm_id": result[1],
-                        "created_at": result[2]
-                    }
-                return None
-        except Exception as e:
-            logger.error(f"Error getting user link by RomM username: {e}", exc_info=True)
-            return None
-
-    async def delete_user_link(self, discord_id: int) -> bool:
-        """Delete a Discord to RomM user link"""
-        try:
-            await self._ensure_initialized()
-            async with aiosqlite.connect(self.db_path) as db:
-                await db.execute("DELETE FROM user_links WHERE discord_id = ?", (discord_id,))
-                await db.commit()
-                logger.info(f"Deleted user link for Discord {discord_id}")
-                return True
-        except Exception as e:
-            logger.error(f"Error deleting user link: {e}", exc_info=True)
-            return False
-    
-    async def get_all_links(self) -> List[Dict[str, Any]]:
-        """Get all user links for debugging"""
-        try:
-            await self._ensure_initialized()
-            async with aiosqlite.connect(self.db_path) as db:
-                cursor = await db.execute("""
-                    SELECT discord_id, romm_username, romm_id, discord_username, created_at, updated_at
-                    FROM user_links
-                    ORDER BY created_at DESC
-                """)
-                rows = await cursor.fetchall()
-                return [
-                    {
-                        "discord_id": row[0],
-                        "romm_username": row[1],
-                        "romm_id": row[2],
-                        "discord_username": row[3],
-                        "created_at": row[4],
-                        "updated_at": row[5] if len(row) > 5 else row[4]
-                    }
-                    for row in rows
-                ]
-        except Exception as e:
-            logger.error(f"Error getting all links: {e}", exc_info=True)
-            return []
-
 class UserManagementView(discord.ui.View):
     """Comprehensive user management interface for admins"""
     
     def __init__(self, bot, cog, guild: discord.Guild):
-        super().__init__(timeout=600)  # 10 minute timeout
+        super().__init__(timeout=300)  # 5 minute timeout
         self.bot = bot
         self.cog = cog
         self.guild = guild
@@ -291,6 +41,15 @@ class UserManagementView(discord.ui.View):
         self.selected_romm_user = None
         self.romm_users = []
         self.discord_user_links = {}  # discord_id -> romm_username mapping
+        
+        # Discord dropdown pagination state
+        self.discord_current_page = 0
+        self.page_size = 25
+        self.full_member_list = []
+        
+        # RomM dropdown pagination state
+        self.romm_current_page = 0
+        self.full_romm_list = []
         
         # Initialize components
         self._setup_components()
@@ -314,11 +73,30 @@ class UserManagementView(discord.ui.View):
         self.discord_select.callback = self.discord_select_callback
         self.add_item(self.discord_select)
         
-        # RomM User Select (Row 1)
+        # Discord pagination buttons (Row 1)
+        self.discord_prev_button = discord.ui.Button(
+            label="⬅️ Previous Discord users", 
+            style=discord.ButtonStyle.secondary, 
+            row=1, 
+            disabled=True
+        )
+        self.discord_prev_button.callback = self.discord_prev_page_callback
+        self.add_item(self.discord_prev_button)
+
+        self.discord_next_button = discord.ui.Button(
+            label="Next Discord users ➡️", 
+            style=discord.ButtonStyle.secondary, 
+            row=1, 
+            disabled=True
+        )
+        self.discord_next_button.callback = self.discord_next_page_callback
+        self.add_item(self.discord_next_button)
+        
+        # RomM User Select (Row 2)
         self.romm_select = discord.ui.Select(
             placeholder="Select a RomM user to link...",
             custom_id="romm_user_select",
-            row=1,
+            row=2,
             disabled=True,
             min_values=0,
             max_values=1
@@ -332,12 +110,30 @@ class UserManagementView(discord.ui.View):
         self.romm_select.callback = self.romm_select_callback
         self.add_item(self.romm_select)
         
-        # Rest of the buttons remain the same...
-        # Action Buttons (Rows 2-3)
+        # RomM pagination buttons (Row 3)
+        self.romm_prev_button = discord.ui.Button(
+            label="⬅️ Previous RomM users", 
+            style=discord.ButtonStyle.secondary, 
+            row=3, 
+            disabled=True
+        )
+        self.romm_prev_button.callback = self.romm_prev_page_callback
+        self.add_item(self.romm_prev_button)
+
+        self.romm_next_button = discord.ui.Button(
+            label="Next RomM users ➡️", 
+            style=discord.ButtonStyle.secondary, 
+            row=3, 
+            disabled=True
+        )
+        self.romm_next_button.callback = self.romm_next_page_callback
+        self.add_item(self.romm_next_button)
+        
+        # Action Buttons (Row 4)
         self.link_button = discord.ui.Button(
             label="Link Accounts",
             style=discord.ButtonStyle.success,
-            row=2,
+            row=4,
             disabled=True
         )
         self.link_button.callback = self.link_accounts_callback
@@ -346,65 +142,63 @@ class UserManagementView(discord.ui.View):
         self.unlink_button = discord.ui.Button(
             label="Unlink Account",
             style=discord.ButtonStyle.danger,
-            row=2,
+            row=4,
             disabled=True
         )
         self.unlink_button.callback = self.unlink_account_callback
         self.add_item(self.unlink_button)
-        
-        self.create_button = discord.ui.Button(
-            label="Create New RomM Account",
+                
+        self.invite_button = discord.ui.Button(
+            label="📧 Send Invite Link",
             style=discord.ButtonStyle.primary,
-            row=2,
+            row=4,
             disabled=True
         )
-        self.create_button.callback = self.create_account_callback
-        self.add_item(self.create_button)
-        
-        self.refresh_button = discord.ui.Button(
-            label="🔄 Refresh",
-            style=discord.ButtonStyle.secondary,
-            row=3
-        )
-        self.refresh_button.callback = self.refresh_callback
-        self.add_item(self.refresh_button)
-        
+        self.invite_button.callback = self.send_invite_callback
+        self.add_item(self.invite_button)
+                
         self.bulk_create_button = discord.ui.Button(
-            label="Bulk Create for Role",
+            label="Bulk Send Invites",
             style=discord.ButtonStyle.primary,
-            row=3
+            row=4
         )
         self.bulk_create_button.callback = self.bulk_create_callback
         self.add_item(self.bulk_create_button)
-        
+             
     async def populate_discord_users(self):
-        """Populate the Discord user dropdown"""
+        """Populate the Discord user dropdown with pagination"""
+        # Step 1: Fetch and sort the full list ONCE if we haven't already
+        if not self.full_member_list:
+            # MODIFIED: Always fetch all members from the guild, ignoring the role ID
+            members = self.guild.members
+            # Store the full sorted list
+            self.full_member_list = sorted(members, key=lambda m: m.display_name.lower())
+
+        # Clear previous options
         self.discord_select.options.clear()
         
-        # Get members with the auto-register role if configured
-        if self.cog.auto_register_role_id:
-            role = self.guild.get_role(self.cog.auto_register_role_id)
-            members = role.members if role else self.guild.members
-        else:
-            members = self.guild.members
+        # Step 2: Calculate pagination variables
+        total_members = len(self.full_member_list)
+        total_pages = (total_members + self.page_size - 1) // self.page_size if self.page_size > 0 else 1
+        start_index = self.discord_current_page * self.page_size
+        end_index = start_index + self.page_size
         
-        # Sort members by display name
-        sorted_members = sorted(members, key=lambda m: m.display_name.lower())[:25]
-        
-        # If no members found, add a placeholder
-        if not sorted_members:
-            self.discord_select.add_option(
-                label="No users found",
-                value="no_users",
-                description="No Discord users available"
-            )
+        # Get the slice of members for the current page
+        members_on_page = self.full_member_list[start_index:end_index]
+
+        # Update placeholder to show page info
+        self.discord_select.placeholder = f"Select a Discord user (Page {self.discord_current_page + 1}/{total_pages})"
+
+        if not members_on_page:
+            self.discord_select.add_option(label="No users found on this page", value="no_users")
+            self.discord_prev_button.disabled = self.discord_current_page == 0
+            self.discord_next_button.disabled = end_index >= total_members
             return
-        
-        # Check existing links and add options
-        for member in sorted_members:
+
+        # Step 3: Populate options for the current page
+        for member in members_on_page:
             link = await self.cog.db_manager.get_user_link(member.id)
             if link:
-                # Store the actual username from database
                 self.discord_user_links[member.id] = link['romm_username']
                 description = f"Linked to: {link['romm_username']}"
                 emoji = "✅"
@@ -418,14 +212,17 @@ class UserManagementView(discord.ui.View):
                 value=str(member.id),
                 description=description[:100]
             )
+            
+        # Step 4: Update pagination button states
+        self.discord_prev_button.disabled = self.discord_current_page == 0
+        self.discord_next_button.disabled = end_index >= total_members
     
     async def populate_romm_users(self):
-        """Populate the RomM user dropdown"""
-        self.romm_select.options.clear()
-        
-        # Fetch RomM users
-        users_data = await self.bot.fetch_api_endpoint('users')
+        """Populate the RomM user dropdown with pagination"""
+        # Always fetch fresh data to ensure we have current state
+        users_data = await self.bot.fetch_api_endpoint('users', bypass_cache=True)
         if not users_data:
+            self.romm_select.options.clear()
             self.romm_select.add_option(
                 label="Failed to fetch RomM users",
                 value="error"
@@ -434,43 +231,31 @@ class UserManagementView(discord.ui.View):
         
         self.romm_users = users_data
         
-        # Get ALL existing links from database to properly mark linked accounts
+        # Get all existing links from database
         linked_usernames = set()
         linked_romm_ids = set()
-        discord_to_romm = {}  # Map of discord_id -> romm_username
+        discord_to_romm = {}
         
         try:
             async with aiosqlite.connect(self.cog.db_manager.db_path) as db:
-                # Get both username and romm_id for better matching
                 cursor = await db.execute("SELECT discord_id, romm_username, romm_id FROM user_links")
                 rows = await cursor.fetchall()
                 for row in rows:
                     discord_id, romm_username, romm_id = row
-                    # Store both username and ID for matching (case-insensitive)
                     linked_usernames.add(romm_username.lower() if romm_username else "")
                     linked_romm_ids.add(romm_id)
                     discord_to_romm[discord_id] = romm_username
         except Exception as e:
             logger.error(f"Error fetching linked users: {e}")
         
-        # Sort users by username
-        sorted_users = sorted(users_data, key=lambda u: u.get('username', '').lower())[:25]
-        
-        # If no users, add placeholder
-        if not sorted_users:
-            self.romm_select.add_option(
-                label="No RomM users available",
-                value="no_users",
-                description="No users found in RomM"
-            )
-            return
-        
-        for user in sorted_users:
+        # Sort users and prepare full list with metadata
+        self.full_romm_list = []
+        for user in sorted(users_data, key=lambda u: u.get('username', '').lower()):
             username = user.get('username', 'Unknown')
             user_id = user.get('id')
             role = user.get('role', 'VIEWER')
             
-            # Check if linked by either username (case-insensitive) or ID
+            # Check if linked
             is_linked = (username.lower() in linked_usernames) or (user_id in linked_romm_ids)
             
             # Find which Discord user this is linked to
@@ -485,15 +270,54 @@ class UserManagementView(discord.ui.View):
                     except:
                         pass
             
-            emoji = "🔗" if is_linked else "🆓"
-            status = f" (Linked to: {linked_to})" if linked_to else " (Already linked)" if is_linked else ""
+            self.full_romm_list.append({
+                'user': user,
+                'username': username,
+                'user_id': user_id,
+                'role': role,
+                'is_linked': is_linked,
+                'linked_to': linked_to
+            })
+        
+        # Clear options and paginate
+        self.romm_select.options.clear()
+        
+        # Calculate pagination
+        total_users = len(self.full_romm_list)
+        if total_users == 0:
+            self.romm_select.add_option(
+                label="No RomM users available",
+                value="no_users",
+                description="No users found in RomM"
+            )
+            self.romm_prev_button.disabled = True
+            self.romm_next_button.disabled = True
+            return
+        
+        total_pages = (total_users + self.page_size - 1) // self.page_size
+        start_index = self.romm_current_page * self.page_size
+        end_index = start_index + self.page_size
+        
+        # Get users for current page
+        users_on_page = self.full_romm_list[start_index:end_index]
+        
+        # Update placeholder
+        self.romm_select.placeholder = f"Select a RomM user (Page {self.romm_current_page + 1}/{total_pages})"
+        
+        # Add options for current page
+        for user_data in users_on_page:
+            emoji = "🔗" if user_data['is_linked'] else "🆓"
+            status = f" (Linked to: {user_data['linked_to']})" if user_data['linked_to'] else " (Already linked)" if user_data['is_linked'] else ""
             
             self.romm_select.add_option(
-                label=f"{emoji} {username[:40]}{status[:30]}",
-                value=username,
-                description=f"Role: {role}"[:100]
+                label=f"{emoji} {user_data['username'][:40]}{status[:30]}",
+                value=user_data['username'],
+                description=f"Role: {user_data['role']}"[:100]
             )
-
+        
+        # Update pagination button states
+        self.romm_prev_button.disabled = self.romm_current_page == 0 or self.romm_select.disabled
+        self.romm_next_button.disabled = end_index >= total_users or self.romm_select.disabled
     
     async def discord_select_callback(self, interaction: discord.Interaction):
         """Handle Discord user selection"""
@@ -508,6 +332,9 @@ class UserManagementView(discord.ui.View):
         user_id = int(self.discord_select.values[0])
         self.selected_discord_user = self.guild.get_member(user_id)
         
+        # Reset RomM pagination when Discord user changes
+        self.romm_current_page = 0
+        
         # Enable/disable buttons based on link status
         existing_link = self.discord_user_links.get(user_id)
         
@@ -515,14 +342,16 @@ class UserManagementView(discord.ui.View):
             # User is linked
             self.unlink_button.disabled = False
             self.link_button.disabled = True
-            self.create_button.disabled = True
             self.romm_select.disabled = True
+            self.invite_button.disabled = True
+            self.romm_prev_button.disabled = True
+            self.romm_next_button.disabled = True
         else:
             # User is not linked
             self.unlink_button.disabled = True
-            self.link_button.disabled = False  # Will be enabled when RomM user selected
-            self.create_button.disabled = False
+            self.link_button.disabled = True  # Will be enabled when RomM user selected
             self.romm_select.disabled = False
+            self.invite_button.disabled = False
             
             # Populate RomM users if not already done
             if not self.romm_select.options or (len(self.romm_select.options) == 1 and self.romm_select.options[0].value == "placeholder"):
@@ -530,6 +359,36 @@ class UserManagementView(discord.ui.View):
         
         # Update the message with new state
         await interaction.edit_original_response(embed=self.create_status_embed(), view=self)
+    
+    async def discord_prev_page_callback(self, interaction: discord.Interaction):
+        """Go to the previous page of Discord users"""
+        if self.discord_current_page > 0:
+            self.discord_current_page -= 1
+            await self.populate_discord_users()
+            await interaction.response.edit_message(view=self, embed=self.create_status_embed())
+
+    async def discord_next_page_callback(self, interaction: discord.Interaction):
+        """Go to the next page of Discord users"""
+        total_pages = (len(self.full_member_list) + self.page_size - 1) // self.page_size
+        if self.discord_current_page < total_pages - 1:
+            self.discord_current_page += 1
+            await self.populate_discord_users()
+            await interaction.response.edit_message(view=self, embed=self.create_status_embed())
+    
+    async def romm_prev_page_callback(self, interaction: discord.Interaction):
+        """Go to the previous page of RomM users"""
+        if self.romm_current_page > 0:
+            self.romm_current_page -= 1
+            await self.populate_romm_users()
+            await interaction.response.edit_message(view=self, embed=self.create_status_embed())
+
+    async def romm_next_page_callback(self, interaction: discord.Interaction):
+        """Go to the next page of RomM users"""
+        total_pages = (len(self.full_romm_list) + self.page_size - 1) // self.page_size
+        if self.romm_current_page < total_pages - 1:
+            self.romm_current_page += 1
+            await self.populate_romm_users()
+            await interaction.response.edit_message(view=self, embed=self.create_status_embed())
     
     async def romm_select_callback(self, interaction: discord.Interaction):
         """Handle RomM user selection"""
@@ -540,11 +399,21 @@ class UserManagementView(discord.ui.View):
             self.link_button.disabled = True
         else:
             username = self.romm_select.values[0]
-            self.selected_romm_user = next(
-                (u for u in self.romm_users if u.get('username') == username),
+            # Find user in the full list
+            user_data = next(
+                (u for u in self.full_romm_list if u['username'] == username),
                 None
             )
-            self.link_button.disabled = False
+            if user_data:
+                self.selected_romm_user = user_data['user']
+                self.link_button.disabled = False
+            else:
+                # Fallback to old method if full_romm_list isn't populated
+                self.selected_romm_user = next(
+                    (u for u in self.romm_users if u.get('username') == username),
+                    None
+                )
+                self.link_button.disabled = False
         
         await interaction.edit_original_response(embed=self.create_status_embed(), view=self)
     
@@ -598,9 +467,9 @@ class UserManagementView(discord.ui.View):
             await interaction.edit_original_response(embed=self.create_status_embed(), view=self)
         else:
             await interaction.followup.send("❌ Failed to link accounts", ephemeral=True)
-    
+       
     async def unlink_account_callback(self, interaction: discord.Interaction):
-        """Unlink selected Discord user from RomM"""
+        """Unlink selected Discord user from RomM with options"""
         await interaction.response.defer()
         
         if not self.selected_discord_user:
@@ -616,46 +485,300 @@ class UserManagementView(discord.ui.View):
             await interaction.followup.send("This user has no linked account", ephemeral=True)
             return
         
-        # Check if it's an admin account
-        user = await self.cog.find_user_by_username(link['romm_username'])
-        if user and await self.cog.is_romm_admin(user):
-            await interaction.followup.send(
-                "⚠️ Cannot unlink admin accounts for safety. Remove admin role in RomM first.",
-                ephemeral=True
-            )
-            return
+        # Get the RomM user details
+        romm_username = link['romm_username']
+        romm_id = link.get('romm_id')  # Get the stored RomM ID if available
         
-        # Confirm deletion
-        confirm_view = ConfirmView()
-        await interaction.followup.send(
-            f"Are you sure you want to unlink {discord_user.mention} from RomM user `{link['romm_username']}`?\n"
-            "This will also delete the RomM account.",
+        # Try to find the user in the API if we don't have the ID
+        user = None
+        if romm_id:
+            # If we have the ID stored, we can use it directly
+            user = {'id': romm_id, 'username': romm_username}
+        else:
+            # Fall back to finding by username
+            user = await self.cog.find_user_by_username(romm_username)
+        
+        # Check if it's an admin account
+        if user:
+            # Fetch full user data if needed to check admin status
+            users_data = await self.bot.fetch_api_endpoint('users')
+            if users_data:
+                full_user = next((u for u in users_data if u.get('id') == user['id']), None)
+                if full_user and full_user.get('role', '').upper() == 'ADMIN':
+                    await interaction.followup.send(
+                        "⚠️ Cannot unlink, disable, or delete admin accounts for safety. Remove admin role in RomM first.",
+                        ephemeral=True
+                    )
+                    return
+        
+        # Show confirmation with options
+        confirm_view = UnlinkConfirmView()
+        
+        embed = discord.Embed(
+            title="🔗 Unlink Account Options",
+            description=f"How would you like to unlink {discord_user.mention} from RomM user `{romm_username}`?",
+            color=discord.Color.blue()
+        )
+        embed.add_field(
+            name="🔓 Unlink Only",
+            value="Remove Discord-RomM connection but keep the RomM account active",
+            inline=False
+        )
+        embed.add_field(
+            name="🔒 Unlink & Disable",
+            value="Remove connection AND disable the RomM account (user cannot login but account is preserved)",
+            inline=False
+        )
+        embed.add_field(
+            name="🗑️ Unlink & Delete", 
+            value="Remove connection AND delete the RomM account completely",
+            inline=False
+        )
+        
+        confirm_msg = await interaction.followup.send(
+            embed=embed,
             view=confirm_view,
             ephemeral=True
         )
         
         await confirm_view.wait()
-        if not confirm_view.value:
+        
+        if not confirm_view.action:
+            await confirm_msg.edit(content="Operation cancelled.", embed=None, view=None)
             return
         
-        # Delete RomM account and unlink
-        if user and await self.cog.delete_user(user['id']):
+        # Process based on selected action
+        if confirm_view.action == 'unlink_only':
+            # Just remove the link from database
             await self.cog.db_manager.delete_user_link(discord_user.id)
             
             # Refresh the view
             await self.populate_discord_users()
-            
-            # Clear selection after operations
             self.selected_discord_user = None
             self.update_button_states()
             
+            await confirm_msg.edit(
+                content=f"✅ Successfully unlinked {discord_user.mention} from RomM user `{romm_username}`\nThe RomM account remains active.",
+                embed=None,
+                view=None
+            )
+            
+            # Log the action
+            log_channel = self.bot.get_channel(self.cog.log_channel_id)
+            if log_channel:
+                await log_channel.send(
+                    embed=discord.Embed(
+                        title="🔓 Account Unlinked",
+                        description=f"{discord_user.mention} unlinked from `{romm_username}` (account preserved)",
+                        color=discord.Color.blue()
+                    )
+                )
+        
+        elif confirm_view.action == 'unlink_disable':
+            # Disable the RomM account
+            disable_success = False
+            error_msg = None
+            
+            if user and 'id' in user:
+                try:
+                    logger.info(f"Attempting to disable RomM user: ID={user['id']}, Username={romm_username}")
+                    
+                    # Create a FormData object
+                    form_data = aiohttp.FormData()
+                    form_data.add_field('enabled', 'false') # API expects a string 'false' for form data
+                    
+                    # Pass the form_data object instead of params
+                    result = await self.bot.make_authenticated_request(
+                        method="PUT",
+                        endpoint=f"users/{user['id']}",
+                        form_data=form_data,
+                        require_csrf=True
+                    )
+                    
+                    if result is not None:
+                        disable_success = True
+                        logger.info(f"Successfully disabled RomM user {romm_username}")
+                    else:
+                        error_msg = "Failed to disable user"
+                        logger.error(f"Failed to disable user {romm_username}: {error_msg}")
+                        
+                except Exception as e:
+                    error_msg = str(e)
+                    logger.error(f"Exception while disabling user {romm_username}: {e}", exc_info=True)
+            else:
+                error_msg = "Could not find user in RomM"
+                logger.error(f"User not found in RomM: {romm_username}")
+            
+            if disable_success:
+                # Remove from database
+                await self.cog.db_manager.delete_user_link(discord_user.id)
+                
+                # Refresh the view
+                await self.populate_discord_users()
+                self.selected_discord_user = None
+                self.update_button_states()
+                
+                await confirm_msg.edit(
+                    content=f"✅ Successfully unlinked {discord_user.mention} and disabled RomM account `{romm_username}`\nThe account exists but cannot login.",
+                    embed=None,
+                    view=None
+                )
+                
+                # Log the action
+                log_channel = self.bot.get_channel(self.cog.log_channel_id)
+                if log_channel:
+                    await log_channel.send(
+                        embed=discord.Embed(
+                            title="🔒 Account Unlinked & Disabled",
+                            description=f"{discord_user.mention} unlinked from `{romm_username}` (account disabled)",
+                            color=discord.Color.yellow()
+                        )
+                    )
+            else:
+                # Disable failed but we can still offer to unlink
+                await confirm_msg.edit(
+                    content=(
+                        f"❌ Failed to disable RomM account for `{romm_username}`\n"
+                        f"Error: {error_msg or 'Unknown error'}\n\n"
+                        "The accounts have been unlinked, but the RomM account may still be active."
+                    ),
+                    embed=None,
+                    view=None
+                )
+                
+                # Still unlink even if disable failed
+                await self.cog.db_manager.delete_user_link(discord_user.id)
+                await self.populate_discord_users()
+                self.selected_discord_user = None
+                self.update_button_states()
+            
+        elif confirm_view.action == 'unlink_delete':
+            # Try to delete the RomM account
+            delete_success = False
+            error_msg = None
+            
+            if user and 'id' in user:
+                try:
+                    # Log the deletion attempt
+                    logger.info(f"Attempting to delete RomM user: ID={user['id']}, Username={romm_username}")
+                    
+                    # Use the delete method with proper error handling
+                    result = await self.bot.make_authenticated_request(
+                        method="DELETE",
+                        endpoint=f"users/{user['id']}",
+                        require_csrf=True
+                    )
+                    
+                    # Check if deletion was successful
+                    if result is not None or result == {}:  # API might return empty dict on success
+                        delete_success = True
+                        logger.info(f"Successfully deleted RomM user {romm_username}")
+                    else:
+                        error_msg = "API returned unexpected response"
+                        logger.error(f"Failed to delete user {romm_username}: {error_msg}")
+                        
+                except Exception as e:
+                    error_msg = str(e)
+                    logger.error(f"Exception while deleting user {romm_username}: {e}", exc_info=True)
+            else:
+                error_msg = "Could not find user in RomM"
+                logger.error(f"User not found in RomM: {romm_username}")
+            
+            if delete_success:
+                # Remove from database
+                await self.cog.db_manager.delete_user_link(discord_user.id)
+                
+                # Refresh the view
+                await self.populate_discord_users()
+                self.selected_discord_user = None
+                self.update_button_states()
+                
+                await confirm_msg.edit(
+                    content=f"✅ Successfully unlinked {discord_user.mention} and deleted RomM account `{romm_username}`",
+                    embed=None,
+                    view=None
+                )
+                
+                # Log the deletion
+                log_channel = self.bot.get_channel(self.cog.log_channel_id)
+                if log_channel:
+                    await log_channel.send(
+                        embed=discord.Embed(
+                            title="🗑️ Account Unlinked & Deleted",
+                            description=f"{discord_user.mention} unlinked from `{romm_username}` (account deleted)",
+                            color=discord.Color.red()
+                        )
+                    )
+            else:
+                # Deletion failed but we can still offer to unlink
+                retry_view = discord.ui.View(timeout=30)
+                
+                unlink_anyway_btn = discord.ui.Button(
+                    label="Unlink Anyway",
+                    style=discord.ButtonStyle.primary
+                )
+                cancel_btn = discord.ui.Button(
+                    label="Cancel",
+                    style=discord.ButtonStyle.secondary
+                )
+                
+                async def unlink_anyway_callback(inter: discord.Interaction):
+                    await inter.response.defer()
+                    await self.cog.db_manager.delete_user_link(discord_user.id)
+                    await self.populate_discord_users()
+                    self.selected_discord_user = None
+                    self.update_button_states()
+                    await inter.followup.send(
+                        f"✅ Unlinked {discord_user.mention} from RomM (account may still exist in RomM)",
+                        ephemeral=True
+                    )
+                    retry_view.stop()
+                
+                async def cancel_callback(inter: discord.Interaction):
+                    await inter.response.defer()
+                    retry_view.stop()
+                
+                unlink_anyway_btn.callback = unlink_anyway_callback
+                cancel_btn.callback = cancel_callback
+                
+                retry_view.add_item(unlink_anyway_btn)
+                retry_view.add_item(cancel_btn)
+                
+                await confirm_msg.edit(
+                    content=(
+                        f"❌ Failed to delete RomM account for `{romm_username}`\n"
+                        f"Error: {error_msg or 'Unknown error'}\n\n"
+                        "Would you like to unlink the accounts anyway? "
+                        "(The RomM account will remain active)"
+                    ),
+                    embed=None,
+                    view=retry_view
+                )
+        
+        await interaction.edit_original_response(embed=self.create_status_embed(), view=self)
+    
+    async def send_invite_callback(self, interaction: discord.Interaction):
+        """Send an invite link to the selected Discord user by calling the main cog method."""
+        await interaction.response.defer(ephemeral=True)
+        
+        if not self.selected_discord_user:
+            await interaction.followup.send("Please select a Discord user.", ephemeral=True)
+            return
+        
+        # Call the standardized method from the cog
+        success = await self.cog.send_invite_link(self.selected_discord_user)
+        
+        if success:
             await interaction.followup.send(
-                f"✅ Successfully unlinked and deleted RomM account for {discord_user.mention}",
+                f"✅ Successfully sent invite link to {self.selected_discord_user.mention}",
                 ephemeral=True
             )
-            await interaction.edit_original_response(embed=self.create_status_embed(), view=self)
         else:
-            await interaction.followup.send("❌ Failed to delete RomM account", ephemeral=True)
+            # The send_invite_link function already handles logging and DM failure notifications
+            await interaction.followup.send(
+                f"❌ Failed to send invite link to {self.selected_discord_user.mention}. See logs for details.",
+                ephemeral=True
+            )
     
     async def create_account_callback(self, interaction: discord.Interaction):
         """Create new RomM account for selected Discord user"""
@@ -693,7 +816,7 @@ class UserManagementView(discord.ui.View):
             await interaction.followup.send("❌ Failed to create RomM account", ephemeral=True)
     
     async def bulk_create_callback(self, interaction: discord.Interaction):
-        """Bulk create accounts for users with the auto-register role"""
+        """Bulk send invites for users with the auto-register role"""
         if not self.cog.auto_register_role_id:
             await interaction.response.send_message(
                 "❌ Auto-register role not configured",
@@ -708,37 +831,37 @@ class UserManagementView(discord.ui.View):
             await interaction.followup.send("❌ Auto-register role not found", ephemeral=True)
             return
         
-        # Find users needing accounts
-        members_to_create = []
+        # Find users needing invites
+        members_to_invite = []
         for member in role.members:
             link = await self.cog.db_manager.get_user_link(member.id)
             if not link:
-                members_to_create.append(member)
+                members_to_invite.append(member)
         
-        if not members_to_create:
-            await interaction.followup.send("✅ All role members already have accounts", ephemeral=True)
+        if not members_to_invite:
+            await interaction.followup.send("✅ All role members already have accounts or pending invites", ephemeral=True)
             return
         
         # Create progress message
         progress_msg = await interaction.followup.send(
-            f"Creating accounts for {len(members_to_create)} users...",
+            f"Sending invites to {len(members_to_invite)} users...",
             ephemeral=True
         )
         
-        created = 0
+        sent = 0
         failed = 0
         
-        for member in members_to_create:
-            if await self.cog.create_user_account(member, interactive=False):
-                created += 1
+        for member in members_to_invite:
+            if await self.cog.send_invite_link(member):
+                sent += 1
             else:
                 failed += 1
             
             # Update progress every 5 users
-            if (created + failed) % 5 == 0:
+            if (sent + failed) % 5 == 0:
                 try:
                     await interaction.edit_original_response(
-                        content=f"Progress: {created + failed}/{len(members_to_create)} processed..."
+                        content=f"Progress: {sent + failed}/{len(members_to_invite)} processed..."
                     )
                 except:
                     pass  # Ignore if message edit fails
@@ -746,18 +869,18 @@ class UserManagementView(discord.ui.View):
         # Final summary
         try:
             await interaction.edit_original_response(
-                content=f"✅ Created: {created} accounts\n❌ Failed: {failed} accounts"
+                content=f"✅ Sent: {sent} invites\n❌ Failed: {failed} invites"
             )
         except:
             await interaction.followup.send(
-                f"✅ Created: {created} accounts\n❌ Failed: {failed} accounts",
+                f"✅ Sent: {sent} invites\n❌ Failed: {failed} invites",
                 ephemeral=True
             )
         
         # Refresh the view
         await self.populate_discord_users()
         await interaction.edit_original_response(embed=self.create_status_embed(), view=self)
-    
+        
     async def refresh_callback(self, interaction: discord.Interaction):
         """Refresh all data"""
         await interaction.response.defer()
@@ -774,20 +897,20 @@ class UserManagementView(discord.ui.View):
         if not self.selected_discord_user:
             self.link_button.disabled = True
             self.unlink_button.disabled = True
-            self.create_button.disabled = True
             self.romm_select.disabled = True
+            self.invite_button.disabled = True
         else:
             existing_link = self.discord_user_links.get(self.selected_discord_user.id)
             if existing_link:
                 self.unlink_button.disabled = False
                 self.link_button.disabled = True
-                self.create_button.disabled = True
                 self.romm_select.disabled = True
+                self.invite_button.disabled = True
             else:
                 self.unlink_button.disabled = True
-                self.create_button.disabled = False
                 self.romm_select.disabled = False
                 self.link_button.disabled = not self.selected_romm_user
+                self.invite_button.disabled = False
         
     def create_status_embed(self):
         """Create status embed showing current selections and stats"""
@@ -841,10 +964,10 @@ class UserManagementView(discord.ui.View):
             value=(
                 "1. Select a Discord user from the dropdown\n"
                 "2. Choose an action:\n"
-                "   • **Link**: Connect to existing RomM account\n"
-                "   • **Create**: Make new RomM account\n"
+                "   • **Link**: Connect Discord account to existing RomM account\n"
                 "   • **Unlink**: Remove connection and delete account\n"
-                "   • **Bulk Create**: Create accounts for all role members"
+                "   • **Send Invite Link**: Send an invite link to a selected Discord user, prompting them to create an account\n"
+                "   • **Bulk Send Invites**: Send an invite link to all Auto Regester role members"
             ),
             inline=False
         )
@@ -871,6 +994,40 @@ class ConfirmView(discord.ui.View):
         await interaction.response.defer()
         self.stop()
 
+class UnlinkConfirmView(discord.ui.View):
+    """Confirmation view for unlinking with options to keep, disable, or delete RomM account"""
+    def __init__(self):
+        super().__init__(timeout=30)
+        self.action = None  # Will be 'unlink_only', 'unlink_disable', or 'unlink_delete'
+    
+    @discord.ui.button(label="Unlink Only", style=discord.ButtonStyle.primary, emoji="🔓")
+    async def unlink_only(self, button: discord.ui.Button, interaction: discord.Interaction):
+        """Only unlink the accounts, keep RomM user active"""
+        self.action = 'unlink_only'
+        await interaction.response.defer()
+        self.stop()
+    
+    @discord.ui.button(label="Unlink & Disable", style=discord.ButtonStyle.secondary, emoji="🔒")
+    async def unlink_disable(self, button: discord.ui.Button, interaction: discord.Interaction):
+        """Unlink accounts AND disable RomM user (keeps account but prevents login)"""
+        self.action = 'unlink_disable'
+        await interaction.response.defer()
+        self.stop()
+    
+    @discord.ui.button(label="Unlink & Delete", style=discord.ButtonStyle.danger, emoji="🗑️")
+    async def unlink_delete(self, button: discord.ui.Button, interaction: discord.Interaction):
+        """Unlink accounts AND delete RomM user completely"""
+        self.action = 'unlink_delete'
+        await interaction.response.defer()
+        self.stop()
+    
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, row=1)
+    async def cancel(self, button: discord.ui.Button, interaction: discord.Interaction):
+        """Cancel the operation"""
+        self.action = None
+        await interaction.response.defer()
+        self.stop()
+        
 class UserManager(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -881,7 +1038,10 @@ class UserManager(commands.Cog):
             self.auto_register_role_id = 0 
         self.log_channel_id = self.bot.config.CHANNEL_ID
         self.temp_storage = {}
-        self.db_manager = AsyncUserDatabaseManager()
+        
+        # Use shared db and set db_manager to point to it
+        self.db = bot.db
+        self.db_manager = bot.db  
         
         logger.info(
             f"Users Cog initialized with auto_register_role_id: {self.auto_register_role_id}, "
@@ -890,8 +1050,14 @@ class UserManager(commands.Cog):
 
     async def cog_load(self):
         """Initialize when cog is loaded"""
-        await self.db_manager.initialize()
-        logger.info("User Manager database initialized!")
+       
+        if not self.db_manager._initialized:
+            logger.warning("Database not initialized, attempting initialization...")
+            await self.db_manager.initialize()
+        
+        # await self.store_discord_info_for_existing_links()
+        
+        logger.debug("User Manager cog loaded successfully")
     
     async def generate_secure_password(self, length=16):
         """Generate a secure random password"""
@@ -1020,6 +1186,88 @@ class UserManager(commands.Cog):
         except Exception as e:
             logger.error(f"Error finding user {username}: {e}", exc_info=True)
             return None
+    
+    async def send_invite_link(self, member: discord.Member, role: str = "viewer") -> bool:
+        """Send a standardized invite link to a Discord member."""
+        try:
+            existing_link = await self.db_manager.get_user_link(member.id)
+            if existing_link:
+                logger.info(f"User {member.display_name} already has a linked account.")
+                return True
+
+            invite_data = await self.bot.make_authenticated_request(
+                method="POST",
+                endpoint="users/invite-link",
+                params={"role": role}
+            )
+            
+            if not invite_data or 'token' not in invite_data:
+                logger.error(f"Failed to create invite link for {member.display_name}")
+                return False
+            
+            invite_token = invite_data.get('token')
+            invite_url = f"{self.bot.config.DOMAIN}/register?token={invite_token}"
+            
+            try:
+                dm_channel = await self.get_or_create_dm_channel(member)
+                
+                # This is the new, standardized embed
+                embed = discord.Embed(
+                    title="🎮 RomM Invitation",
+                    description=f"You've been invited to access the game library at {self.bot.config.DOMAIN}!",
+                    color=discord.Color.blue()
+                )
+                embed.add_field(
+                    name="📧 Invitation Link",
+                    value=f"[Click here to register your account]({invite_url})",
+                    inline=False
+                )
+                embed.add_field(
+                    name="ℹ️ What is RomM?",
+                    value="RomM is a ROM management system for browsing and playing a game collection from any device.",
+                    inline=False
+                )
+                embed.add_field(
+                    name="⚠️ Important",
+                    value="This invitation link is single-use. Once you register, it cannot be used again.",
+                    inline=False
+                )
+                embed.set_footer(text=f"Your account will have {role} permissions. If you already have an account, you can ignore this.")
+                
+                await dm_channel.send(embed=embed)
+                
+                log_channel = self.bot.get_channel(self.log_channel_id)
+                if log_channel:
+                    log_embed = discord.Embed(
+                        title="📧 Invite Link Sent",
+                        description=f"Sent RomM invite to {member.mention}",
+                        color=discord.Color.green()
+                    )
+                    await log_channel.send(embed=log_embed)
+                
+                logger.info(f"Successfully sent invite link to {member.display_name}")
+                return True
+                
+            except discord.Forbidden:
+                logger.warning(f"Could not DM {member.display_name} - DMs may be disabled.")
+                log_channel = self.bot.get_channel(self.log_channel_id)
+                if log_channel:
+                    await log_channel.send(
+                        embed=discord.Embed(
+                            title="⚠️ Invite Delivery Failed",
+                            description=(
+                                f"Could not DM invite link to {member.mention}\n"
+                                f"**Invite URL:** ||{invite_url}||\n"
+                                "Please send this link to them manually."
+                            ),
+                            color=discord.Color.yellow()
+                        )
+                    )
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error sending invite link to {member.display_name}: {e}", exc_info=True)
+            return False
     
     async def handle_role_removal(self, member: discord.Member) -> bool:
         """Handle removal of the auto-register role"""
@@ -1267,7 +1515,19 @@ class UserManager(commands.Cog):
             logger.error(f"Error in link_existing_account for {member.display_name}: {e}", exc_info=True)
             return None    
 
-    async def create_user_account(self, member: discord.Member, interactive: bool = True) -> bool:
+    async def create_user_account(self, member: discord.Member, interactive: bool = True, use_invite: bool = True) -> bool:
+        """
+        Create or invite a user account.
+        
+        Args:
+            member: Discord member to create account for
+            interactive: Whether to interact with the user (ask about existing accounts)
+            use_invite: Whether to use invite links (True) or direct creation (False)
+        """
+        if use_invite:
+            # Use the new invite-based system
+            return await self.send_invite_link(member)
+        
         try:
             # Check if user already has a linked account
             existing_link = await self.db_manager.get_user_link(member.id)
@@ -1364,7 +1624,7 @@ class UserManager(commands.Cog):
     
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
-        """Listen for role changes and handle account creation/deletion"""
+        """Listen for role changes and handle account invitation/deletion"""
         if self.auto_register_role_id == 0:
             return
 
@@ -1372,12 +1632,12 @@ class UserManager(commands.Cog):
         has_role = any(role.id == self.auto_register_role_id for role in after.roles)
         
         if has_role and not had_role:
-            # Role was added
-            logger.info(f"Auto-register role added to {after.display_name}, creating account")
-            await self.create_user_account(after)
+            # Role was added - send invite link instead of creating account
+            logger.info(f"Auto-register role added to {after.display_name}, sending invite link")
+            await self.send_invite_link(after)
         elif had_role and not has_role:
             # Role was removed
-            logger.info(f"Auto-register role removed from {after.display_name}, removing account")
+            logger.info(f"Auto-register role removed from {after.display_name}, removing account if exists")
             await self.handle_role_removal(after)
 
     @commands.Cog.listener()
@@ -1395,6 +1655,18 @@ class UserManager(commands.Cog):
         if not await self.bot.ensure_valid_token():
             await ctx.followup.send("❌ Failed to authenticate with API!", ephemeral=True)
             return
+        
+        # Force refresh of user data before opening the interface
+        try:
+            # Bypass cache to get fresh user data
+            fresh_users = await self.bot.fetch_api_endpoint('users', bypass_cache=True)
+            if fresh_users:
+                logger.info(f"Refreshed user data: {len(fresh_users)} users found")
+            else:
+                logger.warning("Failed to refresh user data from API")
+        except Exception as e:
+            logger.error(f"Error refreshing user data: {e}")
+            # Continue anyway - the view will try to fetch data itself
         
         # Create and populate the view
         view = UserManagementView(self.bot, self, ctx.guild)
@@ -1417,4 +1689,3 @@ def setup(bot):
     
     bot.add_cog(UserManager(bot))
     #logger.info("UserManager Cog enabled and loaded")
-
