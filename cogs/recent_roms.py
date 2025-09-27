@@ -130,8 +130,6 @@ class RecentRomsMonitor(commands.Cog):
                     self.handle_scan_complete(roms_to_process, stats), self.bot.loop
                 )
 
-    # --- These methods manage the thread and run on the main bot loop ---
-
     def start_socketio_thread(self):
         """Run Socket.IO in a separate thread."""
         asyncio.set_event_loop(self.sio_loop)
@@ -146,8 +144,6 @@ class RecentRomsMonitor(commands.Cog):
         if self.enabled:
             self.sio_thread = threading.Thread(target=self.start_socketio_thread, daemon=True)
             self.sio_thread.start()
-
-    # --- These methods are now guaranteed to run on the MAIN bot loop ---
 
     async def ensure_connected(self):
         """Ensure Socket.IO connection is established."""
@@ -268,20 +264,6 @@ class RecentRomsMonitor(commands.Cog):
         except Exception as e:
             logger.warning(f"IGDB integration not available: {e}")
             self.igdb = None
-    
-    async def setup(self):
-        """Setup IGDB client and WebSocket connection"""
-        # Initialize IGDB only
-        await self.initialize_igdb()
-        
-        # Wait for bot to be ready
-        await self.bot.wait_until_ready()
-        
-        # Connect to WebSocket
-        if self.enabled:
-            self.sio_thread = threading.Thread(target=self.start_socketio_thread)
-            self.sio_thread.daemon = True
-            self.sio_thread.start()
     
     async def download_cover_image(self, rom_data: Dict) -> Optional[discord.File]:
         """Download cover image from Romm API and return as Discord File"""
