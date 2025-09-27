@@ -14,6 +14,7 @@ from .igdb_client import IGDBClient
 from collections import defaultdict
 from .search import ROM_View
 from urllib.parse import quote
+import aiohttp
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -30,9 +31,10 @@ def is_admin():
 class RequestAdminView(discord.ui.View):
     """Paginated view for managing requests"""
     
-    def __init__(self, bot, requests_data, admin_id):
+    def __init__(self, bot, requests_data, admin_id, db):
         super().__init__(timeout=300)  # 5 minute timeout
         self.bot = bot
+        self.db = db
         self.requests = requests_data
         self.admin_id = admin_id
         self.current_index = 0
@@ -366,8 +368,7 @@ class RequestAdminView(discord.ui.View):
         request_id = current_request[0]
         
         try:
-            db_path = Path('data') / 'requests.db'
-            async with aiosqlite.connect(str(db_path)) as db:
+            async with self.db.get_connection() as db:
                 await db.execute(
                     """
                     UPDATE requests 
@@ -392,22 +393,12 @@ class RequestAdminView(discord.ui.View):
                 
                 # Notify original requester
                 try:
-                    # Get the accurate game name from IGDB details if available
-                    game_name = current_request[4] # Default to user's request name
-                    details = current_request[5]
-                    if details and "IGDB Metadata:" in details:
-                        try:
-                            metadata_lines = details.split("IGDB Metadata:\n")[1].split("\n")
-                            for line in metadata_lines:
-                                if line.startswith("Game: "):
-                                    # Extract game name, removing year/platform in parentheses
-                                    game_name = line.split(": ", 1)[1].split(" (", 1)[0]
-                                    break
-                        except Exception:
-                            pass # Fallback to original name on parsing error
+                    # Prioritize the stored IGDB name, fall back to the user's requested name
+                    igdb_game_name = current_request[15] if len(current_request) > 15 else None
+                    display_game_name = igdb_game_name if igdb_game_name else current_request[4]
 
                     user = await self.bot.fetch_user(current_request[1])
-                    await user.send(f"✅ Your request for '{game_name}' has been fulfilled!")
+                    await user.send(f"✅ Your request for '{display_game_name}' has been fulfilled!")
                 except:
                     logger.warning(f"Could not DM user {current_request[1]}")
             
@@ -450,10 +441,11 @@ class RequestAdminView(discord.ui.View):
         current_request = self.requests[self.current_index]
         
         class RejectModal(discord.ui.Modal):
-            def __init__(self, view, request_data):
+            def __init__(self, view, request_data, db):
                 super().__init__(title="Reject Request")
                 self.view = view
                 self.request_data = request_data
+                self.db = db
                 
                 self.reason = discord.ui.InputText(
                     label="Rejection Reason",
@@ -471,8 +463,7 @@ class RequestAdminView(discord.ui.View):
                 reason = self.reason.value or None
                 
                 try:
-                    db_path = Path('data') / 'requests.db'
-                    async with aiosqlite.connect(str(db_path)) as db:
+                    async with self.db.get_connection() as db:
                         await db.execute(
                             """
                             UPDATE requests 
@@ -491,8 +482,12 @@ class RequestAdminView(discord.ui.View):
                         
                         # Notify user
                         try:
+                            # Prioritize the stored IGDB name, fall back to the user's requested name
+                            igdb_game_name = self.request_data[15] if len(self.request_data) > 15 else None
+                            display_game_name = igdb_game_name if igdb_game_name else self.request_data[4]
+
                             user = await self.view.bot.fetch_user(self.request_data[1])
-                            message = f"❌ Your request for '{self.request_data[4]}' has been rejected."
+                            message = f"❌ Your request for '{display_game_name}' has been rejected."
                             if reason:
                                 message += f"\nReason: {reason}"
                             await user.send(message)
@@ -523,7 +518,7 @@ class RequestAdminView(discord.ui.View):
                         ephemeral=True
                     )
         
-        modal = RejectModal(self, current_request)
+        modal = RejectModal(self, current_request, self.db)
         await interaction.response.send_modal(modal)
     
     async def note_callback(self, interaction: discord.Interaction):
@@ -535,10 +530,11 @@ class RequestAdminView(discord.ui.View):
         current_request = self.requests[self.current_index]
         
         class NoteModal(discord.ui.Modal):
-            def __init__(self, view, request_data):
+            def __init__(self, view, request_data, db):
                 super().__init__(title="Add Note to Request")
                 self.view = view
                 self.request_data = request_data
+                self.db = db
                 
                 # Show current note if exists
                 current_note = request_data[11] or ""
@@ -559,8 +555,7 @@ class RequestAdminView(discord.ui.View):
                 note = self.note.value
                 
                 try:
-                    db_path = Path('data') / 'requests.db'
-                    async with aiosqlite.connect(str(db_path)) as db:
+                    async with self.view.db.get_connection() as db:
                         await db.execute(
                             "UPDATE requests SET notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                             (note, request_id)
@@ -587,7 +582,7 @@ class RequestAdminView(discord.ui.View):
                         ephemeral=True
                     )
         
-        modal = NoteModal(self, current_request)
+        modal = NoteModal(self, current_request, self.db)
         await interaction.response.send_modal(modal)
     
     async def refresh_callback(self, interaction: discord.Interaction):
@@ -599,8 +594,7 @@ class RequestAdminView(discord.ui.View):
         await interaction.response.defer()
         
         try:
-            db_path = Path('data') / 'requests.db'
-            async with aiosqlite.connect(str(db_path)) as db:
+            async with self.db.get_connection() as db:
                 cursor = await db.execute(
                     "SELECT * FROM requests ORDER BY created_at DESC"
                 )
@@ -656,13 +650,14 @@ class RequestAdminView(discord.ui.View):
 class UserRequestsView(discord.ui.View):
     """Paginated view for users to manage their own requests"""
     
-    def __init__(self, bot, requests_data, user_id):
+    def __init__(self, bot, requests_data, user_id, db):
         super().__init__(timeout=300)  # 5 minute timeout
         self.bot = bot
         self.requests = requests_data
         self.user_id = user_id
         self.current_index = 0
         self.message = None
+        self.db = db
         
         # Create buttons
         self.back_button = discord.ui.Button(
@@ -818,9 +813,7 @@ class UserRequestsView(discord.ui.View):
                 async def check_platform():
                     from pathlib import Path
                     import aiosqlite
-                    db_path = Path('data') / 'requests.db'
-                    
-                    async with aiosqlite.connect(str(db_path)) as db:
+                    async with self.db.get_connection() as db:
                         cursor = await db.execute(
                             "SELECT in_romm FROM platform_mappings WHERE id = ?",
                             (platform_mapping_id,)
@@ -1091,8 +1084,7 @@ class UserRequestsView(discord.ui.View):
                 reason = self.reason.value or "User cancelled"
                 
                 try:
-                    db_path = Path('data') / 'requests.db'
-                    async with aiosqlite.connect(str(db_path)) as db:
+                    async with self.view.db.get_connection() as db:
                         await db.execute(
                             """
                             UPDATE requests 
@@ -1184,8 +1176,7 @@ class UserRequestsView(discord.ui.View):
                 note = self.note.value
                 
                 try:
-                    db_path = Path('data') / 'requests.db'
-                    async with aiosqlite.connect(str(db_path)) as db:
+                    async with self.view.db.get_connection() as db:
                         await db.execute(
                             "UPDATE requests SET notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                             (note, request_id)
@@ -1243,8 +1234,7 @@ class UserRequestsView(discord.ui.View):
         await interaction.response.defer()
         
         try:
-            db_path = Path('data') / 'requests.db'
-            async with aiosqlite.connect(str(db_path)) as db:
+            async with self.db.get_connection() as db:
                 cursor = await db.execute(
                     "SELECT * FROM requests WHERE user_id = ? ORDER BY created_at DESC",
                     (self.user_id,)
@@ -1532,6 +1522,278 @@ class GameSelectView(discord.ui.View):
         
         await self.message.edit(embed=embed, view=self)
 
+class ExistingGameWithIGDBView(discord.ui.View):
+    """View that combines existing game selection with IGDB matching"""
+    
+    def __init__(self, bot, existing_matches, igdb_matches, platform_name, game_name, author_id):
+        super().__init__(timeout=180)
+        self.bot = bot
+        self.existing_matches = existing_matches
+        self.platform_name = platform_name
+        self.game_name = game_name
+        self.author_id = author_id
+        self.selected_rom = None
+        self.selected_igdb = None
+        self.message = None
+        
+        # Filter IGDB matches to remove games that already exist
+        self.filtered_igdb_matches = self._filter_igdb_matches(existing_matches, igdb_matches)
+        
+        # Add select menu for existing games if multiple
+        if len(existing_matches) > 1:
+            self.existing_select = discord.ui.Select(
+                placeholder="Download existing game from collection",
+                custom_id="existing_game_select",
+                row=0
+            )
+            
+            for rom in existing_matches[:25]:
+                display_name = rom['name'][:75] if len(rom['name']) > 75 else rom['name']
+                file_name = rom.get('fs_name', 'Unknown filename')
+                truncated_filename = (file_name[:47] + '...') if len(file_name) > 50 else file_name
+                
+                self.existing_select.add_option(
+                    label=display_name,
+                    value=str(rom['id']),
+                    description=f"{truncated_filename}"
+                )
+            
+            self.existing_select.callback = self.existing_select_callback
+            self.add_item(self.existing_select)
+        
+        # Add IGDB select menu only if there are non-existing games
+        if self.filtered_igdb_matches:
+            self.igdb_select = discord.ui.Select(
+                placeholder="Or request a different game from IGDB",
+                custom_id="igdb_select",
+                row=1
+            )
+            
+            for i, match in enumerate(self.filtered_igdb_matches[:25]):
+                description = f"{match['release_date']} | {', '.join(match['platforms'][:2])}"
+                if len(description) > 100:
+                    description = description[:97] + "..."
+                
+                self.igdb_select.add_option(
+                    label=match["name"][:100],
+                    description=description,
+                    value=str(i)
+                )
+            
+            self.igdb_select.callback = self.igdb_select_callback
+            self.add_item(self.igdb_select)
+        
+        # Button row
+        button_row = 2
+        
+        # If single existing match, add download button
+        if len(existing_matches) == 1:
+            download_btn = discord.ui.Button(
+                label="Download Existing",
+                style=discord.ButtonStyle.success,
+                row=button_row
+            )
+            download_btn.callback = lambda i: self.handle_single_existing(i, existing_matches[0])
+            self.add_item(download_btn)
+        
+        # Add "Request Different Version" button
+        request_different = discord.ui.Button(
+            label="Request Different Version",
+            style=discord.ButtonStyle.primary,
+            row=button_row
+        )
+        request_different.callback = self.request_different_callback
+        self.add_item(request_different)
+        
+        # Add "Cancel" button
+        cancel_button = discord.ui.Button(
+            label="Cancel",
+            style=discord.ButtonStyle.secondary,
+            row=button_row
+        )
+        cancel_button.callback = self.cancel_callback
+        self.add_item(cancel_button)
+    
+    def _filter_igdb_matches(self, existing_roms, igdb_matches):
+        """Filter out IGDB games that already exist in the collection"""
+        if not igdb_matches:
+            return []
+        
+        filtered = []
+        
+        for igdb_game in igdb_matches:
+            igdb_name = igdb_game.get('name', '').lower()
+            
+            # Normalize IGDB name for comparison
+            import re
+            igdb_normalized = re.sub(r'[:\-\s]+', ' ', igdb_name).strip()
+            
+            # Check if this IGDB game matches any existing ROM
+            is_existing = False
+            for rom in existing_roms:
+                rom_name = rom.get('name', '').lower()
+                rom_normalized = re.sub(r'[:\-\s]+', ' ', rom_name).strip()
+                
+                # Check for high similarity or exact match
+                if (igdb_normalized == rom_normalized or 
+                    self._calculate_similarity(igdb_normalized, rom_normalized) > 0.85):
+                    is_existing = True
+                    break
+            
+            # Only include if it doesn't match any existing game
+            if not is_existing:
+                filtered.append(igdb_game)
+        
+        return filtered
+    
+    def _calculate_similarity(self, str1: str, str2: str) -> float:
+        """Simple similarity calculation (you can reuse the one from Request cog)"""
+        if not str1 or not str2:
+            return 0.0
+        
+        # Remove common words
+        common_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to'}
+        words1 = set(word for word in str1.lower().split() if word not in common_words)
+        words2 = set(word for word in str2.lower().split() if word not in common_words)
+        
+        if not words1 or not words2:
+            return 0.0
+        
+        intersection = words1.intersection(words2)
+        union = words1.union(words2)
+        
+        return len(intersection) / len(union) if union else 0.0
+    
+    async def existing_select_callback(self, interaction: discord.Interaction):
+        """Handle existing game selection for download"""
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This isn't for you!", ephemeral=True)
+            return
+        
+        selected_rom_id = int(interaction.data['values'][0])
+        self.selected_rom = next((rom for rom in self.existing_matches if rom['id'] == selected_rom_id), None)
+        
+        if self.selected_rom:
+            # Show full ROM view for download
+            await self.show_rom_for_download(interaction, self.selected_rom)
+    
+    async def igdb_select_callback(self, interaction: discord.Interaction):
+        """Handle IGDB game selection for request"""
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This isn't for you!", ephemeral=True)
+            return
+        
+        game_index = int(interaction.data['values'][0])
+        self.selected_igdb = self.filtered_igdb_matches[game_index]  # Use filtered list
+        
+        # Clear all items completely - no buttons at all
+        self.clear_items()
+        
+        # Update the embed to show selection
+        embed = discord.Embed(
+            title="Processing Request",
+            description=f"Submitting request for **{self.selected_igdb['name']}**...",
+            color=discord.Color.blue()
+        )
+        
+        # Update the message with no view components
+        await interaction.response.edit_message(embed=embed, view=self)
+        
+        # Process as a new request
+        request_cog = self.bot.get_cog('Request')
+        if request_cog:
+            await request_cog.process_request(
+                interaction,
+                self.platform_name,
+                self.selected_igdb['name'],  # Use IGDB name
+                None,  # No additional details
+                self.selected_igdb,
+                self.message
+            )
+            self.stop()
+        
+    async def handle_single_existing(self, interaction: discord.Interaction, rom_data):
+        """Handle download of single existing game"""
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This isn't for you!", ephemeral=True)
+            return
+        
+        await self.show_rom_for_download(interaction, rom_data)
+    
+    async def show_rom_for_download(self, interaction, rom_data):
+        """Show the full ROM view for downloading"""
+        # Fetch full ROM details and show download interface
+        try:
+            detailed_rom = await self.bot.fetch_api_endpoint(f'roms/{rom_data["id"]}')
+            if detailed_rom:
+                rom_data.update(detailed_rom)
+        except Exception as e:
+            logger.error(f"Error fetching ROM details: {e}")
+        
+        from .search import ROM_View
+        rom_view = ROM_View(self.bot, [rom_data], self.author_id, self.platform_name)
+        rom_view.remove_item(rom_view.select)
+        rom_view._selected_rom = rom_data
+        
+        rom_embed, cover_file = await rom_view.create_rom_embed(rom_data)
+        await rom_view.update_file_select(rom_data)
+        
+        # Clear and rebuild view with download options
+        self.clear_items()
+        
+        # Copy download components from ROM_View
+        for item in rom_view.children:
+            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                self.add_item(item)
+        
+        if cover_file:
+            await interaction.response.edit_message(
+                content="✅ **Download this game:**",
+                embed=rom_embed,
+                view=self,
+                file=cover_file
+            )
+        else:
+            await interaction.response.edit_message(
+                content="✅ **Download this game:**",
+                embed=rom_embed,
+                view=self
+            )
+    
+    async def request_different_callback(self, interaction: discord.Interaction):
+        """User wants to request a different version"""
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This isn't for you!", ephemeral=True)
+            return
+        
+        from .requests import VariantRequestModal
+        modal = VariantRequestModal(
+            self.bot,
+            self.platform_name,
+            self.game_name,
+            None,
+            self.igdb_matches if self.igdb_matches else [],
+            interaction
+        )
+        await interaction.response.send_modal(modal)
+        self.stop()
+    
+    async def cancel_callback(self, interaction: discord.Interaction):
+        """Cancel the request"""
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This isn't for you!", ephemeral=True)
+            return
+            
+        self.clear_items()
+        cancelled_button = discord.ui.Button(
+            label="Cancelled",
+            style=discord.ButtonStyle.secondary,
+            disabled=True
+        )
+        self.add_item(cancelled_button)
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
 class ExistingGameView(discord.ui.View):
     """View for when requested games already exist in the collection"""
     
@@ -1732,12 +1994,8 @@ class Request(commands.Cog):
         self.bot = bot
         self.igdb: Optional[IGDBClient] = None
         
-        # Create data directory if it doesn't exist
-        self.data_dir = Path('data')
-        self.data_dir.mkdir(exist_ok=True)
-        
-        # Set database path in data directory
-        self.db_path = self.data_dir / 'requests.db'
+        # Use master db
+        self.db = bot.db
         
         self.requests_enabled = bot.config.REQUESTS_ENABLED
         bot.loop.create_task(self.setup())
@@ -1752,191 +2010,45 @@ class Request(commands.Cog):
     
     async def setup(self):
         """Set up database and initialize IGDB client"""
-        await self.setup_database()
-        await self.initialize_platform_mappings()
         try:
+            # Initialize IGDB client
             self.igdb = IGDBClient()
+            
+            # Sync Romm platforms (mappings already initialized by database)
+            await self.sync_romm_platforms()
+            
+            logger.debug("Request cog setup completed successfully")
         except ValueError as e:
             logger.warning(f"IGDB integration disabled: {e}")
             self.igdb = None
+            # Still try to sync platforms even without IGDB
+            try:
+                await self.sync_romm_platforms()
+            except Exception as sync_error:
+                logger.error(f"Failed to sync platforms: {sync_error}")
             
+    async def _get_canonical_platform_name(self, platform_name: str) -> Optional[str]:
+        """Looks up the canonical display_name for a given platform alias."""
+        if not platform_name:
+            return None
+        try:
+            async with self.db.get_connection() as db:
+                cursor = await db.execute(
+                    """SELECT display_name FROM platform_mappings 
+                       WHERE LOWER(display_name) = LOWER(?) OR LOWER(folder_name) = LOWER(?)
+                       LIMIT 1""",
+                    (platform_name, platform_name)
+                )
+                result = await cursor.fetchone()
+                return result[0] if result else platform_name
+        except Exception:
+            # If DB fails, fallback to using the original name
+            return platform_name
+    
     @property
     def igdb_enabled(self) -> bool:
         """Check if IGDB integration is enabled"""
         return self.igdb is not None
-    
-    
-    async def setup_database(self):
-        """Create the requests database and tables if they don't exist"""
-        async with aiosqlite.connect(str(self.db_path), timeout=20.0) as db:
-            # Enable WAL mode for better concurrent access
-            await db.execute("PRAGMA journal_mode=WAL")
-            await db.execute("PRAGMA busy_timeout=5000")
-            await db.execute("PRAGMA synchronous=NORMAL")
-            
-            # Create or update the requests table
-            await db.execute('''
-                CREATE TABLE IF NOT EXISTS requests (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
-                    username TEXT NOT NULL,
-                    platform TEXT NOT NULL,
-                    game_name TEXT NOT NULL,
-                    details TEXT,
-                    status TEXT DEFAULT 'pending',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    fulfilled_by INTEGER,
-                    fulfiller_name TEXT,
-                    notes TEXT,
-                    auto_fulfilled BOOLEAN DEFAULT 0
-                )
-            ''')
-            
-            # Check which columns exist before altering the table
-            cursor = await db.execute("PRAGMA table_info(requests)")
-            columns = await cursor.fetchall()
-            column_names = [column[1] for column in columns]
-            
-            # Add 'igdb_id' column if it doesn't exist
-            if 'igdb_id' not in column_names:
-                await db.execute("ALTER TABLE requests ADD COLUMN igdb_id INTEGER")
-            
-            # Create subscribers table
-            await db.execute('''
-                CREATE TABLE IF NOT EXISTS request_subscribers (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    request_id INTEGER NOT NULL,
-                    user_id INTEGER NOT NULL,
-                    username TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (request_id) REFERENCES requests (id),
-                    UNIQUE(request_id, user_id)
-                )
-            ''')
-            
-            # Master platforms table for ALL possible platforms
-            await db.execute('''
-                CREATE TABLE IF NOT EXISTS platform_mappings (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    display_name TEXT NOT NULL UNIQUE,
-                    folder_name TEXT NOT NULL,
-                    igdb_slug TEXT,
-                    moby_slug TEXT,
-                    in_romm BOOLEAN DEFAULT 0,
-                    romm_id INTEGER,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            
-            # Check if 'platform_mapping_id' column exists before adding it
-            if 'platform_mapping_id' not in column_names:
-                await db.execute('''
-                    ALTER TABLE requests ADD COLUMN platform_mapping_id INTEGER 
-                    REFERENCES platform_mappings(id)
-                ''')
-            
-            await db.commit()
-
-    async def initialize_platform_mappings(self):
-        """Initialize the master platform list from config file"""
-        try:
-            platforms_file = Path('igdb') / 'platforms_master.json'
-            
-            if platforms_file.exists():
-                with open(platforms_file, 'r') as f:
-                    master_platforms = json.load(f)
-                
-                async with aiosqlite.connect(str(self.db_path)) as db:
-                    # Enable WAL mode for this connection too
-                    await db.execute("PRAGMA journal_mode=WAL")
-                    await db.execute("PRAGMA busy_timeout=5000")
-                    
-                    # Check if table exists and what columns it has
-                    cursor = await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='platform_mappings'")
-                    table_exists = await cursor.fetchone()
-                    
-                    if table_exists:
-                        # Get current columns
-                        cursor = await db.execute("PRAGMA table_info(platform_mappings)")
-                        columns = await cursor.fetchall()
-                        column_names = [column[1] for column in columns]
-                        
-                        # Check if we need to migrate from old schema to new
-                        if 'igdb_id' in column_names and 'igdb_slug' not in column_names:
-                            logger.info("Migrating platform_mappings table to new schema...")
-                            
-                            # Create new table with correct schema
-                            await db.execute('''
-                                CREATE TABLE platform_mappings_new (
-                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                    display_name TEXT NOT NULL UNIQUE,
-                                    folder_name TEXT NOT NULL,
-                                    igdb_slug TEXT,
-                                    moby_slug TEXT,
-                                    in_romm BOOLEAN DEFAULT 0,
-                                    romm_id INTEGER,
-                                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                                )
-                            ''')
-                            
-                            # Copy data from old table (preserving what we can)
-                            await db.execute('''
-                                INSERT INTO platform_mappings_new (id, display_name, folder_name, in_romm, romm_id, created_at)
-                                SELECT id, display_name, folder_name, in_romm, romm_id, created_at
-                                FROM platform_mappings
-                            ''')
-                            
-                            # Drop old table and rename new one
-                            await db.execute("DROP TABLE platform_mappings")
-                            await db.execute("ALTER TABLE platform_mappings_new RENAME TO platform_mappings")
-                            
-                            logger.info("Migration completed")
-                        elif 'igdb_slug' not in column_names:
-                            # Add missing columns if they don't exist
-                            await db.execute("ALTER TABLE platform_mappings ADD COLUMN igdb_slug TEXT")
-                            await db.execute("ALTER TABLE platform_mappings ADD COLUMN moby_slug TEXT")
-                    else:
-                        # Create new table with correct schema
-                        await db.execute('''
-                            CREATE TABLE platform_mappings (
-                                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                display_name TEXT NOT NULL UNIQUE,
-                                folder_name TEXT NOT NULL,
-                                igdb_slug TEXT,
-                                moby_slug TEXT,
-                                in_romm BOOLEAN DEFAULT 0,
-                                romm_id INTEGER,
-                                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                            )
-                        ''')
-                    
-                    # Mark all as not in romm initially
-                    await db.execute("UPDATE platform_mappings SET in_romm = 0")
-                    
-                    # Insert/update each platform
-                    for platform in master_platforms:
-                        await db.execute('''
-                            INSERT OR REPLACE INTO platform_mappings 
-                            (display_name, folder_name, igdb_slug, moby_slug)
-                            VALUES (?, ?, ?, ?)
-                        ''', (
-                            platform['display_name'],
-                            platform['folder_name'],
-                            platform.get('igdb_slug'),
-                            platform.get('moby_slug')
-                        ))
-                    
-                    # IMPORTANT: Commit and close the connection before calling sync_romm_platforms
-                    await db.commit()
-                
-                # Now sync with current Romm platforms - OUTSIDE of the previous connection
-                await self.sync_romm_platforms()
-                
-                logger.info("Platform mappings initialized successfully")
-                    
-        except Exception as e:
-            logger.error(f"Error initializing platform mappings: {e}")
 
     async def sync_romm_platforms(self):
         """Sync current Romm platforms with master list"""
@@ -1945,11 +2057,7 @@ class Request(commands.Cog):
             if not raw_platforms:
                 return
             
-            async with aiosqlite.connect(str(self.db_path)) as db:
-                # Enable WAL mode for this connection
-                await db.execute("PRAGMA journal_mode=WAL")
-                await db.execute("PRAGMA busy_timeout=5000")
-                
+            async with self.db.get_connection() as db:
                 for platform in raw_platforms:
                     display_name = self.bot.get_platform_display_name(platform)
                     platform_name = platform.get('name', '').lower()
@@ -1983,12 +2091,8 @@ class Request(commands.Cog):
         try:
             user_input = ctx.value.lower()
             
-            async with aiosqlite.connect(str(self.db_path), timeout=5.0) as db:
-                # Enable WAL mode for read operations too
-                await db.execute("PRAGMA journal_mode=WAL")
-                await db.execute("PRAGMA query_only=ON")
-                await db.execute("PRAGMA busy_timeout=1000")
-                
+            # Use the master database's connection method
+            async with self.db.get_connection() as db:
                 cursor = await db.execute('''
                     SELECT display_name, in_romm, folder_name
                     FROM platform_mappings
@@ -2002,7 +2106,7 @@ class Request(commands.Cog):
                 
                 results = await cursor.fetchall()
             
-            # Process results outside database connection
+            # Process results
             choices = []
             for display_name, in_romm, folder_name in results:
                 if in_romm:
@@ -2017,13 +2121,6 @@ class Request(commands.Cog):
             
             return choices
             
-        except aiosqlite.OperationalError as e:
-            if "database is locked" in str(e):
-                logger.warning("Database locked during autocomplete, returning empty list")
-                return []
-            else:
-                logger.error(f"Error in platform autocomplete: {e}")
-                return []
         except Exception as e:
             logger.error(f"Error in platform autocomplete: {e}")
             return []
@@ -2072,15 +2169,15 @@ class Request(commands.Cog):
             if not search_results:
                 return False, []
 
-            # Check for close matches
+            # Return all reasonably matching games
             matches = []
             game_name_lower = game_name.lower()
             for rom in search_results:
                 rom_name = rom.get('name', '').lower()
-                # Use more sophisticated matching
+                # Simple matching - let the user decide what they want
                 if (game_name_lower in rom_name or 
                     rom_name in game_name_lower or
-                    self.calculate_similarity(game_name_lower, rom_name) > 0.8):
+                    self.calculate_similarity(game_name_lower, rom_name) > 0.7):
                     matches.append(rom)
 
             return bool(matches), matches
@@ -2130,7 +2227,7 @@ class Request(commands.Cog):
         
     @commands.Cog.listener()
     async def on_batch_scan_complete(self, new_games: List[Dict[str, str]]):
-        """Handle batch scan completion event"""
+        """Handle batch scan completion event with improved matching logic."""
         async with self.processing_lock:
             try:
                 if not new_games:
@@ -2138,126 +2235,108 @@ class Request(commands.Cog):
 
                 logger.info(f"Processing batch of {len(new_games)} new games")
 
-                # Fetch ALL data first in one transaction
                 pending_requests = []
-                all_subscribers = {}
+                all_subscribers = defaultdict(list)
                 
-                async with aiosqlite.connect(str(self.db_path)) as db:
-                    await db.execute("PRAGMA busy_timeout=5000")
-                    
-                    # Get all pending requests
-                    cursor = await db.execute(
-                        "SELECT id, user_id, username, platform, game_name FROM requests WHERE status = 'pending'"
-                    )
+                async with self.db.get_connection() as db:
+                    cursor = await db.execute("SELECT * FROM requests WHERE status = 'pending'")
                     pending_requests = await cursor.fetchall()
                     
                     if not pending_requests:
                         return
                     
-                    # Get ALL subscribers at once
                     request_ids = [req[0] for req in pending_requests]
                     placeholders = ','.join('?' * len(request_ids))
                     cursor = await db.execute(
                         f"SELECT request_id, user_id FROM request_subscribers WHERE request_id IN ({placeholders})",
                         request_ids
                     )
-                    subscribers_data = await cursor.fetchall()
-                    
-                    # Group subscribers by request_id
-                    for req_id, user_id in subscribers_data:
-                        if req_id not in all_subscribers:
-                            all_subscribers[req_id] = []
+                    for req_id, user_id in await cursor.fetchall():
                         all_subscribers[req_id].append(user_id)
                 
-                # Process matches OUTSIDE database transaction
                 fulfillments = []
                 notifications = defaultdict(list)
                 
-                for req_id, user_id, username, req_platform, req_game in pending_requests:
+                for req in pending_requests:
+                    # Unpack the full request tuple
+                    req_id, user_id, _, req_platform, req_game, _, _, _, _, _, _, _, _, req_igdb_id, _, req_igdb_game_name = req
+
                     for new_game in new_games:
-                        if (req_platform.lower() == new_game['platform'].lower() and 
-                            self.calculate_similarity(req_game.lower(), new_game['name'].lower()) > 0.8):
-                            
-                            # Try to get ROM ID if available
-                            rom_id = None
-                            if 'rom_id' in new_game:  # If the batch scan provides ROM IDs
-                                rom_id = new_game['rom_id']
-                            
-                            fulfillments.append({
-                                'req_id': req_id,
-                                'user_id': user_id,
-                                'game_name': new_game['name'],
-                                'rom_id': rom_id  # Add ROM ID to fulfillment data
-                            })
-                            
-                            # Enhanced logging with ROM ID
-                            if rom_id:
-                                logger.info(f"Request matched to ROM - Request ID: #{req_id} | ROM ID: #{rom_id} | Game: '{new_game['name']}' | Platform: {req_platform}")
-                            
-                            # Add notifications
-                            notifications[user_id].append(new_game['name'])
-                            for subscriber_id in all_subscribers.get(req_id, []):
-                                notifications[subscriber_id].append(new_game['name'])
-                            break
-                
-                # Update database in a single transaction
-                if fulfillments:
-                    async with aiosqlite.connect(str(self.db_path)) as db:
-                        await db.execute("PRAGMA busy_timeout=5000")
+                        new_game_igdb_id = new_game.get('igdb_id')
+
+                        # NORMALIZE PLATFORM NAMES ---
+                        canonical_req_platform = await self._get_canonical_platform_name(req_platform)
+                        canonical_new_game_platform = await self._get_canonical_platform_name(new_game['platform'])
+                        platform_match = canonical_req_platform and (canonical_req_platform == canonical_new_game_platform)
                         
+                        # PRIORITIZE IGDB NAME FOR SIMILARITY CHECK ---
+                        name_to_compare = req_igdb_game_name if req_igdb_game_name else req_game
+                        name_match = self.calculate_similarity(name_to_compare, new_game['name']) > 0.8
+                        
+                        igdb_match = req_igdb_id is not None and new_game_igdb_id is not None and req_igdb_id == new_game_igdb_id
+
+                        if platform_match and (igdb_match or name_match):
+                            fulfillments.append({'req_id': req_id, 'game_name': new_game['name']})
+                            notifications[user_id].append(new_game)
+                            for subscriber_id in all_subscribers.get(req_id, []):
+                                notifications[subscriber_id].append(new_game)
+                            logger.info(f"Request #{req_id} ('{req_game}') matched to new game '{new_game['name']}'.")
+                            break 
+                
+                if fulfillments:
+                    async with self.db.get_connection() as db:
                         await db.executemany(
-                            """
-                            UPDATE requests 
-                            SET status = 'fulfilled',
-                                updated_at = CURRENT_TIMESTAMP,
-                                notes = ?,
-                                auto_fulfilled = 1
-                            WHERE id = ?
-                            """,
-                            [(f"Automatically fulfilled by system scan - Found: {f['game_name']}", 
-                              f['req_id']) for f in fulfillments]
+                            """UPDATE requests 
+                               SET status = 'fulfilled', updated_at = CURRENT_TIMESTAMP, 
+                                   notes = ?, auto_fulfilled = 1
+                               WHERE id = ?""",
+                            [(f"Automatically fulfilled - Found: {f['game_name']}", f['req_id']) for f in fulfillments]
                         )
                         await db.commit()
-                        
-                        for fulfillment in fulfillments:
-                            # Get the original request details
-                            original_request = next((req for req in pending_requests if req[0] == fulfillment['req_id']), None)
-                            if original_request:
-                                logger.info(f"Request auto-fulfilled - System Scan | Request ID: #{fulfillment['req_id']} | Discord: {original_request[2]} (ID: {original_request[1]}) | Game: '{original_request[4]}' | Platform: {original_request[3]} | Matched ROM: '{fulfillment['game_name']}'")
+                    
+                    logger.info(f"Sending DMs with links for {len(notifications)} user(s).")
+                    for user_id, fulfilled_games in notifications.items():
+                        try:
+                            user = await self.bot.fetch_user(user_id)
+                            if not user: continue
 
-                        # Send notifications with rate limiting
-                        for user_id, fulfilled_games in notifications.items():
-                            try:
-                                user = await self.bot.fetch_user(user_id)
-                                if user:
-                                    # Remove duplicates from the list
-                                    unique_games = list(set(fulfilled_games))
-                                    
-                                    if len(unique_games) == 1:
-                                        message = (
-                                            f":ballot_box_with_check: A game you requested is now "
-                                            f"available: '{unique_games[0]}'"
-                                        )
-                                    else:
-                                        game_list = "\n• ".join(unique_games)
-                                        message = (
-                                            f":ballot_box_with_check:  Multiple games that you requested are now available:\n• {game_list}"
-                                        )
-                                    
-                                    await user.send(
-                                        message + "\n:inbox_tray:  You can use the search command to find and download your request(s)."
-                                    )
-                                    await asyncio.sleep(1)  # Rate limit between notifications
-                            except Exception as e:
-                                logger.warning(f"Could not notify user {user_id}: {e}")
+                            # De-duplicate games in case user subscribed to multiple similar requests
+                            unique_games = {g['id']: g for g in fulfilled_games}.values()
 
+                            for game in unique_games:
+                                game_name = game['name']
+                                rom_id = game['id']
+                                filename = game.get('fs_name') or game.get('file_name')
+                                
+                                romm_url = f"{self.bot.config.DOMAIN}/rom/{rom_id}"
+                                
+                                message_parts = [f"✅ Your request for **{game_name}** is now available!"]
+                                link_parts = [f"[View on RomM]({romm_url})"]
+
+                                if filename:
+                                    safe_filename = quote(filename)
+                                    download_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_id}/content/{safe_filename}?"
+                                    link_parts.append(f"[Direct Download]({download_url})")
+                                
+                                # Join the links with a separator and add them as a single line
+                                message_parts.append(" • ".join(link_parts))
+
+                                message = "\n".join(message_parts)
+                                await user.send(message)
+                                await asyncio.sleep(1)
+
+                        except discord.Forbidden:
+                            logger.warning(f"Could not notify user {user_id}: They have DMs disabled.")
+                        except Exception as e:
+                            logger.warning(f"Could not notify user {user_id}: {e}")
+                    
             except Exception as e:
                 logger.error(f"Error in batch scan completion handler: {e}", exc_info=True)
 
     async def check_pending_requests(self, platform: str, game_name: str) -> List[Tuple[int, int, str]]:
         """Check if there are any pending requests for this game"""
         try:
-            async with aiosqlite.connect(str(self.db_path)) as db:
+            async with self.db.get_connection() as db:
                 cursor = await db.execute(
                     """
                     SELECT id, user_id, game_name 
@@ -2323,9 +2402,10 @@ class Request(commands.Cog):
             user_already_requested = False
             pending_count = 0
             
-            async with aiosqlite.connect(str(self.db_path)) as db:
-                await db.execute("PRAGMA busy_timeout=5000")
-                
+            async with self.db.get_connection() as db:
+                igdb_id = None
+                if selected_game and selected_game.get('id'):
+                    igdb_id = selected_game['id']
                 # Get existing requests
                 cursor = await db.execute(
                     """
@@ -2507,8 +2587,7 @@ class Request(commands.Cog):
                         details = igdb_details
 
                 # Insert the new request
-                async with aiosqlite.connect(str(self.db_path)) as db:
-                    await db.execute("PRAGMA busy_timeout=5000")
+                async with self.db.get_connection() as db:
                     
                     cursor = await db.execute(
                         """
@@ -2607,11 +2686,13 @@ class Request(commands.Cog):
                         
                     return await ctx_or_interaction.respond(**kwargs)
             
-            async with aiosqlite.connect(str(self.db_path)) as db:
+            async with self.db.get_connection() as db:
                 # Extract IGDB ID if available
                 igdb_id = None
+                igdb_name = None
                 if selected_game and selected_game.get('id'):
                     igdb_id = selected_game['id']
+                    igdb_name = selected_game.get('name')
                 
                 # Check for existing pending request (only if platform exists in Romm)
                 if platform_exists:
@@ -2669,10 +2750,10 @@ class Request(commands.Cog):
                 # Insert the new request with platform mapping
                 cursor = await db.execute(
                     """
-                    INSERT INTO requests (user_id, username, platform, game_name, details, igdb_id, platform_mapping_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO requests (user_id, username, platform, game_name, details, igdb_id, platform_mapping_id, igdb_game_name)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (author.id, author_name, platform_display_name, game, details, igdb_id, mapping_id)
+                    (author.id, author_name, platform_display_name, game, details, igdb_id, mapping_id, igdb_name) # <-- ADD igdb_name HERE
                 )
                 await db.commit()
                 
@@ -2745,7 +2826,7 @@ class Request(commands.Cog):
     async def get_request_igdb_data(self, request_id: int) -> Optional[Dict]:
         """Retrieve IGDB data for a request if IGDB ID was stored"""
         try:
-            async with aiosqlite.connect(str(self.db_path)) as db:
+            async with self.db.get_connection() as db:
                 cursor = await db.execute(
                     "SELECT igdb_id, game_name, platform FROM requests WHERE id = ?",
                     (request_id,)
@@ -2819,7 +2900,7 @@ class Request(commands.Cog):
             # Clean platform name (remove [NEW] prefix if present)
             platform_clean = platform.replace("[NEW] ", "")
             # Check if platform exists in our mappings
-            async with aiosqlite.connect(str(self.db_path)) as db:
+            async with self.db.get_connection() as db:
                 cursor = await db.execute('''
                     SELECT id, in_romm, romm_id, folder_name, igdb_slug, moby_slug
                     FROM platform_mappings
@@ -2854,154 +2935,78 @@ class Request(commands.Cog):
                     exists, matches = await self.check_if_game_exists(platform_display_name, game)
                     
                     if exists:
-                        # Game exists in collection - show options to download or request different version
+                        # Game exists in collection - but also fetch IGDB matches
                         search_cog = self.bot.get_cog('Search')
                         platform_with_emoji = search_cog.get_platform_with_emoji(platform_display_name) if search_cog else platform_display_name
-
-                        # For single match, show ROM_View directly
-                        if len(matches) == 1:
-                            # Fetch full ROM details
-                            rom_data = matches[0]
+                        
+                        # Fetch IGDB matches regardless of existing games
+                        igdb_matches = []
+                        if self.igdb_enabled:
                             try:
-                                detailed_rom = await self.bot.fetch_api_endpoint(f'roms/{rom_data["id"]}')
-                                if detailed_rom:
-                                    rom_data.update(detailed_rom)
+                                igdb_platform_slug = None
+                                if platform_mapping:
+                                    igdb_platform_slug = platform_mapping[4]  # igdb_slug from mapping
+                                igdb_matches = await self.igdb.search_game(game, igdb_platform_slug)
                             except Exception as e:
-                                logger.error(f"Error fetching ROM details: {e}")
-                            
-                            # Create ROM_View for immediate download access
-                            rom_view = ROM_View(self.bot, [rom_data], ctx.author.id, platform_display_name)
-                            rom_view.remove_item(rom_view.select)  # Remove selection since single item
-                            rom_view._selected_rom = rom_data
-                            
-                            # Create embed using ROM_View's method
-                            rom_embed, cover_file = await rom_view.create_rom_embed(rom_data)
-                            await rom_view.update_file_select(rom_data)
-                            
-                            # Collect all download buttons and file select
-                            download_buttons = []
-                            file_select = None
-                            items_to_remove = []
-                            
-                            for item in rom_view.children[:]:
-                                if isinstance(item, discord.ui.Button) and "Download" in item.label:
-                                    download_buttons.append(item)
-                                    items_to_remove.append(item)
-                                elif isinstance(item, discord.ui.Select) and item.custom_id == "rom_file_select":
-                                    file_select = item
-                            
-                            # Remove all download buttons temporarily
-                            for item in items_to_remove:
-                                rom_view.remove_item(item)
-                            
-                            # Determine which row to use
-                            button_row = 2 if file_select else 1
-                            
-                            # Re-add download buttons with correct row
-                            for button in download_buttons:
-                                button.row = button_row
-                                rom_view.add_item(button)
-                            
-                            # Add custom buttons for request flow on the same row
-                            request_different_btn = discord.ui.Button(
-                                label="Request Different Version",
-                                style=discord.ButtonStyle.primary,
-                                row=button_row
+                                logger.error(f"Error fetching IGDB data: {e}")
+                        
+                        # Create combined view showing both existing games AND IGDB options
+                        view = ExistingGameWithIGDBView(
+                            self.bot, 
+                            matches,           # Existing games in collection
+                            igdb_matches,      # IGDB search results
+                            platform_display_name, 
+                            game, 
+                            ctx.author.id
+                        )
+                        
+                        # Check if any IGDB games remain after filtering
+                        has_other_games = bool(view.filtered_igdb_matches)
+                        
+                        embed = discord.Embed(
+                            title="Games Found in Collection",
+                            description=f"Found {len(matches)} game(s) matching '{game}' that are already available:",
+                            color=discord.Color.blue()
+                        )
+                        
+                        # Show first few existing games
+                        for i, rom in enumerate(matches[:3]):
+                            embed.add_field(
+                                name=f"✅ {rom.get('name', 'Unknown')}",
+                                value=f"Available now - {rom.get('fs_name', 'Unknown')}",
+                                inline=False
                             )
-                            
-                            async def request_different(interaction):
-                                if interaction.user.id != ctx.author.id:
-                                    await interaction.response.send_message("This isn't for you!", ephemeral=True)
-                                    return
-                                
-                                # Show modal for variant input
-                                modal = VariantRequestModal(
-                                    self.bot,
-                                    platform_display_name,
-                                    game,
-                                    details,
-                                    [],  # igdb_matches will be fetched if needed
-                                    ctx,
-                                    ctx.author.id
-                                )
-                                await interaction.response.send_modal(modal)
-                                rom_view.stop()
-
-                            request_different_btn.callback = request_different
-                            rom_view.add_item(request_different_btn)
-                            
-                            cancel_btn = discord.ui.Button(
-                                label="Cancel",
-                                style=discord.ButtonStyle.secondary,
-                                row=button_row
+                        
+                        if len(matches) > 3:
+                            embed.add_field(
+                                name="...",
+                                value=f"And {len(matches) - 3} more available",
+                                inline=False
                             )
-                            
-                            async def cancel_callback(interaction):
-                                if interaction.user.id != ctx.author.id:
-                                    await interaction.response.send_message("This isn't for you!", ephemeral=True)
-                                    return
-                                await interaction.response.defer()
-                                rom_view.stop()
-
-                            cancel_btn.callback = cancel_callback
-                            rom_view.add_item(cancel_btn)
-                            
-                            # Send message with file if available
-                            if cover_file:
-                                message = await ctx.respond(
-                                    "✅ This game is already available! You can download it now:",
-                                    embed=rom_embed,
-                                    view=rom_view,
-                                    file=cover_file
-                                )
-                            else:
-                                message = await ctx.respond(
-                                    "✅ This game is already available! You can download it now:",
-                                    embed=rom_embed,
-                                    view=rom_view
-                                )
-                            
-                            if isinstance(message, discord.Interaction):
-                                message = await message.original_response()
-                            rom_view.message = message
-                            
-                            await rom_view.wait()
-                            return
-                            
+                        
+                        # Update instructions based on what's available
+                        instructions = ["• **Select an existing game** from the dropdown to download it"]
+                        
+                        if has_other_games:
+                            instructions.append(f"• **Request a different game** - Found {len(view.filtered_igdb_matches)} other game(s) on IGDB")
+                        
+                        instructions.append("• Click **Request Different Version** for ROM hacks, patches, or specific versions")
+                        
+                        embed.add_field(
+                            name="What would you like to do?",
+                            value="\n".join(instructions),
+                            inline=False
+                        )
+                        
+                        message = await ctx.respond(embed=embed, view=view)
+                        
+                        if isinstance(message, discord.Interaction):
+                            view.message = await message.original_response()
                         else:
-                            # Multiple matches - show selection with download capabilities
-                            view = ExistingGameView(self.bot, matches, platform_display_name, game, ctx.author.id)
-                            
-                            embed = discord.Embed(
-                                title="Similar Games Found in Collection",
-                                description=f"Found {len(matches)} game(s) matching '{game}' for platform '{platform_with_emoji}' that are already available:",
-                                color=discord.Color.blue()
-                            )
-                            
-                            for i, rom in enumerate(matches[:5]):
-                                embed.add_field(
-                                    name=rom.get('name', 'Unknown'),
-                                    value=f"File: {rom.get('fs_name', 'Unknown')}",
-                                    inline=False
-                                )
-                            
-                            if len(matches) > 5:
-                                embed.set_footer(text=f"...and {len(matches) - 5} more")
-                            
-                            message = await ctx.respond(embed=embed, view=view)
-                            
-                            if isinstance(message, discord.Interaction):
-                                view.message = await message.original_response()
-                            else:
-                                view.message = message
-                            
-                            await view.wait()
-                            
-                            if view.action == "request_different":
-                                # Continue with request flow
-                                pass  # Fall through to IGDB selection below
-                            else:
-                                return  # User cancelled or downloaded
+                            view.message = message
+                        
+                        await view.wait()
+                        return
                 
                 # Search IGDB for game metadata if enabled
                 igdb_matches = []
@@ -3091,7 +3096,7 @@ class Request(commands.Cog):
         await ctx.defer(ephemeral=True)
 
         try:
-            async with aiosqlite.connect(self.db_path) as db:
+            async with self.db.get_connection() as db:
                 # Fetch requests based on show_pending_only parameter
                 if show_pending_only:
                     cursor = await db.execute(
@@ -3139,7 +3144,7 @@ class Request(commands.Cog):
                         status_counts[status] += 1
 
                 # Create paginated view
-                view = UserRequestsView(self.bot, requests, ctx.author.id)
+                view = UserRequestsView(self.bot, requests, ctx.author.id, self.bot.db)
                 embed = view.create_request_embed(requests[0])
                 
                 # Build status summary
@@ -3192,7 +3197,7 @@ class Request(commands.Cog):
         await ctx.defer(ephemeral=True)
 
         try:
-            async with aiosqlite.connect(self.db_path) as db:
+            async with self.db.get_connection() as db:
                 # Fetch requests based on show_all parameter
                 if show_all:
                     cursor = await db.execute(
@@ -3221,7 +3226,7 @@ class Request(commands.Cog):
                     return
 
                 # Create paginated view
-                view = RequestAdminView(self.bot, requests, ctx.author.id)
+                view = RequestAdminView(self.bot, requests, ctx.author.id, self.bot.db)
                 
                 # Fetch user avatar for the first request
                 user_avatar_url = None
