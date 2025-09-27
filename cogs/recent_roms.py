@@ -13,6 +13,7 @@ import aiosqlite
 import re
 from urllib.parse import quote
 import base64
+import threading
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -29,89 +30,138 @@ class RecentRomsMonitor(commands.Cog):
         self.max_roms_per_post = int(os.getenv('RECENT_ROMS_MAX_PER_POST', '10'))
         self.bulk_display_threshold = int(os.getenv('RECENT_ROMS_BULK_THRESHOLD', '25'))
         self.enabled = os.getenv('RECENT_ROMS_ENABLED', 'TRUE').upper() == 'TRUE'
+
+        # Use shared master database
+        self.db = bot.db
         
-        # State management
-        self.data_dir = Path('data')
-        self.data_dir.mkdir(exist_ok=True)
-        self.db_path = self.data_dir / 'recent_roms.db'
-        
-        # Scan tracking
-        self.current_scan_roms = []
-        self.scan_in_progress = False
+        # Scan tracking (state is managed within the sio_thread)
+        self.current_scan_roms: List[Dict] = []
+        self.current_scan_names: Set[str] = set()
+        self.scan_completion_timer: Optional[asyncio.Task] = None
         
         # IGDB client
         self.igdb = None
         
-        # Socket.IO client (same setup as scan.py)
-        self.sio = socketio.AsyncClient(
-            logger=False,
-            engineio_logger=False,
-            reconnection=True,
-            reconnection_attempts=3
-        )
+        # Socket.IO client
+        self.sio = socketio.AsyncClient(logger=False, engineio_logger=False, reconnection=True, reconnection_attempts=3)
         self._connection_lock = asyncio.Lock()
         
         # Setup handlers before connecting
         self.setup_socket_handlers()
         
-        # Start monitoring
+        # Create a dedicated event loop and thread for Socket.IO
+        self.sio_loop = asyncio.new_event_loop()
+        self.sio_thread = None
+        
         if self.enabled:
             bot.loop.create_task(self.setup())
-            logger.info("Recent ROMs WebSocket monitor enabled")
-    
+            logger.debug("Recent ROMs WebSocket monitor enabled")
+
     def setup_socket_handlers(self):
-        """Set up Socket.IO event handlers"""
+        """Set up Socket.IO event handlers that run in their own thread."""
         
+        async def _trigger_batch_processing_after_delay():
+            """The timer's target. Waits for inactivity then hands off the batch."""
+            try:
+                await asyncio.sleep(300) # Wait for 5 minutes of inactivity
+                
+                logger.info("Scan inactivity timer expired, handing off collected ROMs for processing.")
+                if self.current_scan_roms:
+                    roms_to_process = self.current_scan_roms.copy()
+                    self.current_scan_roms.clear()
+                    self.current_scan_names.clear()
+                    
+                    asyncio.run_coroutine_threadsafe(
+                        self.handle_scan_complete(roms_to_process, {}), self.bot.loop
+                    )
+            except asyncio.CancelledError:
+                logger.debug("Scan completion timer was reset by a new ROM event.")
+
         @self.sio.event
         async def connect():
             logger.info("RecentRomsMonitor connected to websocket server")
-            self.scan_in_progress = False
-            self.current_scan_roms = []
-        
-        @self.sio.event
-        async def disconnect():
-            logger.warning("RecentRomsMonitor disconnected from websocket server")
-            self.scan_in_progress = False
-        
-        @self.sio.on('scan:scanning_platform')
-        async def on_scanning_platform(data):
-            """Platform scan started - just log it"""
-            # Don't set scan_in_progress here - let scan:done handle completion
-            logger.debug(f"Platform scan started: {data.get('name', 'Unknown')}")
+            self.current_scan_roms.clear()
+            self.current_scan_names.clear()
         
         @self.sio.on('scan:scanning_rom')
         async def on_scanning_rom(data):
-            """Handle individual ROM scan events"""
+            """Collects ROMs and resets the inactivity timer."""
             logger.info(f"Received scan:scanning_rom event: {data.get('name', 'Unknown')}")
-            await self.handle_rom_scanned(data)
+            if self.scan_completion_timer and not self.scan_completion_timer.done():
+                self.scan_completion_timer.cancel()
+
+            rom_id = data.get('id')
+            rom_name = data.get('name', 'Unknown')
+
+            # We must check if the ROM was posted before adding it to the batch
+            # To do this safely, we hand off just the DB check to the main loop
+            main_loop_future = asyncio.run_coroutine_threadsafe(self.has_been_posted(rom_id), self.bot.loop)
+            already_posted = main_loop_future.result(timeout=5) # Wait for the result
+
+            if not rom_id or rom_name.lower() in self.current_scan_names or already_posted:
+                return
+
+            rom = {
+                'id': rom_id, 'name': rom_name, 'platform_name': data.get('platform_name', 'Unknown'),
+                'platform_id': data.get('platform_id'), 'file_name': data.get('file_name'),
+                'fs_name': data.get('fs_name'), 'fs_size_bytes': data.get('fs_size_bytes'),
+                'url_cover': data.get('url_cover'), 'created_at': data.get('created_at'),
+            }
+            
+            self.current_scan_names.add(rom_name.lower())
+            self.current_scan_roms.append(rom)
+            logger.debug(f"SIO_THREAD: Queued ROM: {rom['name']} ({len(self.current_scan_roms)} in batch)")
+
+            self.scan_completion_timer = self.sio_loop.create_task(_trigger_batch_processing_after_delay())
 
         @self.sio.on('scan:done')
         async def on_scan_done(stats):
-            """Handle scan completion - this is the main trigger"""
-            if self.current_scan_roms:  # If we accumulated any new ROMs
-                await self.handle_scan_complete(stats)
-            # Always reset state
-            self.current_scan_roms = []
-    
+            """Handles the official scan completion event."""
+            if self.scan_completion_timer and not self.scan_completion_timer.done():
+                self.scan_completion_timer.cancel()
+            
+            if self.current_scan_roms:
+                roms_to_process = self.current_scan_roms.copy()
+                self.current_scan_roms.clear()
+                self.current_scan_names.clear()
+                
+                logger.info(f"Received scan:done, handing off {len(roms_to_process)} ROMs for processing.")
+                asyncio.run_coroutine_threadsafe(
+                    self.handle_scan_complete(roms_to_process, stats), self.bot.loop
+                )
+
+    # --- These methods manage the thread and run on the main bot loop ---
+
+    def start_socketio_thread(self):
+        """Run Socket.IO in a separate thread."""
+        asyncio.set_event_loop(self.sio_loop)
+        self.sio_loop.run_until_complete(self.ensure_connected())
+        self.sio_loop.run_forever()
+
+    async def setup(self):
+        """Setup IGDB client and launch the WebSocket thread."""
+        await self.initialize_igdb()
+        await self.bot.wait_until_ready()
+        
+        if self.enabled:
+            self.sio_thread = threading.Thread(target=self.start_socketio_thread, daemon=True)
+            self.sio_thread.start()
+
+    # --- These methods are now guaranteed to run on the MAIN bot loop ---
+
     async def ensure_connected(self):
-        """Ensure Socket.IO connection is established (same as scan.py)"""
+        """Ensure Socket.IO connection is established."""
         async with self._connection_lock:
             if not self.sio.connected:
+                # ... (this method's content is unchanged)
                 try:
                     base_url = self.config.API_BASE_URL.rstrip('/')
-                    
-                    # Use same auth as scan.py
                     auth_string = f"{self.config.USER}:{self.config.PASS}"
                     auth_bytes = auth_string.encode('ascii')
                     base64_auth = base64.b64encode(auth_bytes).decode('ascii')
-                    
-                    headers = {
-                        'Authorization': f'Basic {base64_auth}',
-                        'User-Agent': 'RommBot/1.0'
-                    }
+                    headers = {'Authorization': f'Basic {base64_auth}', 'User-Agent': 'RommBot/1.0'}
                     
                     logger.debug(f"RecentRomsMonitor connecting to: {base_url}")
-                    
                     await self.sio.connect(
                         base_url,
                         headers=headers,
@@ -119,82 +169,21 @@ class RecentRomsMonitor(commands.Cog):
                         transports=['websocket'],
                         socketio_path='ws/socket.io'
                     )
-                    
                 except Exception as e:
                     logger.error(f"RecentRomsMonitor connection error: {str(e)}")
-                    # Don't raise - this is a passive monitor
-    
-    async def setup(self):
-        """Setup database, IGDB client, and WebSocket connection"""
-        await self.setup_database()
-        await self.initialize_igdb()
-        
-        # Wait for bot to be ready
-        await self.bot.wait_until_ready()
-        
-        # Connect to WebSocket
-        if self.enabled:
-            await self.ensure_connected()
-    
-    async def handle_rom_scanned(self, data: Dict):
-        """Process individual ROM scan event"""
-            
+
+
+    async def handle_scan_complete(self, roms: List[Dict], stats: Dict):
+        """Processes the batch, posts to Discord, and dispatches events."""
         try:
-            rom_id = data.get('id')
-            if not rom_id:
-                logger.warning(f"ROM event missing ID: {data}")
+            if not roms:
                 return
-                
-            # Only check if already posted if we're actively tracking
-            if self.scan_in_progress and await self.has_been_posted(rom_id):
-                logger.debug(f"ROM {data.get('name')} already posted, skipping")
-                return
-            
-            # Build ROM object
-            rom = {
-                'id': rom_id,
-                'name': data.get('name', 'Unknown'),
-                'platform_name': data.get('platform_name', 'Unknown'),
-                'platform_id': data.get('platform_id'),
-                'file_name': data.get('file_name'),
-                'fs_name': data.get('fs_name'),
-                'fs_size_bytes': data.get('fs_size_bytes'),
-                'url_cover': data.get('url_cover'),
-                'created_at': data.get('created_at'),
-            }
-            
-            # Add to current scan batch
-            self.current_scan_roms.append(rom)
-            logger.debug(f"ROM queued: {rom['name']} ({len(self.current_scan_roms)} in batch)")
-            
-        except Exception as e:
-            logger.error(f"Error handling ROM scan event: {e}")
-    
-    async def handle_scan_complete(self, stats: Dict):
-        """Process scan completion event"""
-        try:
-            if not self.current_scan_roms:
-                logger.debug("Scan completed with no new ROMs to post")
-                self.scan_in_progress = False
-                return
-                
-            logger.info(f"Scan completed with {len(self.current_scan_roms)} new ROMs to post")
-            
-            # Process the accumulated ROMs
-            await self.process_scan_batch(self.current_scan_roms)
-            
-            # Trigger API data update to refresh platforms, stats, and counts
-            logger.info("Triggering API data refresh after scan completion")
+            logger.info(f"MAIN_LOOP: Processing scan batch of {len(roms)} new ROMs.")
+            await self.process_scan_batch(roms)
+            logger.info("MAIN_LOOP: Triggering API data refresh after scan completion.")
             await self.bot.update_api_data()
-            
-            # Reset scan state
-            self.scan_in_progress = False
-            self.current_scan_roms = []
-            
         except Exception as e:
-            logger.error(f"Error handling scan completion: {e}")
-            self.scan_in_progress = False
-            self.current_scan_roms = []
+            logger.error(f"Error during main-thread batch processing: {e}", exc_info=True)
     
     async def process_scan_batch(self, roms: List[Dict]):
         """Process and post the ROMs from a completed scan"""
@@ -249,22 +238,23 @@ class RecentRomsMonitor(commands.Cog):
             # Mark all as posted
             await self.mark_as_posted(roms, batch_id)
             
-            # ALWAYS dispatch to request system (removed the condition)
+            # ALWAYS dispatch to request system
             requests_cog = self.bot.get_cog('Request')
             if requests_cog:
                 logger.debug(f"Dispatching batch_scan_complete event with {len(roms)} ROMs")
                 self.bot.dispatch('batch_scan_complete', [
                     {
+                        'id': rom['id'],
                         'platform': rom.get('platform_name', 'Unknown'),
                         'name': rom['name'],
+                        'fs_name': rom.get('fs_name', ''),
                         'file_name': rom.get('file_name', '')
                     }
                     for rom in roms
                 ])
             
             # Updated log message
-            logger.info(f"Posted {len(roms)} new ROM(s) from scan" + 
-                       (" (bulk display mode)" if is_bulk else ""))
+            logger.info(f"Posted {len(roms)} new ROM(s) from scan")
         
         except Exception as e:
             logger.error(f"Error processing scan batch: {e}")
@@ -279,19 +269,19 @@ class RecentRomsMonitor(commands.Cog):
             logger.warning(f"IGDB integration not available: {e}")
             self.igdb = None
     
-    async def setup_database(self):
-        """Create database for tracking posted ROMs"""
-        async with aiosqlite.connect(str(self.db_path)) as db:
-            await db.execute('''
-                CREATE TABLE IF NOT EXISTS posted_roms (
-                    rom_id INTEGER PRIMARY KEY,
-                    platform_name TEXT,
-                    rom_name TEXT,
-                    posted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    batch_id TEXT
-                )
-            ''')
-            await db.commit()
+    async def setup(self):
+        """Setup IGDB client and WebSocket connection"""
+        # Initialize IGDB only
+        await self.initialize_igdb()
+        
+        # Wait for bot to be ready
+        await self.bot.wait_until_ready()
+        
+        # Connect to WebSocket
+        if self.enabled:
+            self.sio_thread = threading.Thread(target=self.start_socketio_thread)
+            self.sio_thread.daemon = True
+            self.sio_thread.start()
     
     async def download_cover_image(self, rom_data: Dict) -> Optional[discord.File]:
         """Download cover image from Romm API and return as Discord File"""
@@ -333,8 +323,8 @@ class RecentRomsMonitor(commands.Cog):
     
     async def has_been_posted(self, rom_id: int) -> bool:
         """Check if a ROM has already been posted"""
-        async with aiosqlite.connect(str(self.db_path)) as db:
-            cursor = await db.execute(
+        async with self.db.get_connection() as conn: 
+            cursor = await conn.execute(
                 "SELECT 1 FROM posted_roms WHERE rom_id = ?",
                 (rom_id,)
             )
@@ -343,13 +333,13 @@ class RecentRomsMonitor(commands.Cog):
     
     async def mark_as_posted(self, roms: List[Dict], batch_id: str = None):
         """Mark ROMs as posted to prevent duplicates"""
-        async with aiosqlite.connect(str(self.db_path)) as db:
+        async with self.db.get_connection() as conn:  # Changed this line
             for rom in roms:
-                await db.execute(
+                await conn.execute(
                     "INSERT OR IGNORE INTO posted_roms (rom_id, platform_name, rom_name, batch_id) VALUES (?, ?, ?, ?)",
                     (rom['id'], rom.get('platform_name', 'Unknown'), rom['name'], batch_id)
                 )
-            await db.commit()
+            await conn.commit()
     
     def format_file_size(self, size_bytes: Union[int, float]) -> str:
         """Format size in bytes to human readable format"""
@@ -370,23 +360,20 @@ class RecentRomsMonitor(commands.Cog):
             return None
         
         try:
-            # Convert platform name to IGDB slug if possible
             igdb_slug = None
             if platform_name:
-                # Try to get IGDB slug from platform mappings
-                try:
-                    async with aiosqlite.connect(str(self.data_dir / 'requests.db')) as db:
-                        cursor = await db.execute(
-                            """SELECT igdb_slug FROM platform_mappings 
-                               WHERE display_name = ? OR folder_name = ?""",
-                            (platform_name, platform_name.lower().replace(' ', '-'))
-                        )
-                        result = await cursor.fetchone()
-                        if result and result[0]:
-                            igdb_slug = result[0]
-                            logger.debug(f"Mapped platform '{platform_name}' to IGDB slug '{igdb_slug}'")
-                except Exception as e:
-                    logger.debug(f"Could not map platform to IGDB slug: {e}")
+                # Updated to use shared database
+                async with self.db.get_connection() as conn:  # Changed this line
+                    cursor = await conn.execute(
+                        """SELECT igdb_slug FROM platform_mappings 
+                           WHERE display_name = ? OR folder_name = ?""",
+                        (platform_name, platform_name.lower().replace(' ', '-'))
+                    )
+                    result = await cursor.fetchone()
+                    if result and result[0]:
+                        igdb_slug = result[0]
+                        logger.debug(f"Mapped platform '{platform_name}' to IGDB slug '{igdb_slug}'")
+                # Removed the finally block with return_connection - context manager handles it
             
             # Search with slug if we found one, otherwise without platform filter
             matches = await self.igdb.search_game(rom_name, igdb_slug)
@@ -552,7 +539,7 @@ class RecentRomsMonitor(commands.Cog):
         footer_parts.append("Added to collection")
         
         embed.set_footer(text=" • ".join(footer_parts))
-        embed.set_author(name="🆕 New ROM Available")
+        embed.set_author(name="🆕 New Game Available")
 
         # Return the embed and cover file (keep the file!)
         return embed, cover_file
@@ -563,9 +550,9 @@ class RecentRomsMonitor(commands.Cog):
         
         # Check if this is a flood scenario or too many ROMs
         is_bulk = len(roms) >= self.bulk_display_threshold
-        should_fetch_covers = 2 <= len(roms) <= 10 and not is_bulk
+        should_fetch_covers = 2 <= len(roms) <= 9 and not is_bulk
         
-        # Fetch covers for moderate batches (2-10 ROMs)
+        # Fetch covers for moderate batches (2-9 ROMs)
         if should_fetch_covers:
             for rom in roms:
                 # Fetch detailed ROM data if needed
@@ -590,7 +577,7 @@ class RecentRomsMonitor(commands.Cog):
             # Create a simplified bulk notification
             embed = discord.Embed(
                 title=f"📦 Bulk Collection Update",  # Changed emoji/title
-                description=f"{len(roms)} ROMs have been added to the collection",
+                description=f"{len(roms)} games have been added to the collection",
                 color=discord.Color.orange()
             )
             
@@ -622,16 +609,16 @@ class RecentRomsMonitor(commands.Cog):
         else:
             # Normal batch embed for reasonable number of ROMs
             embed = discord.Embed(
-                title=f"🆕 {len(roms)} New ROMs Added",
-                description="Multiple ROMs have been added to the collection:",
+                title=f"🆕 {len(roms)} New Games Added",
+                description="Multiple games have been added to the collection:",
                 color=discord.Color.blue()
             )
             
             # Add note about covers if we have them
             if cover_files:
-                embed.set_footer(text=f"Batch update • {len(roms)} new ROMs • Covers attached below")
+                embed.set_footer(text=f"Batch update • {len(roms)} new games • Use /search to download")
             else:
-                embed.set_footer(text=f"Batch update • {len(roms)} new ROMs")
+                embed.set_footer(text=f"Batch update • {len(roms)} new games")
             
             # Group by platform
             by_platform = defaultdict(list)
@@ -672,14 +659,14 @@ class RecentRomsMonitor(commands.Cog):
         # Add link to RomM
         embed.add_field(
             name="View Collection",
-            value=f"[Browse all ROMs]({self.bot.config.DOMAIN})",
+            value=f"[Browse all games]({self.bot.config.DOMAIN})",
             inline=False
         )
         
         if is_bulk:
-            embed.set_footer(text=f"Bulk update • {len(roms)} ROMs added")
+            embed.set_footer(text=f"Bulk update • {len(roms)} games added")
         elif not cover_files:
-            embed.set_footer(text=f"Batch update • {len(roms)} new ROMs")
+            embed.set_footer(text=f"Bulk update • {len(roms)} new games")
         
         # Set thumbnail only if we don't have cover files
         if not cover_files:
