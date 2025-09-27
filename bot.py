@@ -11,6 +11,7 @@ import logging
 from collections import defaultdict
 import time
 import re
+from database_manager import MasterDatabase
 
 # Configure logging
 logging.basicConfig(
@@ -94,9 +95,12 @@ class Config:
         
         try:
             self.GUILD_ID = int(self.GUILD_ID)
-            self.CHANNEL_ID = int(self.CHANNEL_ID)
+            # MODIFIED: Only convert CHANNEL_ID if it's not None or empty
+            if self.CHANNEL_ID:
+                self.CHANNEL_ID = int(self.CHANNEL_ID)
         except ValueError:
-            raise ValueError("GUILD_ID and CHANNEL_ID must be numeric values")
+            # MODIFIED: Updated error message for clarity
+            raise ValueError("GUILD_ID must be a numeric value. If provided, CHANNEL_ID must also be numeric.")
 
 class RommBot(discord.Bot):
     """Extended Discord bot with additional functionality."""
@@ -109,7 +113,7 @@ class RommBot(discord.Bot):
         intents.dm_messages = True
         intents.dm_reactions = True
         super().__init__(
-            command_prefix="!",  # Add a prefix even if you don't use it
+            command_prefix="!",
             intents=intents,
             application_id=os.getenv('RommBot/1.0')
         )
@@ -118,15 +122,17 @@ class RommBot(discord.Bot):
         self.config = Config()
         self.cache = APICache(self.config.CACHE_TTL)
         self.rate_limiter = RateLimit()
-        # self.stat_channels: Dict[str, discord.VoiceChannel] = {}
         self.session: Optional[aiohttp.ClientSession] = None
         self._session_lock = asyncio.Lock()
 
+        # Master database initialization - DON'T initialize here, wait for setup_hook
+        self.db = None
+        
         # OAuth token management attributes
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
         self.token_expiry: float = 0
-        self.token_lock = asyncio.Lock()  # Prevent concurrent token refreshes
+        self.token_lock = asyncio.Lock()
         
         # Initialize session with proper headers
         self.session: Optional[aiohttp.ClientSession] = None
@@ -139,7 +145,7 @@ class RommBot(discord.Bot):
         
         # Add a commands sync flag
         self.synced = False
-
+        
         # Global cooldown
         self._cd_bucket = commands.CooldownMapping.from_cooldown(1, 60, commands.BucketType.user)
         
@@ -160,7 +166,7 @@ class RommBot(discord.Bot):
             data.add_field('grant_type', 'password')
             data.add_field('username', self.config.USER)
             data.add_field('password', self.config.PASS)
-            data.add_field('scope', 'roms.read platforms.read firmware.read users.read users.write')
+            data.add_field('scope', 'roms.read platforms.read firmware.read users.read users.write me.write')
             
             # Simple headers for OAuth token request
             headers = {
@@ -282,9 +288,9 @@ class RommBot(discord.Bot):
         return self.csrf_token
         
     async def make_authenticated_request(
-        self, 
-        method: str, 
-        endpoint: str, 
+        self,
+        method: str,
+        endpoint: str,
         data: Optional[Dict] = None,
         params: Optional[Dict] = None,
         form_data: Optional[aiohttp.FormData] = None,
@@ -292,7 +298,6 @@ class RommBot(discord.Bot):
     ) -> Optional[Dict]:
         """Make an authenticated API request with proper headers."""
         try:
-            # Ensure we have a valid OAuth token
             if not await self.ensure_valid_token():
                 logger.error("Failed to obtain valid OAuth token")
                 return None
@@ -300,50 +305,56 @@ class RommBot(discord.Bot):
             session = await self.ensure_session()
             url = f"{self.config.API_BASE_URL}/api/{endpoint}"
             
-            # Base headers with Bearer token
-            headers = {
-                "Authorization": f"Bearer {self.access_token}",
-                "Accept": "application/json"
-            }
+            headers = {"Authorization": f"Bearer {self.access_token}", "Accept": "application/json"}
             
-            # Add CSRF token if required (though it's bypassed with Bearer auth)
             if require_csrf:
                 csrf_token = await self.ensure_csrf_token()
                 if csrf_token:
                     headers["X-CSRFToken"] = csrf_token
                     headers["Cookie"] = self.csrf_cookie
             
-            # Determine the request method and make the call
             request_kwargs = {"headers": headers}
-            if data:
-                request_kwargs["json"] = data
-            if params:
-                request_kwargs["params"] = params
-            if form_data:
-                request_kwargs["data"] = form_data
+            if data: request_kwargs["json"] = data
+            if params: request_kwargs["params"] = params
+            if form_data: request_kwargs["data"] = form_data
                 
             async with session.request(method, url, **request_kwargs) as response:
+                logger.debug(f"API Response: {method} {url} -> Status {response.status}")
+
+                # This is the function that will handle the response
+                async def handle_response(resp: aiohttp.ClientResponse) -> Optional[Dict]:
+                    if resp.status in (200, 201, 204):
+                        if resp.status == 204:
+                            return {}  # Success with no content is a valid response
+
+                        try:
+                            json_response = await resp.json()
+                            # A `null` response body becomes `None`. Treat this as a successful empty response.
+                            return json_response if json_response is not None else {}
+                        except Exception:
+                            # An empty body or non-JSON response on a success status code is also a success.
+                            logger.debug(f"Could not parse JSON from successful response (Status {resp.status}), but treating as success.")
+                            return {}
+                    else:
+                        logger.error(f"Request failed with status {resp.status}")
+                        try:
+                            response_text = await resp.text()
+                            logger.error(f"Response: {response_text}")
+                        except Exception:
+                            logger.error("Could not read response text.")
+                        return None
+
                 if response.status == 401:
-                    # Token expired, refresh and retry
                     logger.debug("Got 401, attempting to refresh token")
                     if await self.ensure_valid_token():
                         headers["Authorization"] = f"Bearer {self.access_token}"
                         async with session.request(method, url, **request_kwargs) as retry_response:
-                            if retry_response.status in (200, 201):
-                                return await retry_response.json()
-                            else:
-                                logger.error(f"Retry failed with status {retry_response.status}")
-                                return None
-                elif response.status in (200, 201):
-                    return await response.json()
+                            return await handle_response(retry_response)
                 else:
-                    logger.error(f"Request failed with status {response.status}")
-                    response_text = await response.text()
-                    logger.error(f"Response: {response_text}")
-                    return None
+                    return await handle_response(response)
                     
         except Exception as e:
-            logger.error(f"Error making authenticated request: {e}")
+            logger.error(f"Error making authenticated request: {e}", exc_info=True)
             return None
     
     async def on_application_command_error(self, ctx: discord.ApplicationContext, error: discord.DiscordException):
@@ -388,6 +399,37 @@ class RommBot(discord.Bot):
         # Fall back to regular name
         return platform_data.get('name', 'Unknown Platform')
     
+    async def setup_hook(self):
+        """Initialize database and other async resources before bot starts"""
+        logger.info("Starting bot setup hook...")
+        
+        try:
+            # Initialize database FIRST before anything else
+            logger.info("Initializing database...")
+            self.db = MasterDatabase()
+            await self.db.initialize()
+            
+            # Verify tables were created
+            table_status = await self.db.verify_tables_exist()
+            if not all(table_status.values()):
+                missing_tables = [t for t, exists in table_status.items() if not exists]
+                logger.error(f"Missing tables after initialization: {missing_tables}")
+                raise Exception(f"Database initialization incomplete: missing tables {missing_tables}")
+            
+            logger.info("✅ Database initialization verified successfully")
+            
+            # Initialize OAuth tokens AFTER database
+            logger.info("Initializing OAuth tokens...")
+            if not await self.get_oauth_token():
+                logger.warning("Failed to obtain OAuth tokens, some features may not work")
+            else:
+                logger.info("✅ OAuth tokens initialized successfully")
+                
+        except Exception as e:
+            logger.error(f"❌ Setup hook failed: {e}", exc_info=True)
+            # Re-raise to prevent bot from starting with broken database
+            raise
+    
     def load_all_cogs(self):
         """Load all cogs."""
         cogs_to_load = [
@@ -397,7 +439,6 @@ class RommBot(discord.Bot):
             'cogs.scan', 
             'cogs.requests',
             'cogs.user_manager',
-           #'cogs.web_dashboard',     Commenting out for now, will likely use third party dash in the future
             'cogs.recent_roms'
         ]
         
@@ -409,7 +450,6 @@ class RommBot(discord.Bot):
             'cogs.scan': ['socketio'],
             'cogs.requests': ['aiosqlite'],
             'cogs.user_manager': ['aiohttp','aiosqlite'],
-            # 'cogs.web_dashboard': ['aiohttp', 'aiosqlite'],        Commenting out for now, will likely use third party dash in the future
             'cogs.recent_roms': ['aiosqlite']
         }
 
@@ -440,16 +480,17 @@ class RommBot(discord.Bot):
         """When bot is ready, start tasks."""
         logger.info(f'{self.user} has connected to Discord!')
         
-        # Initialize OAuth tokens
-        if not await self.get_oauth_token():
-            logger.error("Failed to obtain OAuth tokens, some features may not work")
-        else:
-            logger.info("OAuth tokens initialized successfully")
+        # Check that database is initialized
+        if self.db is None or not self.db._initialized:
+            # Try to initialize it now as a fallback
+            if self.db is None:
+                self.db = MasterDatabase()
+            await self.db.initialize()
         
-        # Load cogs
+        # Load cogs only after database is confirmed ready
         self.load_all_cogs()
         loaded_cogs = list(self.cogs.keys())
-        logger.info(f"Currently loaded cogs: {loaded_cogs}")
+        logger.debug(f"Currently loaded cogs: {loaded_cogs}")
 
         # Only sync commands once
         if not self.synced:
@@ -634,6 +675,10 @@ class RommBot(discord.Bot):
             
     async def close(self):
         """Cleanup resources on shutdown."""
+        # Add database cleanup
+        if hasattr(self, 'db'):
+            await self.db.close_all_connections()
+        
         if self.session and not self.session.closed:
             await self.session.close()
         await super().close()
@@ -719,13 +764,24 @@ class RommBot(discord.Bot):
 
 async def main():
     bot = RommBot()
-    try:
+    try:        
         await bot.start(bot.config.TOKEN)
     except Exception as e:
         logger.error("Error starting bot:", exc_info=True)
+        
+        # Try to diagnose database issues
+        if bot.db:
+            logger.error("Attempting database diagnostic...")
+            try:
+                table_status = await bot.db.verify_tables_exist()
+                logger.error(f"Table status: {table_status}")
+            except Exception as diag_error:
+                logger.error(f"Diagnostic failed: {diag_error}")
     finally:
         if bot.session and not bot.session.closed:
             await bot.session.close()
+        if bot.db:
+            await bot.db.close_all_connections()
 
 if __name__ == "__main__":
     try:
@@ -734,5 +790,3 @@ if __name__ == "__main__":
         logger.info("Bot shutting down...")
     except Exception as e:
         logger.error("Error running bot:", exc_info=True)
-
-
