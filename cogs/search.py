@@ -1450,8 +1450,8 @@ class Search(commands.Cog):
                     await ctx.respond(f"❌ No ROMs found for platform '{self.get_platform_with_emoji(platform_display_name)}'")
                     return
 
-                # Try up to 5 times to find a valid ROM for the specific platform
-                max_attempts = 5
+                # Try up to 10 times to find a valid ROM for the specific platform
+                max_attempts = 10
                 for attempt in range(max_attempts):
                     try:
                         # Get ROMs for platform
@@ -1526,8 +1526,8 @@ class Search(commands.Cog):
                     await ctx.respond("❌ No ROMs found in the collection")
                     return
 
-                # Try up to 5 times to find a valid ROM
-                max_attempts = 5
+                # Try up to 10 times to find a valid ROM
+                max_attempts = 10
                 for attempt in range(max_attempts):
                     random_rom_id = random.randint(1, total_roms)
                     rom_data = await self.bot.fetch_api_endpoint(f'roms/{random_rom_id}')
