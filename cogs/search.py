@@ -1118,9 +1118,10 @@ class Search(commands.Cog):
         self.platform_variants = {
             '3DO Interactive Multiplayer': ['3do'],
             'Apple II': ['apple_ii'],
+            'Amiga': ['amiga'],
             'Amiga CD32': ['cd32'],
             'Amstrad CPC': ['amstrad'],
-            'Apple Pippin':['pippin'],
+            'Apple Pippin': ['pippin'],
             'Arcade - MAME': ['arcade'],
             'Arcade - PC Based': ['arcade'],
             'Arcade - FinalBurn Neo': ['arcade'],
@@ -1128,22 +1129,29 @@ class Search(commands.Cog):
             'Atari 5200': ['5200'],
             'Atari 7800': ['7800'],
             'Atari Jaguar': ['jaguar'],
+            'Atari Jaguar CD': ['jaguar_cd'],
             'Atari Lynx': ['lynx'],
+            'Casio Loopy': ['loopy'],
             'Commodore C64/128/MAX': ['c64'],
             'Dreamcast': ['dreamcast'],
+            'Family Computer': ['famicom'],
+            'Famicom': ['famicom'],
             'Family Computer Disk System': ['fds'],
+            'Famicom Disk System': ['fds'],
             'FM Towns': ['fm_towns'],
-            'Game & Watch':['game_and_watch'],
+            'Game & Watch': ['game_and_watch'],
             'Game Boy': ['gameboy', 'gameboy_pocket'],
             'Game Boy Advance': ['gameboy_advance', 'gameboy_advance_sp', 'gameboy_micro'],
             'Game Boy Color': ['gameboy_color'],
             'J2ME': ['cell_java'],
             'Mac': ['mac', 'mac_imac'],
+            'Mega Duck/Cougar Boy': ['mega_duck'],
             'MSX': ['msx'],
+            'MSX2': ['msx'],
             'N-Gage': ['n_gage'],
             'Neo Geo AES': ['neogeo_aes'],
             'Neo Geo CD': ['neogeo_cd'],
-            'Neo Geo Pocket':['neogeo_pocket'],
+            'Neo Geo Pocket': ['neogeo_pocket'],
             'Neo Geo Pocket Color': ['neogeo_pocket_color'],
             'Nintendo 3DS': ['3ds'],
             'Nintendo 64': ['n64'],
@@ -1156,6 +1164,7 @@ class Search(commands.Cog):
             'Nintendo Switch': ['switch', 'switch_docked'],
             'PC-8800 Series': ['pc_88'],
             'PC-9800 Series': ['pc_98'],
+            'PC-FX': ['pc_fx'],
             'PC (Microsoft Windows)': ['pc'],
             'PC - DOS': ['dos'],
             'PC - Win3X': ['win_3x_gui', 'pc'],
@@ -1165,6 +1174,7 @@ class Search(commands.Cog):
             'PlayStation 2': ['ps2', 'ps2_slim'],
             'PlayStation 3': ['ps3', 'ps3_slim'],
             'PlayStation 4': ['ps4'],
+            'PlayStation 5': ['ps5'],
             'PlayStation Portable': ['psp', 'psp_go'],
             'PlayStation Vita': ['vita'],
             'Pokémon mini': ['pokemon_mini'],
@@ -1174,11 +1184,13 @@ class Search(commands.Cog):
             'Sega Game Gear': ['game_gear'],
             'Sega Master System/Mark III': ['master_system'],
             'Sega Mega Drive/Genesis': ['genesis', 'genesis_2', 'nomad'],
+            'Sega Pico': ['pico'],
             'Sega Saturn': ['saturn_2'],
             'Sharp X68000': ['x68000'],
             'Sinclair Zxs': ['zx_spectrum'],
             'Super Nintendo Entertainment System': ['snes'],
             'Switch': ['switch', 'switch_docked'],
+            'Teknoparrot': ['teknoparrot'],
             'Turbografx-16/PC Engine CD': ['tg_16_cd'],
             'TurboGrafx-16/PC Engine': ['tg_16', 'turboduo', 'turboexpress'],
             'Vectrex': ['vectrex'],
@@ -1187,8 +1199,10 @@ class Search(commands.Cog):
             'Wii': ['wii'],
             'Windows': ['pc'],
             'WonderSwan': ['wonderswan'],
+            'WonderSwan Color': ['wonderswan'],
             'Xbox': ['xbox_og'],
             'Xbox 360': ['xbox_360'],
+            'Xbox One': ['xbone'],
         }
         bot.loop.create_task(self.initialize_platform_emoji_mappings())
     
@@ -1249,22 +1263,30 @@ class Search(commands.Cog):
     
     def get_platform_with_emoji(self, platform_name: str) -> str:
         """Returns platform name with its emoji if available."""
-        if not platform_name or not hasattr(self.bot, 'emoji_dict'):
+        if not platform_name:
             return platform_name
 
-        # Get the variant names - platform_variants returns a list
-        variant_names = self.platform_variants.get(platform_name, [platform_name.lower().replace(' ', '_').replace('-', '_')])
-
-        # If variant_names is a list (which it should be), use it directly
-        # If somehow it's not a list, wrap it in a list
+        # Get the potential emoji names (e.g., ['n64']) for the platform
+        variant_names = self.platform_variants.get(
+            platform_name, [platform_name.lower().replace(' ', '_').replace('-', '_')]
+        )
         variants_to_check = variant_names if isinstance(variant_names, list) else [variant_names]
 
-        # Try to find a matching custom emoji
+        # Build a quick lookup for all visible server emojis
+        # self.bot.emojis contains all server-specific emojis the bot can see
+        server_emojis_by_name = {e.name: e for e in self.bot.emojis}
+
         for variant in variants_to_check:
-            if variant in self.bot.emoji_dict:
+            # Priority 1: Check for a server-specific emoji.
+            if variant in server_emojis_by_name:
+                return f"{platform_name} {server_emojis_by_name[variant]}"
+            
+            # Priority 2: Check for a global application emoji.
+            # This hasattr check also helps with any startup race conditions.
+            if hasattr(self.bot, 'emoji_dict') and variant in self.bot.emoji_dict:
                 return f"{platform_name} {self.bot.emoji_dict[variant]}"
 
-        # If no custom emoji found, use the fallback
+        # If no custom emoji found, use a fallback.
         return f"{platform_name} 🎮"
         
 
