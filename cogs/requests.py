@@ -22,10 +22,7 @@ logger.setLevel(logging.INFO)
 def is_admin():
     """Check if the user is the admin"""
     async def predicate(ctx: discord.ApplicationContext):
-        admin_id = os.getenv('ADMIN_ID')
-        if not admin_id:
-            return False
-        return str(ctx.author.id) == admin_id
+        return ctx.bot.is_admin(ctx.author)
     return commands.check(predicate)
 
 class RequestAdminView(discord.ui.View):
@@ -305,8 +302,7 @@ class RequestAdminView(discord.ui.View):
         return embed
     
     async def back_callback(self, interaction: discord.Interaction):
-        """Navigate to previous request"""
-        if interaction.user.id != self.admin_id:
+        if not self.bot.is_admin(interaction.user):
             await interaction.response.send_message("Only admins can use these controls.", ephemeral=True)
             return
         
@@ -332,7 +328,7 @@ class RequestAdminView(discord.ui.View):
     
     async def forward_callback(self, interaction: discord.Interaction):
         """Navigate to next request"""
-        if interaction.user.id != self.admin_id:
+        if not self.bot.is_admin(interaction.user):
             await interaction.response.send_message("Only admins can use these controls.", ephemeral=True)
             return
         
@@ -358,7 +354,7 @@ class RequestAdminView(discord.ui.View):
     
     async def fulfill_callback(self, interaction: discord.Interaction):
         """Mark current request as fulfilled"""
-        if interaction.user.id != self.admin_id:
+        if not self.bot.is_admin(interaction.user):
             await interaction.response.send_message("Only admins can use these controls.", ephemeral=True)
             return
         
@@ -434,7 +430,7 @@ class RequestAdminView(discord.ui.View):
     
     async def reject_callback(self, interaction: discord.Interaction):
         """Show modal for rejection reason then reject"""
-        if interaction.user.id != self.admin_id:
+        if not self.bot.is_admin(interaction.user):
             await interaction.response.send_message("Only admins can use these controls.", ephemeral=True)
             return
         
@@ -523,7 +519,7 @@ class RequestAdminView(discord.ui.View):
     
     async def note_callback(self, interaction: discord.Interaction):
         """Add a note to the current request"""
-        if interaction.user.id != self.admin_id:
+        if not self.bot.is_admin(interaction.user):
             await interaction.response.send_message("Only admins can use these controls.", ephemeral=True)
             return
         
@@ -587,7 +583,7 @@ class RequestAdminView(discord.ui.View):
     
     async def refresh_callback(self, interaction: discord.Interaction):
         """Refresh the requests list from database"""
-        if interaction.user.id != self.admin_id:
+        if not self.bot.is_admin(interaction.user):
             await interaction.response.send_message("Only admins can use these controls.", ephemeral=True)
             return
         
