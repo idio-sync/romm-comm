@@ -12,6 +12,7 @@ from collections import defaultdict
 import time
 import re
 from database_manager import MasterDatabase
+from pathlib import Path
 
 # Configure logging
 logging.basicConfig(
@@ -381,6 +382,23 @@ class RommBot(discord.Bot):
                 ephemeral=True
             )
 
+    def is_admin(self, user):
+        """Check if user is admin - auto-detects if ADMIN_ID is user or role"""
+        if not self.config.ADMIN_ID:
+            return False
+        
+        # First check if it's the user's ID
+        if str(user.id) == self.config.ADMIN_ID:
+            return True
+        
+        # Then check if it's one of their role IDs (if in a guild)
+        if hasattr(user, 'roles'):
+            for role in user.roles:
+                if str(role.id) == self.config.ADMIN_ID:
+                    return True
+        
+        return False
+    
     async def before_slash_command_invoke(self, ctx: discord.ApplicationContext):
         """Add cooldown check before any slash command is invoked."""
         if not await self.is_owner(ctx.author):  # Skip cooldown for bot owner
@@ -432,7 +450,7 @@ class RommBot(discord.Bot):
     
     def load_all_cogs(self):
         """Load all cogs."""
-        cogs_to_load = [
+        core_cogs = [
             'cogs.emoji_manager', 
             'cogs.info', 
             'cogs.search', 
@@ -453,7 +471,7 @@ class RommBot(discord.Bot):
             'cogs.recent_roms': ['aiosqlite']
         }
 
-        for cog in cogs_to_load:
+        for cog in core_cogs:
             try:
                 # Check dependencies before loading
                 if cog in cog_dependencies:
@@ -475,6 +493,36 @@ class RommBot(discord.Bot):
             except Exception as e:
                 logger.error(f"Failed to load extension {cog}", exc_info=True)
                 logger.error(f"Error details: {str(e)}")
+        
+        # Load integration cogs from separate folder
+        self.load_integration_cogs()
+        
+    def load_integration_cogs(self):
+        """Load optional integration cogs from integrations folder."""
+        integrations_dir = Path('integrations')
+        
+        if not integrations_dir.exists():
+            logger.debug("No integrations directory found")
+            return
+        
+        # Find all Python files in integrations folder
+        for file in integrations_dir.glob('*.py'):
+            if file.stem.startswith('_'):
+                continue
+                
+            cog_name = f"integrations.{file.stem}"
+            
+            # Check if enabled in .env
+            env_key = f"{file.stem.upper()}_ENABLED"
+            if os.getenv(env_key, 'false').lower() != 'true':
+                logger.debug(f"Integration {file.stem} is disabled (set {env_key}=true to enable)")
+                continue
+            
+            try:
+                self.load_extension(cog_name)
+                logger.info(f"Loaded integration: {file.stem}")
+            except Exception as e:
+                logger.error(f"Failed to load integration {file.stem}: {e}")
   
     async def on_ready(self):
         """When bot is ready, start tasks."""
@@ -790,3 +838,5 @@ if __name__ == "__main__":
         logger.info("Bot shutting down...")
     except Exception as e:
         logger.error("Error running bot:", exc_info=True)
+
+
