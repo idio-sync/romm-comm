@@ -121,6 +121,7 @@ vhs|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backe
 
 # Extra Platforms
 cd|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/cd.png
+flash|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/flash.png
 jaguar_cd|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/jaguar_cd.png
 loopy|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/loopy.png
 mega_duck|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/mega_duck.png
