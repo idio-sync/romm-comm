@@ -1,1691 +1,3263 @@
 import discord
-from discord.ext import commands, tasks
-from typing import Optional, Dict, Any, List
+from discord.ext import commands
 import logging
-import secrets
-import string
-import asyncio
-import aiohttp
-import aiosqlite
+from datetime import datetime
+from typing import Optional, Dict, List, Tuple
+import json
 import os
-from dotenv import load_dotenv
-import time
+import aiosqlite
+import asyncio
+import re
+from pathlib import Path
+from .search import Search
+from .igdb_client import IGDBClient
+from collections import defaultdict
+from .search import ROM_View
+from urllib.parse import quote
+import aiohttp
 
-# Load environment variables
-load_dotenv()
-
-logger = logging.getLogger('romm_bot.users')
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 def is_admin():
     """Check if the user is the admin"""
     async def predicate(ctx: discord.ApplicationContext):
-        admin_id = os.getenv('ADMIN_ID')
-        if not admin_id:
-            return False
-        return str(ctx.author.id) == admin_id
+        return ctx.bot.is_admin(ctx.author)
     return commands.check(predicate)
 
-class UserManagementView(discord.ui.View):
-    """Comprehensive user management interface for admins"""
+class RequestAdminView(discord.ui.View):
+    """Paginated view for managing requests"""
     
-    def __init__(self, bot, cog, guild: discord.Guild):
+    def __init__(self, bot, requests_data, admin_id, db):
         super().__init__(timeout=300)  # 5 minute timeout
         self.bot = bot
-        self.cog = cog
-        self.guild = guild
+        self.db = db
+        self.requests = requests_data
+        self.admin_id = admin_id
+        self.current_index = 0
         self.message = None
-        self.interaction = None
         
-        # State management
-        self.selected_discord_user = None
-        self.selected_romm_user = None
-        self.romm_users = []
-        self.discord_user_links = {}  # discord_id -> romm_username mapping
-        
-        # Discord dropdown pagination state
-        self.discord_current_page = 0
-        self.page_size = 25
-        self.full_member_list = []
-        
-        # RomM dropdown pagination state
-        self.romm_current_page = 0
-        self.full_romm_list = []
-        
-        # Initialize components
-        self._setup_components()
-        
-    def _setup_components(self):
-        """Setup initial UI components"""
-        # Discord User Select (Row 0)
-        self.discord_select = discord.ui.Select(
-            placeholder="Select a Discord user...",
-            custom_id="discord_user_select",
-            row=0,
-            min_values=0,
-            max_values=1
+        # Create buttons
+        self.back_button = discord.ui.Button(
+            label="← Back",
+            style=discord.ButtonStyle.primary,
+            disabled=True  # Start with back disabled on first page
         )
-        # Add a placeholder option initially to avoid empty select menu error
-        self.discord_select.add_option(
-            label="Loading users...",
-            value="placeholder",
-            description="Please wait..."
-        )
-        self.discord_select.callback = self.discord_select_callback
-        self.add_item(self.discord_select)
+        self.back_button.callback = self.back_callback
         
-        # Discord pagination buttons (Row 1)
-        self.discord_prev_button = discord.ui.Button(
-            label="⬅️ Previous Discord users", 
-            style=discord.ButtonStyle.secondary, 
-            row=1, 
-            disabled=True
-        )
-        self.discord_prev_button.callback = self.discord_prev_page_callback
-        self.add_item(self.discord_prev_button)
-
-        self.discord_next_button = discord.ui.Button(
-            label="Next Discord users ➡️", 
-            style=discord.ButtonStyle.secondary, 
-            row=1, 
-            disabled=True
-        )
-        self.discord_next_button.callback = self.discord_next_page_callback
-        self.add_item(self.discord_next_button)
-        
-        # RomM User Select (Row 2)
-        self.romm_select = discord.ui.Select(
-            placeholder="Select a RomM user to link...",
-            custom_id="romm_user_select",
-            row=2,
-            disabled=True,
-            min_values=0,
-            max_values=1
-        )
-        # Add a placeholder option initially
-        self.romm_select.add_option(
-            label="Select Discord user first",
-            value="placeholder",
-            description="Waiting for Discord user selection..."
-        )
-        self.romm_select.callback = self.romm_select_callback
-        self.add_item(self.romm_select)
-        
-        # RomM pagination buttons (Row 3)
-        self.romm_prev_button = discord.ui.Button(
-            label="⬅️ Previous RomM users", 
-            style=discord.ButtonStyle.secondary, 
-            row=3, 
-            disabled=True
-        )
-        self.romm_prev_button.callback = self.romm_prev_page_callback
-        self.add_item(self.romm_prev_button)
-
-        self.romm_next_button = discord.ui.Button(
-            label="Next RomM users ➡️", 
-            style=discord.ButtonStyle.secondary, 
-            row=3, 
-            disabled=True
-        )
-        self.romm_next_button.callback = self.romm_next_page_callback
-        self.add_item(self.romm_next_button)
-        
-        # Action Buttons (Row 4)
-        self.link_button = discord.ui.Button(
-            label="Link Accounts",
+        self.fulfill_button = discord.ui.Button(
+            label="Fulfill",
             style=discord.ButtonStyle.success,
-            row=4,
-            disabled=True
         )
-        self.link_button.callback = self.link_accounts_callback
-        self.add_item(self.link_button)
+        self.fulfill_button.callback = self.fulfill_callback
         
-        self.unlink_button = discord.ui.Button(
-            label="Unlink Account",
+        self.reject_button = discord.ui.Button(
+            label="Reject",
             style=discord.ButtonStyle.danger,
-            row=4,
-            disabled=True
         )
-        self.unlink_button.callback = self.unlink_account_callback
-        self.add_item(self.unlink_button)
-                
-        self.invite_button = discord.ui.Button(
-            label="📧 Send Invite Link",
+        self.reject_button.callback = self.reject_callback
+        
+        self.forward_button = discord.ui.Button(
+            label="Next →",
             style=discord.ButtonStyle.primary,
-            row=4,
-            disabled=True
+            disabled=len(requests_data) <= 1  # Disable if only one request
         )
-        self.invite_button.callback = self.send_invite_callback
-        self.add_item(self.invite_button)
-                
-        self.bulk_create_button = discord.ui.Button(
-            label="Bulk Send Invites",
-            style=discord.ButtonStyle.primary,
-            row=4
+        self.forward_button.callback = self.forward_callback
+        
+        # Add note button 
+        self.note_button = discord.ui.Button(
+            label="Add Note",
+            style=discord.ButtonStyle.secondary,
         )
-        self.bulk_create_button.callback = self.bulk_create_callback
-        self.add_item(self.bulk_create_button)
-             
-    async def populate_discord_users(self):
-        """Populate the Discord user dropdown with pagination"""
-        # Step 1: Fetch and sort the full list ONCE if we haven't already
-        if not self.full_member_list:
-            # MODIFIED: Always fetch all members from the guild, ignoring the role ID
-            members = self.guild.members
-            # Store the full sorted list
-            self.full_member_list = sorted(members, key=lambda m: m.display_name.lower())
-
-        # Clear previous options
-        self.discord_select.options.clear()
-        
-        # Step 2: Calculate pagination variables
-        total_members = len(self.full_member_list)
-        total_pages = (total_members + self.page_size - 1) // self.page_size if self.page_size > 0 else 1
-        start_index = self.discord_current_page * self.page_size
-        end_index = start_index + self.page_size
-        
-        # Get the slice of members for the current page
-        members_on_page = self.full_member_list[start_index:end_index]
-
-        # Update placeholder to show page info
-        self.discord_select.placeholder = f"Select a Discord user (Page {self.discord_current_page + 1}/{total_pages})"
-
-        if not members_on_page:
-            self.discord_select.add_option(label="No users found on this page", value="no_users")
-            self.discord_prev_button.disabled = self.discord_current_page == 0
-            self.discord_next_button.disabled = end_index >= total_members
-            return
-
-        # Step 3: Populate options for the current page
-        for member in members_on_page:
-            link = await self.cog.db_manager.get_user_link(member.id)
-            if link:
-                self.discord_user_links[member.id] = link['romm_username']
-                description = f"Linked to: {link['romm_username']}"
-                emoji = "✅"
-            else:
-                self.discord_user_links[member.id] = None
-                description = "Not linked"
-                emoji = "❌"
-            
-            self.discord_select.add_option(
-                label=f"{emoji} {member.display_name[:75]}",
-                value=str(member.id),
-                description=description[:100]
-            )
-            
-        # Step 4: Update pagination button states
-        self.discord_prev_button.disabled = self.discord_current_page == 0
-        self.discord_next_button.disabled = end_index >= total_members
-    
-    async def populate_romm_users(self):
-        """Populate the RomM user dropdown with pagination"""
-        # Always fetch fresh data to ensure we have current state
-        users_data = await self.bot.fetch_api_endpoint('users', bypass_cache=True)
-        if not users_data:
-            self.romm_select.options.clear()
-            self.romm_select.add_option(
-                label="Failed to fetch RomM users",
-                value="error"
-            )
-            return
-        
-        self.romm_users = users_data
-        
-        # Get all existing links from database
-        linked_usernames = set()
-        linked_romm_ids = set()
-        discord_to_romm = {}
-        
-        try:
-            async with aiosqlite.connect(self.cog.db_manager.db_path) as db:
-                cursor = await db.execute("SELECT discord_id, romm_username, romm_id FROM user_links")
-                rows = await cursor.fetchall()
-                for row in rows:
-                    discord_id, romm_username, romm_id = row
-                    linked_usernames.add(romm_username.lower() if romm_username else "")
-                    linked_romm_ids.add(romm_id)
-                    discord_to_romm[discord_id] = romm_username
-        except Exception as e:
-            logger.error(f"Error fetching linked users: {e}")
-        
-        # Sort users and prepare full list with metadata
-        self.full_romm_list = []
-        for user in sorted(users_data, key=lambda u: u.get('username', '').lower()):
-            username = user.get('username', 'Unknown')
-            user_id = user.get('id')
-            role = user.get('role', 'VIEWER')
-            
-            # Check if linked
-            is_linked = (username.lower() in linked_usernames) or (user_id in linked_romm_ids)
-            
-            # Find which Discord user this is linked to
-            linked_to = None
-            for d_id, r_username in discord_to_romm.items():
-                if r_username and r_username.lower() == username.lower():
-                    try:
-                        member = self.guild.get_member(int(d_id))
-                        if member:
-                            linked_to = member.display_name
-                            break
-                    except:
-                        pass
-            
-            self.full_romm_list.append({
-                'user': user,
-                'username': username,
-                'user_id': user_id,
-                'role': role,
-                'is_linked': is_linked,
-                'linked_to': linked_to
-            })
-        
-        # Clear options and paginate
-        self.romm_select.options.clear()
-        
-        # Calculate pagination
-        total_users = len(self.full_romm_list)
-        if total_users == 0:
-            self.romm_select.add_option(
-                label="No RomM users available",
-                value="no_users",
-                description="No users found in RomM"
-            )
-            self.romm_prev_button.disabled = True
-            self.romm_next_button.disabled = True
-            return
-        
-        total_pages = (total_users + self.page_size - 1) // self.page_size
-        start_index = self.romm_current_page * self.page_size
-        end_index = start_index + self.page_size
-        
-        # Get users for current page
-        users_on_page = self.full_romm_list[start_index:end_index]
-        
-        # Update placeholder
-        self.romm_select.placeholder = f"Select a RomM user (Page {self.romm_current_page + 1}/{total_pages})"
-        
-        # Add options for current page
-        for user_data in users_on_page:
-            emoji = "🔗" if user_data['is_linked'] else "🆓"
-            status = f" (Linked to: {user_data['linked_to']})" if user_data['linked_to'] else " (Already linked)" if user_data['is_linked'] else ""
-            
-            self.romm_select.add_option(
-                label=f"{emoji} {user_data['username'][:40]}{status[:30]}",
-                value=user_data['username'],
-                description=f"Role: {user_data['role']}"[:100]
-            )
-        
-        # Update pagination button states
-        self.romm_prev_button.disabled = self.romm_current_page == 0 or self.romm_select.disabled
-        self.romm_next_button.disabled = end_index >= total_users or self.romm_select.disabled
-    
-    async def discord_select_callback(self, interaction: discord.Interaction):
-        """Handle Discord user selection"""
-        # Respond to the interaction first
-        await interaction.response.edit_message(embed=self.create_status_embed(), view=self)
-        
-        if not self.discord_select.values:
-            self.selected_discord_user = None
-            self.update_button_states()
-            return
-            
-        user_id = int(self.discord_select.values[0])
-        self.selected_discord_user = self.guild.get_member(user_id)
-        
-        # Reset RomM pagination when Discord user changes
-        self.romm_current_page = 0
-        
-        # Enable/disable buttons based on link status
-        existing_link = self.discord_user_links.get(user_id)
-        
-        if existing_link:
-            # User is linked
-            self.unlink_button.disabled = False
-            self.link_button.disabled = True
-            self.romm_select.disabled = True
-            self.invite_button.disabled = True
-            self.romm_prev_button.disabled = True
-            self.romm_next_button.disabled = True
-        else:
-            # User is not linked
-            self.unlink_button.disabled = True
-            self.link_button.disabled = True  # Will be enabled when RomM user selected
-            self.romm_select.disabled = False
-            self.invite_button.disabled = False
-            
-            # Populate RomM users if not already done
-            if not self.romm_select.options or (len(self.romm_select.options) == 1 and self.romm_select.options[0].value == "placeholder"):
-                await self.populate_romm_users()
-        
-        # Update the message with new state
-        await interaction.edit_original_response(embed=self.create_status_embed(), view=self)
-    
-    async def discord_prev_page_callback(self, interaction: discord.Interaction):
-        """Go to the previous page of Discord users"""
-        if self.discord_current_page > 0:
-            self.discord_current_page -= 1
-            await self.populate_discord_users()
-            await interaction.response.edit_message(view=self, embed=self.create_status_embed())
-
-    async def discord_next_page_callback(self, interaction: discord.Interaction):
-        """Go to the next page of Discord users"""
-        total_pages = (len(self.full_member_list) + self.page_size - 1) // self.page_size
-        if self.discord_current_page < total_pages - 1:
-            self.discord_current_page += 1
-            await self.populate_discord_users()
-            await interaction.response.edit_message(view=self, embed=self.create_status_embed())
-    
-    async def romm_prev_page_callback(self, interaction: discord.Interaction):
-        """Go to the previous page of RomM users"""
-        if self.romm_current_page > 0:
-            self.romm_current_page -= 1
-            await self.populate_romm_users()
-            await interaction.response.edit_message(view=self, embed=self.create_status_embed())
-
-    async def romm_next_page_callback(self, interaction: discord.Interaction):
-        """Go to the next page of RomM users"""
-        total_pages = (len(self.full_romm_list) + self.page_size - 1) // self.page_size
-        if self.romm_current_page < total_pages - 1:
-            self.romm_current_page += 1
-            await self.populate_romm_users()
-            await interaction.response.edit_message(view=self, embed=self.create_status_embed())
-    
-    async def romm_select_callback(self, interaction: discord.Interaction):
-        """Handle RomM user selection"""
-        await interaction.response.edit_message(embed=self.create_status_embed(), view=self)
-        
-        if not self.romm_select.values:
-            self.selected_romm_user = None
-            self.link_button.disabled = True
-        else:
-            username = self.romm_select.values[0]
-            # Find user in the full list
-            user_data = next(
-                (u for u in self.full_romm_list if u['username'] == username),
-                None
-            )
-            if user_data:
-                self.selected_romm_user = user_data['user']
-                self.link_button.disabled = False
-            else:
-                # Fallback to old method if full_romm_list isn't populated
-                self.selected_romm_user = next(
-                    (u for u in self.romm_users if u.get('username') == username),
-                    None
-                )
-                self.link_button.disabled = False
-        
-        await interaction.edit_original_response(embed=self.create_status_embed(), view=self)
-    
-    async def link_accounts_callback(self, interaction: discord.Interaction):
-        """Link selected Discord and RomM accounts"""
-        await interaction.response.defer()
-        
-        if not self.selected_discord_user or not self.selected_romm_user:
-            await interaction.followup.send("Please select both users to link", ephemeral=True)
-            return
-        
-        # Store the values before clearing them
-        discord_user = self.selected_discord_user
-        romm_username = self.selected_romm_user['username']
-        romm_id = self.selected_romm_user['id']
-        
-        avatar_url = self.cog.get_member_avatar_url(discord_user)
-        
-        success = await self.cog.db_manager.add_user_link(
-            discord_user.id,
-            romm_username,
-            romm_id,
-            discord_user.display_name,
-            avatar_url
-        )
-        
-        if success:
-            # Refresh the view
-            await self.populate_discord_users()
-            
-            # Clear selections
-            self.selected_romm_user = None
-            self.selected_discord_user = None
-            
-            # Reset the RomM select dropdown
-            self.romm_select.disabled = True
-            self.romm_select.options.clear()
-            self.romm_select.add_option(
-                label="Select Discord user first",
-                value="placeholder",
-                description="Waiting for Discord user selection..."
-            )
-            
-            self.update_button_states()
-            
-            # Use the stored values in the success message
-            await interaction.followup.send(
-                f"✅ Successfully linked {discord_user.mention} to RomM user `{romm_username}`",
-                ephemeral=True
-            )
-            await interaction.edit_original_response(embed=self.create_status_embed(), view=self)
-        else:
-            await interaction.followup.send("❌ Failed to link accounts", ephemeral=True)
-       
-    async def unlink_account_callback(self, interaction: discord.Interaction):
-        """Unlink selected Discord user from RomM with options"""
-        await interaction.response.defer()
-        
-        if not self.selected_discord_user:
-            await interaction.followup.send("Please select a Discord user", ephemeral=True)
-            return
-        
-        # Store the Discord user before any operations
-        discord_user = self.selected_discord_user
-        
-        # Get the existing link
-        link = await self.cog.db_manager.get_user_link(discord_user.id)
-        if not link:
-            await interaction.followup.send("This user has no linked account", ephemeral=True)
-            return
-        
-        # Get the RomM user details
-        romm_username = link['romm_username']
-        romm_id = link.get('romm_id')  # Get the stored RomM ID if available
-        
-        # Try to find the user in the API if we don't have the ID
-        user = None
-        if romm_id:
-            # If we have the ID stored, we can use it directly
-            user = {'id': romm_id, 'username': romm_username}
-        else:
-            # Fall back to finding by username
-            user = await self.cog.find_user_by_username(romm_username)
-        
-        # Check if it's an admin account
-        if user:
-            # Fetch full user data if needed to check admin status
-            users_data = await self.bot.fetch_api_endpoint('users')
-            if users_data:
-                full_user = next((u for u in users_data if u.get('id') == user['id']), None)
-                if full_user and full_user.get('role', '').upper() == 'ADMIN':
-                    await interaction.followup.send(
-                        "⚠️ Cannot unlink, disable, or delete admin accounts for safety. Remove admin role in RomM first.",
-                        ephemeral=True
-                    )
-                    return
-        
-        # Show confirmation with options
-        confirm_view = UnlinkConfirmView()
-        
-        embed = discord.Embed(
-            title="🔗 Unlink Account Options",
-            description=f"How would you like to unlink {discord_user.mention} from RomM user `{romm_username}`?",
-            color=discord.Color.blue()
-        )
-        embed.add_field(
-            name="🔓 Unlink Only",
-            value="Remove Discord-RomM connection but keep the RomM account active",
-            inline=False
-        )
-        embed.add_field(
-            name="🔒 Unlink & Disable",
-            value="Remove connection AND disable the RomM account (user cannot login but account is preserved)",
-            inline=False
-        )
-        embed.add_field(
-            name="🗑️ Unlink & Delete", 
-            value="Remove connection AND delete the RomM account completely",
-            inline=False
-        )
-        
-        confirm_msg = await interaction.followup.send(
-            embed=embed,
-            view=confirm_view,
-            ephemeral=True
-        )
-        
-        await confirm_view.wait()
-        
-        if not confirm_view.action:
-            await confirm_msg.edit(content="Operation cancelled.", embed=None, view=None)
-            return
-        
-        # Process based on selected action
-        if confirm_view.action == 'unlink_only':
-            # Just remove the link from database
-            await self.cog.db_manager.delete_user_link(discord_user.id)
-            
-            # Refresh the view
-            await self.populate_discord_users()
-            self.selected_discord_user = None
-            self.update_button_states()
-            
-            await confirm_msg.edit(
-                content=f"✅ Successfully unlinked {discord_user.mention} from RomM user `{romm_username}`\nThe RomM account remains active.",
-                embed=None,
-                view=None
-            )
-            
-            # Log the action
-            log_channel = self.bot.get_channel(self.cog.log_channel_id)
-            if log_channel:
-                await log_channel.send(
-                    embed=discord.Embed(
-                        title="🔓 Account Unlinked",
-                        description=f"{discord_user.mention} unlinked from `{romm_username}` (account preserved)",
-                        color=discord.Color.blue()
-                    )
-                )
-        
-        elif confirm_view.action == 'unlink_disable':
-            # Disable the RomM account
-            disable_success = False
-            error_msg = None
-            
-            if user and 'id' in user:
-                try:
-                    logger.info(f"Attempting to disable RomM user: ID={user['id']}, Username={romm_username}")
-                    
-                    # Create a FormData object
-                    form_data = aiohttp.FormData()
-                    form_data.add_field('enabled', 'false') # API expects a string 'false' for form data
-                    
-                    # Pass the form_data object instead of params
-                    result = await self.bot.make_authenticated_request(
-                        method="PUT",
-                        endpoint=f"users/{user['id']}",
-                        form_data=form_data,
-                        require_csrf=True
-                    )
-                    
-                    if result is not None:
-                        disable_success = True
-                        logger.info(f"Successfully disabled RomM user {romm_username}")
-                    else:
-                        error_msg = "Failed to disable user"
-                        logger.error(f"Failed to disable user {romm_username}: {error_msg}")
-                        
-                except Exception as e:
-                    error_msg = str(e)
-                    logger.error(f"Exception while disabling user {romm_username}: {e}", exc_info=True)
-            else:
-                error_msg = "Could not find user in RomM"
-                logger.error(f"User not found in RomM: {romm_username}")
-            
-            if disable_success:
-                # Remove from database
-                await self.cog.db_manager.delete_user_link(discord_user.id)
+        self.note_button.callback = self.note_callback
                 
-                # Refresh the view
-                await self.populate_discord_users()
-                self.selected_discord_user = None
-                self.update_button_states()
-                
-                await confirm_msg.edit(
-                    content=f"✅ Successfully unlinked {discord_user.mention} and disabled RomM account `{romm_username}`\nThe account exists but cannot login.",
-                    embed=None,
-                    view=None
-                )
-                
-                # Log the action
-                log_channel = self.bot.get_channel(self.cog.log_channel_id)
-                if log_channel:
-                    await log_channel.send(
-                        embed=discord.Embed(
-                            title="🔒 Account Unlinked & Disabled",
-                            description=f"{discord_user.mention} unlinked from `{romm_username}` (account disabled)",
-                            color=discord.Color.yellow()
-                        )
-                    )
-            else:
-                # Disable failed but we can still offer to unlink
-                await confirm_msg.edit(
-                    content=(
-                        f"❌ Failed to disable RomM account for `{romm_username}`\n"
-                        f"Error: {error_msg or 'Unknown error'}\n\n"
-                        "The accounts have been unlinked, but the RomM account may still be active."
-                    ),
-                    embed=None,
-                    view=None
-                )
-                
-                # Still unlink even if disable failed
-                await self.cog.db_manager.delete_user_link(discord_user.id)
-                await self.populate_discord_users()
-                self.selected_discord_user = None
-                self.update_button_states()
-            
-        elif confirm_view.action == 'unlink_delete':
-            # Try to delete the RomM account
-            delete_success = False
-            error_msg = None
-            
-            if user and 'id' in user:
-                try:
-                    # Log the deletion attempt
-                    logger.info(f"Attempting to delete RomM user: ID={user['id']}, Username={romm_username}")
-                    
-                    # Use the delete method with proper error handling
-                    result = await self.bot.make_authenticated_request(
-                        method="DELETE",
-                        endpoint=f"users/{user['id']}",
-                        require_csrf=True
-                    )
-                    
-                    # Check if deletion was successful
-                    if result is not None or result == {}:  # API might return empty dict on success
-                        delete_success = True
-                        logger.info(f"Successfully deleted RomM user {romm_username}")
-                    else:
-                        error_msg = "API returned unexpected response"
-                        logger.error(f"Failed to delete user {romm_username}: {error_msg}")
-                        
-                except Exception as e:
-                    error_msg = str(e)
-                    logger.error(f"Exception while deleting user {romm_username}: {e}", exc_info=True)
-            else:
-                error_msg = "Could not find user in RomM"
-                logger.error(f"User not found in RomM: {romm_username}")
-            
-            if delete_success:
-                # Remove from database
-                await self.cog.db_manager.delete_user_link(discord_user.id)
-                
-                # Refresh the view
-                await self.populate_discord_users()
-                self.selected_discord_user = None
-                self.update_button_states()
-                
-                await confirm_msg.edit(
-                    content=f"✅ Successfully unlinked {discord_user.mention} and deleted RomM account `{romm_username}`",
-                    embed=None,
-                    view=None
-                )
-                
-                # Log the deletion
-                log_channel = self.bot.get_channel(self.cog.log_channel_id)
-                if log_channel:
-                    await log_channel.send(
-                        embed=discord.Embed(
-                            title="🗑️ Account Unlinked & Deleted",
-                            description=f"{discord_user.mention} unlinked from `{romm_username}` (account deleted)",
-                            color=discord.Color.red()
-                        )
-                    )
-            else:
-                # Deletion failed but we can still offer to unlink
-                retry_view = discord.ui.View(timeout=30)
-                
-                unlink_anyway_btn = discord.ui.Button(
-                    label="Unlink Anyway",
-                    style=discord.ButtonStyle.primary
-                )
-                cancel_btn = discord.ui.Button(
-                    label="Cancel",
-                    style=discord.ButtonStyle.secondary
-                )
-                
-                async def unlink_anyway_callback(inter: discord.Interaction):
-                    await inter.response.defer()
-                    await self.cog.db_manager.delete_user_link(discord_user.id)
-                    await self.populate_discord_users()
-                    self.selected_discord_user = None
-                    self.update_button_states()
-                    await inter.followup.send(
-                        f"✅ Unlinked {discord_user.mention} from RomM (account may still exist in RomM)",
-                        ephemeral=True
-                    )
-                    retry_view.stop()
-                
-                async def cancel_callback(inter: discord.Interaction):
-                    await inter.response.defer()
-                    retry_view.stop()
-                
-                unlink_anyway_btn.callback = unlink_anyway_callback
-                cancel_btn.callback = cancel_callback
-                
-                retry_view.add_item(unlink_anyway_btn)
-                retry_view.add_item(cancel_btn)
-                
-                await confirm_msg.edit(
-                    content=(
-                        f"❌ Failed to delete RomM account for `{romm_username}`\n"
-                        f"Error: {error_msg or 'Unknown error'}\n\n"
-                        "Would you like to unlink the accounts anyway? "
-                        "(The RomM account will remain active)"
-                    ),
-                    embed=None,
-                    view=retry_view
-                )
+        # Add all buttons
+        self.add_item(self.back_button)
+        self.add_item(self.fulfill_button)
+        self.add_item(self.reject_button)
+        self.add_item(self.forward_button)
+        self.add_item(self.note_button)
         
-        await interaction.edit_original_response(embed=self.create_status_embed(), view=self)
-    
-    async def send_invite_callback(self, interaction: discord.Interaction):
-        """Send an invite link to the selected Discord user by calling the main cog method."""
-        await interaction.response.defer(ephemeral=True)
-        
-        if not self.selected_discord_user:
-            await interaction.followup.send("Please select a Discord user.", ephemeral=True)
-            return
-        
-        # Call the standardized method from the cog
-        success = await self.cog.send_invite_link(self.selected_discord_user)
-        
-        if success:
-            await interaction.followup.send(
-                f"✅ Successfully sent invite link to {self.selected_discord_user.mention}",
-                ephemeral=True
-            )
-        else:
-            # The send_invite_link function already handles logging and DM failure notifications
-            await interaction.followup.send(
-                f"❌ Failed to send invite link to {self.selected_discord_user.mention}. See logs for details.",
-                ephemeral=True
-            )
-    
-    async def create_account_callback(self, interaction: discord.Interaction):
-        """Create new RomM account for selected Discord user"""
-        await interaction.response.defer()
-        
-        if not self.selected_discord_user:
-            await interaction.followup.send("Please select a Discord user", ephemeral=True)
-            return
-        
-        # Store the Discord user before operations
-        discord_user = self.selected_discord_user
-        
-        # Check if already linked
-        if self.discord_user_links.get(discord_user.id):
-            await interaction.followup.send("This user already has a linked account", ephemeral=True)
-            return
-        
-        # Create account
-        success = await self.cog.create_user_account(discord_user, interactive=False)
-        
-        if success:
-            # Refresh the view
-            await self.populate_discord_users()
-            
-            # Clear selection after operations
-            self.selected_discord_user = None
-            self.update_button_states()
-            
-            await interaction.followup.send(
-                f"✅ Successfully created RomM account for {discord_user.mention}",
-                ephemeral=True
-            )
-            await interaction.edit_original_response(embed=self.create_status_embed(), view=self)
-        else:
-            await interaction.followup.send("❌ Failed to create RomM account", ephemeral=True)
-    
-    async def bulk_create_callback(self, interaction: discord.Interaction):
-        """Bulk send invites for users with the auto-register role"""
-        if not self.cog.auto_register_role_id:
-            await interaction.response.send_message(
-                "❌ Auto-register role not configured",
-                ephemeral=True
-            )
-            return
-        
-        await interaction.response.defer(ephemeral=True)
-        
-        role = self.guild.get_role(self.cog.auto_register_role_id)
-        if not role:
-            await interaction.followup.send("❌ Auto-register role not found", ephemeral=True)
-            return
-        
-        # Find users needing invites
-        members_to_invite = []
-        for member in role.members:
-            link = await self.cog.db_manager.get_user_link(member.id)
-            if not link:
-                members_to_invite.append(member)
-        
-        if not members_to_invite:
-            await interaction.followup.send("✅ All role members already have accounts or pending invites", ephemeral=True)
-            return
-        
-        # Create progress message
-        progress_msg = await interaction.followup.send(
-            f"Sending invites to {len(members_to_invite)} users...",
-            ephemeral=True
-        )
-        
-        sent = 0
-        failed = 0
-        
-        for member in members_to_invite:
-            if await self.cog.send_invite_link(member):
-                sent += 1
-            else:
-                failed += 1
-            
-            # Update progress every 5 users
-            if (sent + failed) % 5 == 0:
-                try:
-                    await interaction.edit_original_response(
-                        content=f"Progress: {sent + failed}/{len(members_to_invite)} processed..."
-                    )
-                except:
-                    pass  # Ignore if message edit fails
-        
-        # Final summary
-        try:
-            await interaction.edit_original_response(
-                content=f"✅ Sent: {sent} invites\n❌ Failed: {failed} invites"
-            )
-        except:
-            await interaction.followup.send(
-                f"✅ Sent: {sent} invites\n❌ Failed: {failed} invites",
-                ephemeral=True
-            )
-        
-        # Refresh the view
-        await self.populate_discord_users()
-        await interaction.edit_original_response(embed=self.create_status_embed(), view=self)
-        
-    async def refresh_callback(self, interaction: discord.Interaction):
-        """Refresh all data"""
-        await interaction.response.defer()
-        
-        await self.populate_discord_users()
-        if not self.romm_select.disabled:
-            await self.populate_romm_users()
-        
-        await interaction.followup.send("✅ Data refreshed", ephemeral=True)
-        await interaction.edit_original_response(embed=self.create_status_embed(), view=self)
+        self.update_button_states()
     
     def update_button_states(self):
-        """Update button states based on selections"""
-        if not self.selected_discord_user:
-            self.link_button.disabled = True
-            self.unlink_button.disabled = True
-            self.romm_select.disabled = True
-            self.invite_button.disabled = True
-        else:
-            existing_link = self.discord_user_links.get(self.selected_discord_user.id)
-            if existing_link:
-                self.unlink_button.disabled = False
-                self.link_button.disabled = True
-                self.romm_select.disabled = True
-                self.invite_button.disabled = True
-            else:
-                self.unlink_button.disabled = True
-                self.romm_select.disabled = False
-                self.link_button.disabled = not self.selected_romm_user
-                self.invite_button.disabled = False
+        """Update button states based on current index and request status"""
+        if not self.requests:
+            for item in self.children:
+                item.disabled = True
+            return
+            
+        # Navigation buttons
+        self.back_button.disabled = self.current_index == 0
+        self.forward_button.disabled = self.current_index >= len(self.requests) - 1
         
-    def create_status_embed(self):
-        """Create status embed showing current selections and stats"""
+        # Action buttons - disable for non-pending requests
+        current_request = self.requests[self.current_index]
+        is_pending = current_request[6] == 'pending'
+        self.fulfill_button.disabled = not is_pending
+        self.reject_button.disabled = not is_pending
+    
+    def create_request_embed(self, req, user_avatar_url=None):
+        """Create an embed for a request with status indication"""
+        # Parse details for IGDB metadata
+        details = req[5] if req[5] else ""
+        game_data = {}
+        cover_url = None
+        igdb_name = req[4]  # Default to requested game name
+        
+        # Extract version request info if present
+        version_request = None
+        additional_notes = None
+        if "Version Request:" in details:
+            try:
+                version_parts = details.split("Version Request: ", 1)[1].split("\n", 1)
+                version_request = version_parts[0]
+                if len(version_parts) > 1 and "Additional Notes:" in version_parts[1]:
+                    additional_notes = version_parts[1].replace("Additional Notes: ", "").split("\n")[0]
+            except:
+                pass
+
+        if "IGDB Metadata:" in details:
+            try:
+                metadata_lines = details.split("IGDB Metadata:\n")[1].split("\n")
+                for line in metadata_lines:
+                    if ": " in line:
+                        key, value = line.split(": ", 1)
+                        game_data[key] = value
+                        if key == "Game":
+                            igdb_name = value.split(" (", 1)[0]
+                
+                cover_matches = re.findall(r'Cover URL:\s*(https://[^\s]+)', details)
+                if cover_matches:
+                    cover_url = cover_matches[0]
+            except Exception as e:
+                logger.error(f"Error parsing metadata: {e}")
+        
+        # Determine status color
+        status_colors = {
+            'pending': discord.Color.yellow(),
+            'fulfilled': discord.Color.green(),
+            'cancelled': discord.Color.light_grey(),
+            'reject': discord.Color.red()
+        }
+        
+        # Create embed
+        status = req[6].upper()
         embed = discord.Embed(
-            title="👥 User Management System",
-            color=discord.Color.blue()
+            title=f"{igdb_name}",
+            color=status_colors.get(req[6], discord.Color.blue()),
         )
         
-        # Current selection info
-        if self.selected_discord_user:
-            existing_link = self.discord_user_links.get(self.selected_discord_user.id)
-            status = f"Linked to: `{existing_link}`" if existing_link else "Not linked"
-            embed.add_field(
-                name="Selected Discord User",
-                value=f"{self.selected_discord_user.mention}\n{status}",
-                inline=True
-            )
-        else:
-            embed.add_field(
-                name="Selected Discord User",
-                value="None selected",
-                inline=True
-            )
-        
-        if self.selected_romm_user:
-            embed.add_field(
-                name="Selected RomM User",
-                value=f"`{self.selected_romm_user['username']}`\nRole: {self.selected_romm_user.get('role', 'VIEWER')}",
-                inline=True
-            )
-        else:
-            embed.add_field(
-                name="Selected RomM User",
-                value="None selected",
-                inline=True
-            )
-        
-        # Statistics
-        total_discord = len(self.discord_select.options) if self.discord_select.options else 0
-        linked_count = sum(1 for link in self.discord_user_links.values() if link)
+        # Add status indicator field at the top
+        status_emoji = {
+            'pending': '⏳',
+            'fulfilled': '✅',
+            'cancelled': '🚫',
+            'reject': '❌'
+        }.get(req[6], '❓')
         
         embed.add_field(
-            name="Statistics",
-            value=f"Discord Users: {total_discord}\nLinked Accounts: {linked_count}\nUnlinked: {total_discord - linked_count}",
+            name="Status",
+            value=f"{status_emoji} **{req[6].title()}**",
             inline=True
         )
         
-        # Instructions
+        # Platform field
+        search_cog = self.bot.get_cog('Search')
+        platform_display = req[3]
+        if search_cog:
+            platform_display = search_cog.get_platform_with_emoji(req[3])
+
         embed.add_field(
-            name="Instructions",
-            value=(
-                "1. Select a Discord user from the dropdown\n"
-                "2. Choose an action:\n"
-                "   • **Link**: Connect Discord account to existing RomM account\n"
-                "   • **Unlink**: Remove connection and delete account\n"
-                "   • **Send Invite Link**: Send an invite link to a selected Discord user, prompting them to create an account\n"
-                "   • **Bulk Send Invites**: Send an invite link to all Auto Regester role members"
-            ),
-            inline=False
+            name="Platform",
+            value=platform_display,
+            inline=True
         )
         
-        embed.set_footer(text="Changes are applied immediately")
+        # Request ID field
+        embed.add_field(
+            name="Request ID",
+            value=f"#{req[0]}",
+            inline=True
+        )
+        
+        # If there's a version request, add it prominently
+        if version_request:
+            embed.add_field(
+                name="Version Requested",
+                value=version_request[:1024],
+                inline=False
+            )
+        
+        if additional_notes:
+            embed.add_field(
+                name="Additional Notes from User",
+                value=additional_notes[:1024],
+                inline=False
+            )
+        
+        # Set images
+        if cover_url and cover_url != 'None':
+            embed.set_image(url=cover_url)
+        
+        # Set user avatar as thumbnail
+        if user_avatar_url:
+            embed.set_thumbnail(url=user_avatar_url)
+        else:
+            embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
+        
+        # Genre field if available
+        if "Genres" in game_data and game_data["Genres"] != "Unknown":
+            genres = game_data["Genres"].split(", ")[:2]
+            embed.add_field(
+                name="Genre",
+                value=", ".join(genres),
+                inline=True
+            )
+        
+        # Release Date if available
+        if "Release Date" in game_data and game_data["Release Date"] != "Unknown":
+            try:
+                date_obj = datetime.strptime(game_data["Release Date"], "%Y-%m-%d")
+                formatted_date = date_obj.strftime("%B %d, %Y")
+            except:
+                formatted_date = game_data["Release Date"]
+            embed.add_field(
+                name="Release Date",
+                value=formatted_date,
+                inline=True
+            )
+        
+        # Companies if available
+        companies = []
+        if "Developers" in game_data and game_data["Developers"] != "Unknown":
+            developers = game_data["Developers"].split(", ")[:2]
+            companies.extend(developers)
+        if "Publishers" in game_data and game_data["Publishers"] != "Unknown":
+            publishers = game_data["Publishers"].split(", ")
+            remaining_slots = 2 - len(companies)
+            if remaining_slots > 0:
+                companies.extend(publishers[:remaining_slots])
+        
+        if companies:
+            embed.add_field(
+                name="Companies",
+                value=", ".join(companies),
+                inline=True
+            )
+        
+        # Summary if available
+        if "Summary" in game_data:
+            summary = game_data["Summary"]
+            if len(summary) > 500:
+                summary = summary[:497] + "..."
+            embed.add_field(
+                name="Summary",
+                value=summary,
+                inline=False
+            )
+        
+        # Admin notes if present
+        if req[11]:  # notes field
+            embed.add_field(
+                name="Admin Notes",
+                value=req[11][:1024],
+                inline=False
+            )
+        
+        # Fulfillment info if fulfilled/rejected
+        if req[9]:  # fulfilled_by
+            action = "Fulfilled" if req[6] == 'fulfilled' else "Rejected"
+            embed.add_field(
+                name=f"✍️ {action} By",
+                value=req[10],  # fulfiller_name
+                inline=True
+            )
+            
+        # Auto-fulfilled indicator
+        if req[12]:  # auto_fulfilled
+            embed.add_field(
+                name="🤖 Auto-Fulfilled",
+                value="Yes",
+                inline=True
+            )
+        
+        # Links section
+        if igdb_name:
+            igdb_link_name = igdb_name.lower().replace(' ', '-')
+            igdb_link_name = re.sub(r'[^a-z0-9-]', '', igdb_link_name)
+            igdb_url = f"https://www.igdb.com/games/{igdb_link_name}"
+            embed.add_field(
+                name="Links",
+                value=f"[IGDB]({igdb_url})",
+                inline=True
+            )
+        
+        # Footer with requester info and pagination
+        total = len(self.requests)
+        embed.set_footer(
+            text=f"Request {self.current_index + 1}/{total} • Requested by {req[2]} • Use buttons to navigate"
+        )
+        
+        return embed
+    
+    async def back_callback(self, interaction: discord.Interaction):
+        if not self.bot.is_admin(interaction.user):
+            await interaction.response.send_message("Only admins can use these controls.", ephemeral=True)
+            return
+        
+        if self.current_index > 0:
+            self.current_index -= 1
+            self.update_button_states()
+            
+            # Fetch user avatar
+            user_avatar_url = None
+            try:
+                user = self.bot.get_user(self.requests[self.current_index][1])
+                if not user:
+                    user = await self.bot.fetch_user(self.requests[self.current_index][1])
+                if user and user.avatar:
+                    user_avatar_url = user.avatar.url
+                elif user:
+                    user_avatar_url = user.default_avatar.url
+            except:
+                pass
+            
+            embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
+            await interaction.response.edit_message(embed=embed, view=self)
+    
+    async def forward_callback(self, interaction: discord.Interaction):
+        """Navigate to next request"""
+        if not self.bot.is_admin(interaction.user):
+            await interaction.response.send_message("Only admins can use these controls.", ephemeral=True)
+            return
+        
+        if self.current_index < len(self.requests) - 1:
+            self.current_index += 1
+            self.update_button_states()
+            
+            # Fetch user avatar
+            user_avatar_url = None
+            try:
+                user = self.bot.get_user(self.requests[self.current_index][1])
+                if not user:
+                    user = await self.bot.fetch_user(self.requests[self.current_index][1])
+                if user and user.avatar:
+                    user_avatar_url = user.avatar.url
+                elif user:
+                    user_avatar_url = user.default_avatar.url
+            except:
+                pass
+            
+            embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
+            await interaction.response.edit_message(embed=embed, view=self)
+    
+    async def fulfill_callback(self, interaction: discord.Interaction):
+        """Mark current request as fulfilled"""
+        if not self.bot.is_admin(interaction.user):
+            await interaction.response.send_message("Only admins can use these controls.", ephemeral=True)
+            return
+        
+        await interaction.response.defer()
+        
+        current_request = self.requests[self.current_index]
+        request_id = current_request[0]
+        
+        try:
+            async with self.db.get_connection() as db:
+                await db.execute(
+                    """
+                    UPDATE requests 
+                    SET status = 'fulfilled', 
+                        fulfilled_by = ?, 
+                        fulfiller_name = ?, 
+                        updated_at = CURRENT_TIMESTAMP 
+                    WHERE id = ?
+                    """,
+                    (interaction.user.id, str(interaction.user), request_id)
+                )
+                await db.commit()
+                
+                logger.info(f"Request fulfilled manually - Admin: {interaction.user} | Request ID: #{request_id} | Discord: {current_request[2]} (ID: {current_request[1]}) | Game: '{current_request[4]}' | Platform: {current_request[3]}")
+                
+                # Get all subscribers for this request
+                cursor = await db.execute(
+                    "SELECT user_id FROM request_subscribers WHERE request_id = ?",
+                    (request_id,)
+                )
+                subscribers = await cursor.fetchall()
+                
+                # Notify original requester
+                try:
+                    # Prioritize the stored IGDB name, fall back to the user's requested name
+                    igdb_game_name = current_request[15] if len(current_request) > 15 else None
+                    display_game_name = igdb_game_name if igdb_game_name else current_request[4]
+
+                    user = await self.bot.fetch_user(current_request[1])
+                    await user.send(f"✅ Your request for '{display_game_name}' has been fulfilled!")
+                except:
+                    logger.warning(f"Could not DM user {current_request[1]}")
+            
+            # Update the request in our list
+            updated_request = list(current_request)
+            updated_request[6] = 'fulfilled'
+            updated_request[9] = interaction.user.id
+            updated_request[10] = str(interaction.user)
+            self.requests[self.current_index] = tuple(updated_request)
+            
+            # Update view
+            self.update_button_states()
+            
+            # Fetch user avatar
+            user_avatar_url = None
+            try:
+                user = self.bot.get_user(self.requests[self.current_index][1])
+                if not user:
+                    user = await self.bot.fetch_user(self.requests[self.current_index][1])
+                if user and user.avatar:
+                    user_avatar_url = user.avatar.url
+                elif user:
+                    user_avatar_url = user.default_avatar.url
+            except:
+                pass
+            
+            embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
+            await interaction.followup.edit_message(message_id=self.message.id, embed=embed, view=self)
+            
+        except Exception as e:
+            logger.error(f"Error fulfilling request: {e}")
+            await interaction.followup.send("❌ An error occurred while fulfilling the request.", ephemeral=True)
+    
+    async def reject_callback(self, interaction: discord.Interaction):
+        """Show modal for rejection reason then reject"""
+        if not self.bot.is_admin(interaction.user):
+            await interaction.response.send_message("Only admins can use these controls.", ephemeral=True)
+            return
+        
+        current_request = self.requests[self.current_index]
+        
+        class RejectModal(discord.ui.Modal):
+            def __init__(self, view, request_data, db):
+                super().__init__(title="Reject Request")
+                self.view = view
+                self.request_data = request_data
+                self.db = db
+                
+                self.reason = discord.ui.InputText(
+                    label="Rejection Reason",
+                    placeholder="Enter reason for rejection (optional)",
+                    style=discord.InputTextStyle.long,
+                    required=False,
+                    max_length=500
+                )
+                self.add_item(self.reason)
+            
+            async def callback(self, modal_interaction: discord.Interaction):
+                await modal_interaction.response.defer()
+                
+                request_id = self.request_data[0]
+                reason = self.reason.value or None
+                
+                try:
+                    async with self.db.get_connection() as db:
+                        await db.execute(
+                            """
+                            UPDATE requests 
+                            SET status = 'reject', 
+                                fulfilled_by = ?, 
+                                fulfiller_name = ?, 
+                                notes = ?,
+                                updated_at = CURRENT_TIMESTAMP 
+                            WHERE id = ?
+                            """,
+                            (modal_interaction.user.id, str(modal_interaction.user), reason, request_id)
+                        )
+                        await db.commit()
+                        
+                        logger.info(f"Request rejected - Admin: {modal_interaction.user} | Request ID: #{request_id} | Discord: {self.request_data[2]} (ID: {self.request_data[1]}) | Game: '{self.request_data[4]}' | Platform: {self.request_data[3]} | Reason: {reason or 'No reason provided'}")
+                        
+                        # Notify user
+                        try:
+                            # Prioritize the stored IGDB name, fall back to the user's requested name
+                            igdb_game_name = self.request_data[15] if len(self.request_data) > 15 else None
+                            display_game_name = igdb_game_name if igdb_game_name else self.request_data[4]
+
+                            user = await self.view.bot.fetch_user(self.request_data[1])
+                            message = f"❌ Your request for '{display_game_name}' has been rejected."
+                            if reason:
+                                message += f"\nReason: {reason}"
+                            await user.send(message)
+                        except:
+                            logger.warning(f"Could not DM user {self.request_data[1]}")
+                    
+                    # Update the request in our list
+                    updated_request = list(self.request_data)
+                    updated_request[6] = 'reject'
+                    updated_request[9] = modal_interaction.user.id
+                    updated_request[10] = str(modal_interaction.user)
+                    updated_request[11] = reason
+                    self.view.requests[self.view.current_index] = tuple(updated_request)
+                    
+                    # Update view
+                    self.view.update_button_states()
+                    embed = self.view.create_request_embed(self.view.requests[self.view.current_index])
+                    await modal_interaction.followup.edit_message(
+                        message_id=self.view.message.id, 
+                        embed=embed, 
+                        view=self.view
+                    )
+                    
+                except Exception as e:
+                    logger.error(f"Error rejecting request: {e}")
+                    await modal_interaction.followup.send(
+                        "❌ An error occurred while rejecting the request.", 
+                        ephemeral=True
+                    )
+        
+        modal = RejectModal(self, current_request, self.db)
+        await interaction.response.send_modal(modal)
+    
+    async def note_callback(self, interaction: discord.Interaction):
+        """Add a note to the current request"""
+        if not self.bot.is_admin(interaction.user):
+            await interaction.response.send_message("Only admins can use these controls.", ephemeral=True)
+            return
+        
+        current_request = self.requests[self.current_index]
+        
+        class NoteModal(discord.ui.Modal):
+            def __init__(self, view, request_data, db):
+                super().__init__(title="Add Note to Request")
+                self.view = view
+                self.request_data = request_data
+                self.db = db
+                
+                # Show current note if exists
+                current_note = request_data[11] or ""
+                self.note = discord.ui.InputText(
+                    label="Note",
+                    placeholder="Enter note for this request",
+                    style=discord.InputTextStyle.long,
+                    required=True,
+                    max_length=500,
+                    value=current_note
+                )
+                self.add_item(self.note)
+            
+            async def callback(self, modal_interaction: discord.Interaction):
+                await modal_interaction.response.defer()
+                
+                request_id = self.request_data[0]
+                note = self.note.value
+                
+                try:
+                    async with self.view.db.get_connection() as db:
+                        await db.execute(
+                            "UPDATE requests SET notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                            (note, request_id)
+                        )
+                        await db.commit()
+                    
+                    # Update the request in our list
+                    updated_request = list(self.request_data)
+                    updated_request[11] = note
+                    self.view.requests[self.view.current_index] = tuple(updated_request)
+                    
+                    # Update view
+                    embed = self.view.create_request_embed(self.view.requests[self.view.current_index])
+                    await modal_interaction.followup.edit_message(
+                        message_id=self.view.message.id,
+                        embed=embed,
+                        view=self.view
+                    )
+                    
+                except Exception as e:
+                    logger.error(f"Error adding note: {e}")
+                    await modal_interaction.followup.send(
+                        "❌ An error occurred while adding the note.",
+                        ephemeral=True
+                    )
+        
+        modal = NoteModal(self, current_request, self.db)
+        await interaction.response.send_modal(modal)
+    
+    async def refresh_callback(self, interaction: discord.Interaction):
+        """Refresh the requests list from database"""
+        if not self.bot.is_admin(interaction.user):
+            await interaction.response.send_message("Only admins can use these controls.", ephemeral=True)
+            return
+        
+        await interaction.response.defer()
+        
+        try:
+            async with self.db.get_connection() as db:
+                cursor = await db.execute(
+                    "SELECT * FROM requests ORDER BY created_at DESC"
+                )
+                self.requests = await cursor.fetchall()
+            
+            # Reset to first page if current index is out of bounds
+            if self.current_index >= len(self.requests):
+                self.current_index = 0
+            
+            self.update_button_states()
+            
+            if self.requests:
+                # Fetch user avatar for current request
+                user_avatar_url = None
+                try:
+                    user = self.bot.get_user(self.requests[self.current_index][1])
+                    if not user:
+                        user = await self.bot.fetch_user(self.requests[self.current_index][1])
+                    if user and user.avatar:
+                        user_avatar_url = user.avatar.url
+                    elif user:
+                        user_avatar_url = user.default_avatar.url
+                except:
+                    pass
+                
+                embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
+                await interaction.followup.edit_message(
+                    message_id=self.message.id,
+                    content=None,
+                    embed=embed,
+                    view=self
+                )
+            else:
+                embed = discord.Embed(
+                    title="No Requests",
+                    description="There are currently no requests in the system.",
+                    color=discord.Color.light_grey()
+                )
+                await interaction.followup.edit_message(
+                    message_id=self.message.id,
+                    content=None,
+                    embed=embed,
+                    view=self
+                )
+                
+        except Exception as e:
+            logger.error(f"Error refreshing requests: {e}")
+            await interaction.followup.send(
+                "❌ An error occurred while refreshing the requests.",
+                ephemeral=True
+            )
+
+class UserRequestsView(discord.ui.View):
+    """Paginated view for users to manage their own requests"""
+    
+    def __init__(self, bot, requests_data, user_id, db):
+        super().__init__(timeout=300)  # 5 minute timeout
+        self.bot = bot
+        self.requests = requests_data
+        self.user_id = user_id
+        self.current_index = 0
+        self.message = None
+        self.db = db
+        
+        # Create buttons
+        self.back_button = discord.ui.Button(
+            label="← Back",
+            style=discord.ButtonStyle.primary,
+            disabled=True  # Start with back disabled on first page
+        )
+        self.back_button.callback = self.back_callback
+        
+        self.cancel_button = discord.ui.Button(
+            label="Cancel Request",
+            style=discord.ButtonStyle.danger,
+        )
+        self.cancel_button.callback = self.cancel_callback
+        
+        self.note_button = discord.ui.Button(
+            label="Add Note",
+            style=discord.ButtonStyle.secondary,
+        )
+        self.note_button.callback = self.note_callback
+        
+        self.forward_button = discord.ui.Button(
+            label="Next →",
+            style=discord.ButtonStyle.primary,
+            disabled=len(requests_data) <= 1  # Disable if only one request
+        )
+        self.forward_button.callback = self.forward_callback
+        
+                
+        # Add all buttons
+        self.add_item(self.back_button)
+        self.add_item(self.cancel_button)
+        self.add_item(self.note_button)
+        self.add_item(self.forward_button)
+        
+        self.update_button_states()
+    
+    def update_button_states(self):
+        """Update button states based on current index and request status"""
+        if not self.requests:
+            for item in self.children:
+                item.disabled = True
+            return
+            
+        # Navigation buttons
+        self.back_button.disabled = self.current_index == 0
+        self.forward_button.disabled = self.current_index >= len(self.requests) - 1
+        
+        # Action buttons - disable cancel for non-pending requests
+        current_request = self.requests[self.current_index]
+        is_pending = current_request[6] == 'pending'
+        self.cancel_button.disabled = not is_pending
+        
+        # Update cancel button label and style based on status
+        if not is_pending:
+            if current_request[6] == 'fulfilled':
+                self.cancel_button.label = "Fulfilled"
+                self.cancel_button.style = discord.ButtonStyle.success  # Green
+            elif current_request[6] == 'reject':
+                self.cancel_button.label = "Rejected"
+                self.cancel_button.style = discord.ButtonStyle.danger  # Red
+            elif current_request[6] == 'cancelled':
+                self.cancel_button.label = "Cancelled"
+                self.cancel_button.style = discord.ButtonStyle.danger  # Red
+            else:
+                self.cancel_button.label = "Not Available"
+                self.cancel_button.style = discord.ButtonStyle.secondary  # Gray
+        else:
+            self.cancel_button.label = "Cancel Request"
+            self.cancel_button.style = discord.ButtonStyle.danger  # Red for cancel action
+    
+    def create_request_embed(self, req, user_avatar_url=None):
+        """Create an embed for a request with status indication and platform status"""
+        # Parse details for IGDB metadata
+        details = req[5] if req[5] else ""
+        game_data = {}
+        cover_url = None
+        igdb_name = req[4]  # Default to requested game name
+        
+        # Extract version request info if present
+        version_request = None
+        additional_notes = None
+        if "Version Request:" in details:
+            try:
+                version_parts = details.split("Version Request: ", 1)[1].split("\n", 1)
+                version_request = version_parts[0]
+                if len(version_parts) > 1 and "Additional Notes:" in version_parts[1]:
+                    additional_notes = version_parts[1].replace("Additional Notes: ", "").split("\n")[0]
+            except:
+                pass
+
+        if "IGDB Metadata:" in details:
+            try:
+                metadata_lines = details.split("IGDB Metadata:\n")[1].split("\n")
+                for line in metadata_lines:
+                    if ": " in line:
+                        key, value = line.split(": ", 1)
+                        game_data[key] = value
+                        if key == "Game":
+                            igdb_name = value.split(" (", 1)[0]
+                
+                cover_matches = re.findall(r'Cover URL:\s*(https://[^\s]+)', details)
+                if cover_matches:
+                    cover_url = cover_matches[0]
+            except Exception as e:
+                logger.error(f"Error parsing metadata: {e}")
+        
+        # Determine status color
+        status_colors = {
+            'pending': discord.Color.yellow(),
+            'fulfilled': discord.Color.green(),
+            'cancelled': discord.Color.light_grey(),
+            'reject': discord.Color.red()
+        }
+        
+        # Create embed
+        status = req[6].upper()
+        embed = discord.Embed(
+            title=f"{igdb_name}",
+            color=status_colors.get(req[6], discord.Color.blue()),
+        )
+        
+        # Add status indicator field at the top
+        status_emoji = {
+            'pending': '⏳',
+            'fulfilled': '✅',
+            'cancelled': '🚫',
+            'reject': '❌'
+        }.get(req[6], '❓')
+        
+        embed.add_field(
+            name="Status",
+            value=f"{status_emoji} **{req[6].title()}**",
+            inline=True
+        )
+        
+        # Platform field with existence check
+        search_cog = self.bot.get_cog('Search')
+        platform_display = req[3]
+        platform_exists_in_romm = False
+        
+        # Check if platform exists in Romm
+        try:
+            # First check the platform_mapping_id if it exists (assuming column 13)
+            # Adjust index based on your actual database schema
+            platform_mapping_id = req[13] if len(req) > 13 else None
+            
+            if platform_mapping_id:
+                # Check platform status from mapping
+                import asyncio
+                loop = asyncio.get_event_loop()
+                
+                async def check_platform():
+                    from pathlib import Path
+                    import aiosqlite
+                    async with self.db.get_connection() as db:
+                        cursor = await db.execute(
+                            "SELECT in_romm FROM platform_mappings WHERE id = ?",
+                            (platform_mapping_id,)
+                        )
+                        result = await cursor.fetchone()
+                        return result[0] if result else False
+                
+                # Run async check in sync context
+                future = asyncio.run_coroutine_threadsafe(check_platform(), loop)
+                try:
+                    platform_exists_in_romm = future.result(timeout=1)
+                except:
+                    # Fallback to checking via API
+                    pass
+            
+            # Fallback: check via API if no mapping info
+            if not platform_mapping_id:
+                raw_platforms = asyncio.run_coroutine_threadsafe(
+                    self.bot.fetch_api_endpoint('platforms'), 
+                    loop
+                ).result(timeout=2)
+                
+                if raw_platforms:
+                    platform_lower = req[3].lower()
+                    for p in raw_platforms:
+                        custom_name = p.get('custom_name')
+                        regular_name = p.get('name', '')
+                        
+                        if (custom_name and custom_name.lower() == platform_lower) or \
+                           (regular_name.lower() == platform_lower):
+                            platform_exists_in_romm = True
+                            platform_display = self.bot.get_platform_display_name(p)
+                            break
+        except Exception as e:
+            logger.debug(f"Could not check platform existence: {e}")
+        
+        # Format platform display with emoji and status
+        if search_cog and platform_exists_in_romm:
+            platform_display = search_cog.get_platform_with_emoji(platform_display)
+        
+        platform_status_icon = "✅" if platform_exists_in_romm else "🆕"
+        
+        embed.add_field(
+            name="Platform",
+            value=f"{platform_display} {platform_status_icon}",
+            inline=True
+        )
+        
+        # Request ID field
+        embed.add_field(
+            name="Request ID",
+            value=f"#{req[0]}",
+            inline=True
+        )
+        
+        # If platform doesn't exist, add warning
+        if not platform_exists_in_romm:
+            embed.add_field(
+                name="⚠️ Platform Status",
+                value="This platform needs to be added to Romm before fulfillment",
+                inline=False
+            )
+        
+        # If there's a version request, add it prominently
+        if version_request:
+            embed.add_field(
+                name="Version Requested",
+                value=version_request[:1024],
+                inline=False
+            )
+        
+        if additional_notes:
+            embed.add_field(
+                name="Additional Notes from User",
+                value=additional_notes[:1024],
+                inline=False
+            )
+        
+        # Set images
+        if cover_url and cover_url != 'None':
+            embed.set_image(url=cover_url)
+        
+        # Set user avatar as thumbnail
+        if user_avatar_url:
+            embed.set_thumbnail(url=user_avatar_url)
+        else:
+            embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
+        
+        # Genre field if available
+        if "Genres" in game_data and game_data["Genres"] != "Unknown":
+            genres = game_data["Genres"].split(", ")[:2]
+            embed.add_field(
+                name="Genre",
+                value=", ".join(genres),
+                inline=True
+            )
+        
+        # Release Date if available
+        if "Release Date" in game_data and game_data["Release Date"] != "Unknown":
+            try:
+                date_obj = datetime.strptime(game_data["Release Date"], "%Y-%m-%d")
+                formatted_date = date_obj.strftime("%B %d, %Y")
+            except:
+                formatted_date = game_data["Release Date"]
+            embed.add_field(
+                name="Release Date",
+                value=formatted_date,
+                inline=True
+            )
+        
+        # Companies if available
+        companies = []
+        if "Developers" in game_data and game_data["Developers"] != "Unknown":
+            developers = game_data["Developers"].split(", ")[:2]
+            companies.extend(developers)
+        if "Publishers" in game_data and game_data["Publishers"] != "Unknown":
+            publishers = game_data["Publishers"].split(", ")
+            remaining_slots = 2 - len(companies)
+            if remaining_slots > 0:
+                companies.extend(publishers[:remaining_slots])
+        
+        if companies:
+            embed.add_field(
+                name="Companies",
+                value=", ".join(companies),
+                inline=True
+            )
+        
+        # Summary if available
+        if "Summary" in game_data:
+            summary = game_data["Summary"]
+            if len(summary) > 500:
+                summary = summary[:497] + "..."
+            embed.add_field(
+                name="Summary",
+                value=summary,
+                inline=False
+            )
+        
+        # Admin notes if present
+        if req[11]:  # notes field
+            embed.add_field(
+                name="Admin Notes",
+                value=req[11][:1024],
+                inline=False
+            )
+        
+        # Fulfillment info if fulfilled/rejected
+        if req[9]:  # fulfilled_by
+            action = "Fulfilled" if req[6] == 'fulfilled' else "Rejected"
+            embed.add_field(
+                name=f"✍️ {action} By",
+                value=req[10],  # fulfiller_name
+                inline=True
+            )
+            
+        # Auto-fulfilled indicator
+        if req[12]:  # auto_fulfilled
+            embed.add_field(
+                name="🤖 Auto-Fulfilled",
+                value="Yes",
+                inline=True
+            )
+        
+        # Links section
+        if igdb_name:
+            igdb_link_name = igdb_name.lower().replace(' ', '-')
+            igdb_link_name = re.sub(r'[^a-z0-9-]', '', igdb_link_name)
+            igdb_url = f"https://www.igdb.com/games/{igdb_link_name}"
+            embed.add_field(
+                name="Links",
+                value=f"[IGDB]({igdb_url})",
+                inline=True
+            )
+        
+        # Footer with requester info and pagination
+        total = len(self.requests)
+        embed.set_footer(
+            text=f"Request {self.current_index + 1}/{total} • Requested by {req[2]} • Use buttons to navigate"
+        )
+        
+        return embed
+    
+    async def back_callback(self, interaction: discord.Interaction):
+        """Navigate to previous request"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This isn't for you!", ephemeral=True)
+            return
+        
+        if self.current_index > 0:
+            self.current_index -= 1
+            self.update_button_states()
+            
+            # Fetch user avatar
+            user_avatar_url = None
+            try:
+                user = self.bot.get_user(self.requests[self.current_index][1])
+                if not user:
+                    user = await self.bot.fetch_user(self.requests[self.current_index][1])
+                if user and user.avatar:
+                    user_avatar_url = user.avatar.url
+                elif user:
+                    user_avatar_url = user.default_avatar.url
+            except:
+                pass
+            
+            embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
+            await interaction.response.edit_message(embed=embed, view=self)
+    
+    async def forward_callback(self, interaction: discord.Interaction):
+        """Navigate to next request"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This isn't for you!", ephemeral=True)
+            return
+        
+        if self.current_index < len(self.requests) - 1:
+            self.current_index += 1
+            self.update_button_states()
+            
+            # Fetch user avatar
+            user_avatar_url = None
+            try:
+                user = self.bot.get_user(self.requests[self.current_index][1])
+                if not user:
+                    user = await self.bot.fetch_user(self.requests[self.current_index][1])
+                if user and user.avatar:
+                    user_avatar_url = user.avatar.url
+                elif user:
+                    user_avatar_url = user.default_avatar.url
+            except:
+                pass
+            
+            embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
+            await interaction.response.edit_message(embed=embed, view=self)
+    
+    async def cancel_callback(self, interaction: discord.Interaction):
+        """Cancel the current pending request"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This isn't for you!", ephemeral=True)
+            return
+        
+        current_request = self.requests[self.current_index]
+        
+        if current_request[6] != 'pending':
+            await interaction.response.send_message("Only pending requests can be cancelled.", ephemeral=True)
+            return
+        
+        # Show confirmation modal
+        class CancelConfirmModal(discord.ui.Modal):
+            def __init__(self, view, request_data):
+                super().__init__(title="Cancel Request")
+                self.view = view
+                self.request_data = request_data
+                
+                self.reason = discord.ui.InputText(
+                    label="Cancellation Reason (Optional)",
+                    placeholder="Why are you cancelling this request?",
+                    style=discord.InputTextStyle.long,
+                    required=False,
+                    max_length=500
+                )
+                self.add_item(self.reason)
+            
+            async def callback(self, modal_interaction: discord.Interaction):
+                await modal_interaction.response.defer()
+                
+                request_id = self.request_data[0]
+                reason = self.reason.value or "User cancelled"
+                
+                try:
+                    async with self.view.db.get_connection() as db:
+                        await db.execute(
+                            """
+                            UPDATE requests 
+                            SET status = 'cancelled', 
+                                notes = ?,
+                                updated_at = CURRENT_TIMESTAMP 
+                            WHERE id = ?
+                            """,
+                            (reason, request_id)
+                        )
+                        await db.commit()
+                    
+                    # Update the request in our list
+                    updated_request = list(self.request_data)
+                    updated_request[6] = 'cancelled'
+                    updated_request[11] = reason
+                    self.view.requests[self.view.current_index] = tuple(updated_request)
+                    
+                    # Update button states
+                    self.view.update_button_states()
+                    
+                    # Fetch user avatar
+                    user_avatar_url = None
+                    try:
+                        user = self.view.bot.get_user(self.view.requests[self.view.current_index][1])
+                        if not user:
+                            user = await self.view.bot.fetch_user(self.view.requests[self.view.current_index][1])
+                        if user and user.avatar:
+                            user_avatar_url = user.avatar.url
+                        elif user:
+                            user_avatar_url = user.default_avatar.url
+                    except:
+                        pass
+                    
+                    # Update view with cancelled status
+                    embed = self.view.create_request_embed(self.view.requests[self.view.current_index], user_avatar_url)
+                    await modal_interaction.followup.edit_message(
+                        message_id=self.view.message.id,
+                        embed=embed,
+                        view=self.view
+                    )
+                    
+                    # Send confirmation message
+                    await modal_interaction.followup.send(
+                        f"✅ Request #{request_id} has been cancelled.",
+                        ephemeral=True
+                    )
+                    
+                except Exception as e:
+                    logger.error(f"Error cancelling request: {e}")
+                    await modal_interaction.followup.send(
+                        "❌ An error occurred while cancelling the request.",
+                        ephemeral=True
+                    )
+        
+        modal = CancelConfirmModal(self, current_request)
+        await interaction.response.send_modal(modal)
+    
+    async def note_callback(self, interaction: discord.Interaction):
+        """Add or edit a note on the current request"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This isn't for you!", ephemeral=True)
+            return
+        
+        current_request = self.requests[self.current_index]
+        
+        class NoteModal(discord.ui.Modal):
+            def __init__(self, view, request_data):
+                super().__init__(title="Add/Edit Note")
+                self.view = view
+                self.request_data = request_data
+                
+                # Show current note if exists
+                current_note = request_data[11] or ""
+                self.note = discord.ui.InputText(
+                    label="Your Note",
+                    placeholder="Add any additional information about this request",
+                    style=discord.InputTextStyle.long,
+                    required=False,
+                    max_length=500,
+                    value=current_note
+                )
+                self.add_item(self.note)
+            
+            async def callback(self, modal_interaction: discord.Interaction):
+                await modal_interaction.response.defer()
+                
+                request_id = self.request_data[0]
+                note = self.note.value
+                
+                try:
+                    async with self.view.db.get_connection() as db:
+                        await db.execute(
+                            "UPDATE requests SET notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                            (note, request_id)
+                        )
+                        await db.commit()
+                    
+                    # Update the request in our list
+                    updated_request = list(self.request_data)
+                    updated_request[11] = note
+                    self.view.requests[self.view.current_index] = tuple(updated_request)
+                    
+                    # Fetch user avatar
+                    user_avatar_url = None
+                    try:
+                        user = self.view.bot.get_user(self.view.requests[self.view.current_index][1])
+                        if not user:
+                            user = await self.view.bot.fetch_user(self.view.requests[self.view.current_index][1])
+                        if user and user.avatar:
+                            user_avatar_url = user.avatar.url
+                        elif user:
+                            user_avatar_url = user.default_avatar.url
+                    except:
+                        pass
+                    
+                    # Update view
+                    embed = self.view.create_request_embed(self.view.requests[self.view.current_index], user_avatar_url)
+                    await modal_interaction.followup.edit_message(
+                        message_id=self.view.message.id,
+                        embed=embed,
+                        view=self.view
+                    )
+                    
+                    # Send confirmation
+                    await modal_interaction.followup.send(
+                        "✅ Note updated successfully.",
+                        ephemeral=True
+                    )
+                    
+                except Exception as e:
+                    logger.error(f"Error adding note: {e}")
+                    await modal_interaction.followup.send(
+                        "❌ An error occurred while adding the note.",
+                        ephemeral=True
+                    )
+        
+        modal = NoteModal(self, current_request)
+        await interaction.response.send_modal(modal)
+    
+    async def refresh_callback(self, interaction: discord.Interaction):
+        """Refresh the requests list from database"""
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This isn't for you!", ephemeral=True)
+            return
+        
+        await interaction.response.defer()
+        
+        try:
+            async with self.db.get_connection() as db:
+                cursor = await db.execute(
+                    "SELECT * FROM requests WHERE user_id = ? ORDER BY created_at DESC",
+                    (self.user_id,)
+                )
+                self.requests = await cursor.fetchall()
+            
+            # Reset to first page if current index is out of bounds
+            if self.current_index >= len(self.requests):
+                self.current_index = 0
+            
+            self.update_button_states()
+            
+            if self.requests:
+                embed = self.create_request_embed(self.requests[self.current_index])
+                await interaction.followup.edit_message(
+                    message_id=self.message.id,
+                    embed=embed,
+                    view=self
+                )
+            else:
+                embed = discord.Embed(
+                    title="No Requests",
+                    description="You haven't made any requests yet.",
+                    color=discord.Color.light_grey()
+                )
+                await interaction.followup.edit_message(
+                    message_id=self.message.id,
+                    embed=embed,
+                    view=self
+                )
+                
+        except Exception as e:
+            logger.error(f"Error refreshing requests: {e}")
+            await interaction.followup.send(
+                "❌ An error occurred while refreshing your requests.",
+                ephemeral=True
+            )
+
+class VariantRequestModal(discord.ui.Modal):
+    def __init__(self, bot, platform_name, game_name, original_details, igdb_matches, ctx_or_interaction, author_id=None):
+        super().__init__(title="Request Different Version")
+        self.bot = bot
+        self.platform_name = platform_name
+        self.game_name = game_name
+        self.original_details = original_details
+        self.igdb_matches = igdb_matches
+        
+        # Handle both ctx and interaction objects
+        if hasattr(ctx_or_interaction, 'author'):
+            # It's a ctx object
+            self.ctx = ctx_or_interaction
+            self.author_id = ctx_or_interaction.author.id
+        else:
+            # It's an interaction object
+            self.ctx = ctx_or_interaction
+            self.author_id = author_id or ctx_or_interaction.user.id
+        
+        # Add text input for variant details
+        self.variant_input = discord.ui.InputText(
+            label="Specify Version",
+            placeholder="e.g., 'English translation patch', 'Kaizo hack', 'PAL region', etc.",
+            style=discord.InputTextStyle.long,
+            required=True,
+            max_length=500
+        )
+        self.add_item(self.variant_input)
+        
+        # Optional additional notes
+        self.notes_input = discord.ui.InputText(
+            label="Additional Notes (Optional)",
+            placeholder="e.g., 'Current ROM broken', 'Update released', etc.",
+            style=discord.InputTextStyle.long,
+            required=False,
+            max_length=500
+        )
+        self.add_item(self.notes_input)
+    
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        
+        # Combine the variant request with original details
+        variant_details = f"Version Request: {self.variant_input.value}"
+        if self.notes_input.value:
+            variant_details += f"\nAdditional Notes: {self.notes_input.value}"
+        
+        if self.original_details:
+            combined_details = f"{self.original_details}\n\n{variant_details}"
+        else:
+            combined_details = variant_details
+        
+        # Get the request cog and continue with the flow
+        request_cog = self.bot.get_cog('Request')
+        if request_cog:
+            await request_cog.continue_request_flow(
+                interaction,
+                self.platform_name, 
+                self.game_name, 
+                combined_details, 
+                self.igdb_matches
+            )
+            
+class GameSelect(discord.ui.Select):
+    def __init__(self, matches):
+        options = []
+        for i, match in enumerate(matches):
+            description = f"{match['release_date']} | {', '.join(match['platforms'][:2])}"
+            if len(description) > 100:
+                description = description[:97] + "..."
+                
+            options.append(
+                discord.SelectOption(
+                    label=match["name"][:100],
+                    description=description,
+                    value=str(i)
+                )
+            )
+        
+        super().__init__(
+            placeholder="Select the correct game...",
+            options=options,
+            min_values=1,
+            max_values=1,
+            row=1
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        game_index = int(self.values[0])
+        selected_game = self.view.matches[game_index]
+        await self.view.update_view_for_selection(selected_game)
+
+class GameSelectView(discord.ui.View):
+    def __init__(self, bot, matches, platform_name=None):
+        super().__init__()
+        self.bot = bot
+        self.matches = matches
+        self.selected_game = None
+        self.message = None
+        self.platform_name = platform_name
+        
+        # Add select menu (row 1)
+        self.select_menu = GameSelect(matches)
+        self.add_item(self.select_menu)
+        
+        # Add "Submit Request" button first (row 2) - disabled initially
+        self.submit_button = discord.ui.Button(
+            label="Submit Request",
+            style=discord.ButtonStyle.success,
+            row=2,
+            disabled=True  # Disabled until a game is selected
+        )
+        self.add_item(self.submit_button)
+        
+        # Add "Not Listed" button second (row 2)
+        not_listed_button = discord.ui.Button(
+            label="Not Listed",
+            style=discord.ButtonStyle.secondary,
+            row=2
+        )
+        
+        async def not_listed_callback(interaction: discord.Interaction):
+            self.selected_game = "manual"
+            await interaction.response.defer()
+            self.stop()
+        
+        not_listed_button.callback = not_listed_callback
+        self.add_item(not_listed_button)
+
+    def create_game_embed(self, game):
+        """Create an embed for the selected game"""
+        embed = discord.Embed(
+            title=f"{game['name']}",
+            color=discord.Color.green()
+        )
+        
+        # Set the romm logo as thumbnail
+        embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
+        
+        # Set the cover image as the main image
+        if game.get('cover_url'):
+            embed.set_image(url=game['cover_url'])
+        
+        # Always use the platform_name from the request
+        search_cog = self.bot.get_cog('Search')
+        platform_display = self.platform_name
+        if search_cog:
+            platform_display = search_cog.get_platform_with_emoji(self.platform_name)
+
+        embed.add_field(
+            name="Platform",
+            value=platform_display,
+            inline=True
+        )
+        
+        if game.get('genres'):
+            embed.add_field(
+                name="Genre",
+                value=", ".join(game['genres'][:2]),
+                inline=True
+            )
+            
+        if game['release_date'] != "Unknown":
+            try:
+                date_obj = datetime.strptime(game['release_date'], "%Y-%m-%d")
+                formatted_date = date_obj.strftime("%B %d, %Y")
+            except:
+                formatted_date = game['release_date']
+        else:
+            formatted_date = "Unknown"
+            
+        embed.add_field(
+            name="Release Date",
+            value=formatted_date,
+            inline=True
+        )
+        
+        # Summary section
+        if game["summary"]:
+            summary = game["summary"]
+            if len(summary) > 300:
+                summary = summary[:297] + "..."
+            embed.add_field(
+                name="Summary",
+                value=summary,
+                inline=False
+            )
+            
+        # Companies section
+        companies = []
+        if game['developers']:
+            companies.extend(game['developers'][:2])
+        if game['publishers'] and game['publishers'] != game['developers']:
+            remaining_slots = 2 - len(companies)
+            if remaining_slots > 0:
+                companies.extend(game['publishers'][:remaining_slots])
+        
+        if companies:
+            embed.add_field(
+                name="Companies",
+                value=", ".join(companies),
+                inline=True
+            )
+                
+        # Create IGDB link
+        igdb_name = game['name'].lower().replace(' ', '-')
+        igdb_name = re.sub(r'[^a-z0-9-]', '', igdb_name)
+        igdb_url = f"https://www.igdb.com/games/{igdb_name}"
+        
+        # Links section
+        embed.add_field(
+            name="Links",
+            value=f"[IGDB]({igdb_url})",
+            inline=True
+        )
         
         return embed
 
-class ConfirmView(discord.ui.View):
-    """Simple confirmation view"""
-    def __init__(self):
-        super().__init__(timeout=30)
-        self.value = None
+    async def update_view_for_selection(self, game):
+        self.selected_game = game  # Store the selected game
+        embed = self.create_game_embed(game)
+        
+        # Enable the submit button and set its callback
+        self.submit_button.disabled = False
+        
+        async def submit_callback(interaction: discord.Interaction):
+            await interaction.response.defer()
+            
+            # Update button appearance
+            self.submit_button.label = "Request Submitted"
+            self.submit_button.disabled = True
+            self.submit_button.style = discord.ButtonStyle.secondary
+            
+            # Remove select menu and Not Listed button
+            for item in self.children[:]:
+                if isinstance(item, (discord.ui.Select, discord.ui.Button)) and item != self.submit_button:
+                    self.remove_item(item)
+            
+            # Update the message with the modified view
+            await self.message.edit(view=self)
+            
+            # Stop the view
+            self.stop()
+        
+        self.submit_button.callback = submit_callback
+        
+        await self.message.edit(embed=embed, view=self)
+
+class ExistingGameWithIGDBView(discord.ui.View):
+    """View that combines existing game selection with IGDB matching"""
     
-    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.danger)
-    async def confirm(self, button: discord.ui.Button, interaction: discord.Interaction):
-        self.value = True
-        await interaction.response.defer()
+    def __init__(self, bot, existing_matches, igdb_matches, platform_name, game_name, author_id):
+        super().__init__(timeout=180)
+        self.bot = bot
+        self.existing_matches = existing_matches
+        self.platform_name = platform_name
+        self.game_name = game_name
+        self.author_id = author_id
+        self.selected_rom = None
+        self.selected_igdb = None
+        self.message = None
+        
+        # Filter IGDB matches to remove games that already exist
+        self.filtered_igdb_matches = self._filter_igdb_matches(existing_matches, igdb_matches)
+        
+        # Add select menu for existing games if multiple
+        if len(existing_matches) > 1:
+            self.existing_select = discord.ui.Select(
+                placeholder="Download existing game from collection",
+                custom_id="existing_game_select",
+                row=0
+            )
+            
+            for rom in existing_matches[:25]:
+                display_name = rom['name'][:75] if len(rom['name']) > 75 else rom['name']
+                file_name = rom.get('fs_name', 'Unknown filename')
+                truncated_filename = (file_name[:47] + '...') if len(file_name) > 50 else file_name
+                
+                self.existing_select.add_option(
+                    label=display_name,
+                    value=str(rom['id']),
+                    description=f"{truncated_filename}"
+                )
+            
+            self.existing_select.callback = self.existing_select_callback
+            self.add_item(self.existing_select)
+        
+        # Add IGDB select menu only if there are non-existing games
+        if self.filtered_igdb_matches:
+            self.igdb_select = discord.ui.Select(
+                placeholder="Or request a different game from IGDB",
+                custom_id="igdb_select",
+                row=1
+            )
+            
+            for i, match in enumerate(self.filtered_igdb_matches[:25]):
+                description = f"{match['release_date']} | {', '.join(match['platforms'][:2])}"
+                if len(description) > 100:
+                    description = description[:97] + "..."
+                
+                self.igdb_select.add_option(
+                    label=match["name"][:100],
+                    description=description,
+                    value=str(i)
+                )
+            
+            self.igdb_select.callback = self.igdb_select_callback
+            self.add_item(self.igdb_select)
+        
+        # Button row
+        button_row = 2
+        
+        # If single existing match, add download button
+        if len(existing_matches) == 1:
+            download_btn = discord.ui.Button(
+                label="Download Existing",
+                style=discord.ButtonStyle.success,
+                row=button_row
+            )
+            download_btn.callback = lambda i: self.handle_single_existing(i, existing_matches[0])
+            self.add_item(download_btn)
+        
+        # Add "Request Different Version" button
+        request_different = discord.ui.Button(
+            label="Request Different Version",
+            style=discord.ButtonStyle.primary,
+            row=button_row
+        )
+        request_different.callback = self.request_different_callback
+        self.add_item(request_different)
+        
+        # Add "Cancel" button
+        cancel_button = discord.ui.Button(
+            label="Cancel",
+            style=discord.ButtonStyle.secondary,
+            row=button_row
+        )
+        cancel_button.callback = self.cancel_callback
+        self.add_item(cancel_button)
+    
+    def _filter_igdb_matches(self, existing_roms, igdb_matches):
+        """Filter out IGDB games that already exist in the collection"""
+        if not igdb_matches:
+            return []
+        
+        filtered = []
+        
+        for igdb_game in igdb_matches:
+            igdb_name = igdb_game.get('name', '').lower()
+            
+            # Normalize IGDB name for comparison
+            import re
+            igdb_normalized = re.sub(r'[:\-\s]+', ' ', igdb_name).strip()
+            
+            # Check if this IGDB game matches any existing ROM
+            is_existing = False
+            for rom in existing_roms:
+                rom_name = rom.get('name', '').lower()
+                rom_normalized = re.sub(r'[:\-\s]+', ' ', rom_name).strip()
+                
+                # Check for high similarity or exact match
+                if (igdb_normalized == rom_normalized or 
+                    self._calculate_similarity(igdb_normalized, rom_normalized) > 0.85):
+                    is_existing = True
+                    break
+            
+            # Only include if it doesn't match any existing game
+            if not is_existing:
+                filtered.append(igdb_game)
+        
+        return filtered
+    
+    def _calculate_similarity(self, str1: str, str2: str) -> float:
+        """Simple similarity calculation (you can reuse the one from Request cog)"""
+        if not str1 or not str2:
+            return 0.0
+        
+        # Remove common words
+        common_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to'}
+        words1 = set(word for word in str1.lower().split() if word not in common_words)
+        words2 = set(word for word in str2.lower().split() if word not in common_words)
+        
+        if not words1 or not words2:
+            return 0.0
+        
+        intersection = words1.intersection(words2)
+        union = words1.union(words2)
+        
+        return len(intersection) / len(union) if union else 0.0
+    
+    async def existing_select_callback(self, interaction: discord.Interaction):
+        """Handle existing game selection for download"""
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This isn't for you!", ephemeral=True)
+            return
+        
+        selected_rom_id = int(interaction.data['values'][0])
+        self.selected_rom = next((rom for rom in self.existing_matches if rom['id'] == selected_rom_id), None)
+        
+        if self.selected_rom:
+            # Show full ROM view for download
+            await self.show_rom_for_download(interaction, self.selected_rom)
+    
+    async def igdb_select_callback(self, interaction: discord.Interaction):
+        """Handle IGDB game selection for request"""
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This isn't for you!", ephemeral=True)
+            return
+        
+        game_index = int(interaction.data['values'][0])
+        self.selected_igdb = self.filtered_igdb_matches[game_index]  # Use filtered list
+        
+        # Clear all items completely - no buttons at all
+        self.clear_items()
+        
+        # Update the embed to show selection
+        embed = discord.Embed(
+            title="Processing Request",
+            description=f"Submitting request for **{self.selected_igdb['name']}**...",
+            color=discord.Color.blue()
+        )
+        
+        # Update the message with no view components
+        await interaction.response.edit_message(embed=embed, view=self)
+        
+        # Process as a new request
+        request_cog = self.bot.get_cog('Request')
+        if request_cog:
+            await request_cog.process_request(
+                interaction,
+                self.platform_name,
+                self.selected_igdb['name'],  # Use IGDB name
+                None,  # No additional details
+                self.selected_igdb,
+                self.message
+            )
+            self.stop()
+        
+    async def handle_single_existing(self, interaction: discord.Interaction, rom_data):
+        """Handle download of single existing game"""
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This isn't for you!", ephemeral=True)
+            return
+        
+        await self.show_rom_for_download(interaction, rom_data)
+    
+    async def show_rom_for_download(self, interaction, rom_data):
+        """Show the full ROM view for downloading"""
+        # Fetch full ROM details and show download interface
+        try:
+            detailed_rom = await self.bot.fetch_api_endpoint(f'roms/{rom_data["id"]}')
+            if detailed_rom:
+                rom_data.update(detailed_rom)
+        except Exception as e:
+            logger.error(f"Error fetching ROM details: {e}")
+        
+        from .search import ROM_View
+        rom_view = ROM_View(self.bot, [rom_data], self.author_id, self.platform_name)
+        rom_view.remove_item(rom_view.select)
+        rom_view._selected_rom = rom_data
+        
+        rom_embed, cover_file = await rom_view.create_rom_embed(rom_data)
+        await rom_view.update_file_select(rom_data)
+        
+        # Clear and rebuild view with download options
+        self.clear_items()
+        
+        # Copy download components from ROM_View
+        for item in rom_view.children:
+            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                self.add_item(item)
+        
+        if cover_file:
+            await interaction.response.edit_message(
+                content="✅ **Download this game:**",
+                embed=rom_embed,
+                view=self,
+                file=cover_file
+            )
+        else:
+            await interaction.response.edit_message(
+                content="✅ **Download this game:**",
+                embed=rom_embed,
+                view=self
+            )
+    
+    async def request_different_callback(self, interaction: discord.Interaction):
+        """User wants to request a different version"""
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This isn't for you!", ephemeral=True)
+            return
+        
+        from .requests import VariantRequestModal
+        modal = VariantRequestModal(
+            self.bot,
+            self.platform_name,
+            self.game_name,
+            None,
+            self.igdb_matches if self.igdb_matches else [],
+            interaction
+        )
+        await interaction.response.send_modal(modal)
         self.stop()
     
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
-    async def cancel(self, button: discord.ui.Button, interaction: discord.Interaction):
-        self.value = False
-        await interaction.response.defer()
+    async def cancel_callback(self, interaction: discord.Interaction):
+        """Cancel the request"""
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This isn't for you!", ephemeral=True)
+            return
+            
+        self.clear_items()
+        cancelled_button = discord.ui.Button(
+            label="Cancelled",
+            style=discord.ButtonStyle.secondary,
+            disabled=True
+        )
+        self.add_item(cancelled_button)
+        await interaction.response.edit_message(view=self)
         self.stop()
 
-class UnlinkConfirmView(discord.ui.View):
-    """Confirmation view for unlinking with options to keep, disable, or delete RomM account"""
-    def __init__(self):
-        super().__init__(timeout=30)
-        self.action = None  # Will be 'unlink_only', 'unlink_disable', or 'unlink_delete'
+class ExistingGameView(discord.ui.View):
+    """View for when requested games already exist in the collection"""
     
-    @discord.ui.button(label="Unlink Only", style=discord.ButtonStyle.primary, emoji="🔓")
-    async def unlink_only(self, button: discord.ui.Button, interaction: discord.Interaction):
-        """Only unlink the accounts, keep RomM user active"""
-        self.action = 'unlink_only'
-        await interaction.response.defer()
-        self.stop()
-    
-    @discord.ui.button(label="Unlink & Disable", style=discord.ButtonStyle.secondary, emoji="🔒")
-    async def unlink_disable(self, button: discord.ui.Button, interaction: discord.Interaction):
-        """Unlink accounts AND disable RomM user (keeps account but prevents login)"""
-        self.action = 'unlink_disable'
-        await interaction.response.defer()
-        self.stop()
-    
-    @discord.ui.button(label="Unlink & Delete", style=discord.ButtonStyle.danger, emoji="🗑️")
-    async def unlink_delete(self, button: discord.ui.Button, interaction: discord.Interaction):
-        """Unlink accounts AND delete RomM user completely"""
-        self.action = 'unlink_delete'
-        await interaction.response.defer()
-        self.stop()
-    
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, row=1)
-    async def cancel(self, button: discord.ui.Button, interaction: discord.Interaction):
-        """Cancel the operation"""
-        self.action = None
-        await interaction.response.defer()
-        self.stop()
+    def __init__(self, bot, matches, platform_name, game_name, author_id):
+        super().__init__()
+        self.bot = bot
+        self.matches = matches
+        self.platform_name = platform_name
+        self.game_name = game_name
+        self.author_id = author_id
+        self.selected_rom = None
+        self.action = None  # 'download' or 'request_different'
+        self.message = None  # Store the message reference
         
-class UserManager(commands.Cog):
+        # If we have multiple matches, add a select menu
+        if len(matches) > 1:
+            self.select = discord.ui.Select(
+                placeholder="Select game to view/download",
+                custom_id="existing_game_select"
+            )
+            
+            for rom in matches[:25]:
+                display_name = rom['name'][:75] if len(rom['name']) > 75 else rom['name']
+                file_name = rom.get('fs_name', 'Unknown filename')
+                truncated_filename = (file_name[:47] + '...') if len(file_name) > 50 else file_name
+                
+                self.select.add_option(
+                    label=display_name,
+                    value=str(rom['id']),
+                    description=truncated_filename
+                )
+            
+            self.select.callback = self.select_callback
+            self.add_item(self.select)
+        
+        # Add "Request Different Version" button
+        request_different = discord.ui.Button(
+            label="Request Different Version",
+            style=discord.ButtonStyle.primary,
+            row=1
+        )
+        request_different.callback = self.request_different_callback
+        self.add_item(request_different)
+        
+        # Add "Cancel" button
+        cancel_button = discord.ui.Button(
+            label="Cancel",
+            style=discord.ButtonStyle.secondary,
+            row=1
+        )
+        cancel_button.callback = self.cancel_callback
+        self.add_item(cancel_button)
+        
+        # If single match, show full ROM view immediately
+        if len(matches) == 1:
+            self.selected_rom = matches[0]
+    
+    async def create_full_rom_view(self, rom_data):
+        """Create a full ROM view similar to search results"""
+        from .search import ROM_View
+        
+        # Fetch detailed ROM data if not already fetched
+        try:
+            if 'igdb' not in rom_data:  # Check if we have full details
+                detailed_rom = await self.bot.fetch_api_endpoint(f'roms/{rom_data["id"]}')
+                if detailed_rom:
+                    rom_data.update(detailed_rom)
+        except Exception as e:
+            logger.error(f"Error fetching detailed ROM data: {e}")
+        
+        # Platform emoji matching
+        search_cog = self.bot.get_cog('Search')
+        if search_cog and self.platform_name:
+            platform_display = search_cog.get_platform_with_emoji(self.platform_name)
+        else:
+            platform_display = self.platform_name
+
+        
+        # Create ROM_View instance to use its embed creation
+        rom_view = ROM_View(self.bot, [rom_data], self.author_id, self.platform_name)
+        rom_embed, cover_file = await rom_view.create_rom_embed(rom_data)  # FIXED: Unpack tuple
+        
+        # Update the view to include file selection if available
+        await rom_view.update_file_select(rom_data)
+        
+        # Copy over the file select dropdown if it exists
+        file_select = None
+        for item in rom_view.children:
+            if isinstance(item, discord.ui.Select) and item.custom_id == "rom_file_select":
+                file_select = item
+                break
+        
+        # Determine which row to use for buttons
+        button_row = 2 if file_select else 1
+        
+        # Clear current items and rebuild view
+        self.clear_items()
+        
+        # Re-add the game select if we have multiple matches
+        if len(self.matches) > 1:
+            self.add_item(self.select)
+        
+        # Add file select if available
+        if file_select:
+            self.add_item(file_select)
+        
+        # Add all three buttons on the same row
+        # Add download button(s)
+        for item in rom_view.children:
+            if isinstance(item, discord.ui.Button) and "Download" in item.label:
+                item.row = button_row
+                self.add_item(item)
+                break
+        
+        # Re-add "Request Different Version" and "Cancel" buttons
+        request_different = discord.ui.Button(
+            label="Request Different Version",
+            style=discord.ButtonStyle.primary,
+            row=button_row  # Same row as download button
+        )
+        request_different.callback = self.request_different_callback
+        self.add_item(request_different)
+        
+        # Add "Cancel" button
+        cancel_button = discord.ui.Button(
+            label="Cancel",
+            style=discord.ButtonStyle.secondary,
+            row=button_row  # Same row as other buttons
+        )
+        cancel_button.callback = self.cancel_callback
+        self.add_item(cancel_button)
+        
+        # Return both embed and file (even if file is None)
+        return rom_embed, cover_file
+    
+    async def select_callback(self, interaction: discord.Interaction):
+        """Handle ROM selection"""
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This isn't for you!", ephemeral=True)
+            return
+        
+        selected_rom_id = int(interaction.data['values'][0])
+        self.selected_rom = next((rom for rom in self.matches if rom['id'] == selected_rom_id), None)
+        
+        if self.selected_rom:
+            # Create full ROM embed - NOW UNPACKING TUPLE
+            rom_embed, cover_file = await self.create_full_rom_view(self.selected_rom)
+            
+            # Edit the message with new embed and updated view, including file if available
+            if cover_file:
+                await interaction.response.edit_message(
+                    content="✅ **This game is already available! You can download it now:**",
+                    embed=rom_embed,
+                    view=self,
+                    file=cover_file
+                )
+            else:
+                await interaction.response.edit_message(
+                    content="✅ **This game is already available! You can download it now:**",
+                    embed=rom_embed,
+                    view=self
+                )
+    
+    async def request_different_callback(self, interaction: discord.Interaction):
+        """User wants to request a different version - show modal"""
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This isn't for you!", ephemeral=True)
+            return
+        
+        # Show modal for variant input
+        modal = VariantRequestModal(
+            self.bot,
+            self.platform_name,
+            self.game_name,
+            None,  # No original details from this flow
+            [],    # No IGDB matches needed here
+            interaction  # Pass the interaction as context
+        )
+        await interaction.response.send_modal(modal)
+        self.stop()
+    
+    async def cancel_callback(self, interaction: discord.Interaction):
+        """Cancel the request"""
+        self.action = "cancel"
+        self.clear_items()
+        cancelled_button = discord.ui.Button(
+            label="Cancelled",
+            style=discord.ButtonStyle.secondary,
+            disabled=True
+        )
+        self.add_item(cancelled_button)
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
+
+class Request(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        auto_register_role_id_env = os.getenv('AUTO_REGISTER_ROLE_ID')
-        if auto_register_role_id_env and auto_register_role_id_env.isdigit():
-            self.auto_register_role_id = int(auto_register_role_id_env)
-        else:
-            self.auto_register_role_id = 0 
-        self.log_channel_id = self.bot.config.CHANNEL_ID
-        self.temp_storage = {}
+        self.igdb: Optional[IGDBClient] = None
         
-        # Use shared db and set db_manager to point to it
+        # Use master db
         self.db = bot.db
-        self.db_manager = bot.db  
         
-        logger.info(
-            f"Users Cog initialized with auto_register_role_id: {self.auto_register_role_id}, "
-            f"using main channel_id: {self.log_channel_id}"
-        )
+        self.requests_enabled = bot.config.REQUESTS_ENABLED
+        bot.loop.create_task(self.setup())
+        self.processing_lock = asyncio.Lock()
 
-    async def cog_load(self):
-        """Initialize when cog is loaded"""
-       
-        if not self.db_manager._initialized:
-            logger.warning("Database not initialized, attempting initialization...")
-            await self.db_manager.initialize()
-        
-        # await self.store_discord_info_for_existing_links()
-        
-        logger.debug("User Manager cog loaded successfully")
+    async def cog_check(self, ctx: discord.ApplicationContext) -> bool:
+        """Check if requests are enabled before any command in this cog"""
+        if not self.requests_enabled and not ctx.author.guild_permissions.administrator:
+            await ctx.respond("❌ The request system is currently disabled.")
+            return False
+        return True    
     
-    async def generate_secure_password(self, length=16):
-        """Generate a secure random password"""
-        alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
-        return ''.join(secrets.choice(alphabet) for _ in range(length))
-
-    async def get_or_create_dm_channel(self, user: discord.Member):
-        """Get or create DM channel with user"""
-        if user.dm_channel is None:
-            await user.create_dm()
-        return user.dm_channel
-
-    def get_member_avatar_url(self, member: discord.Member) -> str:
-        """Get the full avatar URL for a Discord member"""
-        if member.avatar:
-            return str(member.avatar.url)
-        else:
-            return str(member.default_avatar.url)
-
-    async def sanitize_username(self, display_name: str) -> str:
-        """async def link_accounts_callback
-        Sanitize display name to create a valid username:
-        - Replace spaces with underscores
-        - Remove special characters
-        - Convert to lowercase
-        - Ensure unique if name exists
-        """
-        # Basic sanitization
-        username = display_name.lower()
-        username = ''.join(c for c in username if c.isalnum() or c in '_-')
-        username = username.replace(' ', '_')
-        
-        # Ensure username is not empty after sanitization
-        if not username:
-            return f"user_{str(hash(display_name))[-8:]}"
-            
-        # Check if username exists and make unique if needed
-        users = await self.bot.fetch_api_endpoint('users')
-        if users:
-            existing_usernames = [user.get('username', '') for user in users]
-            original_username = username
-            counter = 1
-            
-            while username in existing_usernames:
-                username = f"{original_username}_{counter}"
-                counter += 1
-        
-        return username
-
-    async def is_romm_admin(self, user_data: Dict[str, Any]) -> bool:
-        """Check if a user is a RomM admin"""
-        return user_data.get('role', '').upper() == 'ADMIN'
-
-    async def store_discord_info_for_existing_links(self):
-        """Update existing links with Discord username and avatar info"""
+    async def setup(self):
+        """Set up database and initialize IGDB client"""
         try:
-            async with aiosqlite.connect(self.db_manager.db_path) as db:
-                # Get all links without Discord info
-                cursor = await db.execute("""
-                    SELECT discord_id FROM user_links 
-                    WHERE discord_username IS NULL OR discord_username = ''
-                """)
-                rows = await cursor.fetchall()
-                
-                for row in rows:
-                    discord_id = row[0]
-                    try:
-                        # Get Discord user info
-                        guild = self.bot.get_guild(self.bot.config.GUILD_ID)
-                        member = guild.get_member(discord_id) if guild else None
-                        
-                        if member:
-                            discord_username = member.display_name
-                            discord_avatar = member.avatar.key if member.avatar else None
-                        else:
-                            # Fallback to fetch_user
-                            discord_user = await self.bot.fetch_user(discord_id)
-                            discord_username = discord_user.display_name
-                            discord_avatar = discord_user.avatar.key if discord_user.avatar else None
-                        
-                        # Update database
-                        await db.execute("""
-                            UPDATE user_links 
-                            SET discord_username = ?, discord_avatar = ?
-                            WHERE discord_id = ?
-                        """, (discord_username, discord_avatar, discord_id))
-                        
-                    except Exception as e:
-                        logger.warning(f"Could not update Discord info for {discord_id}: {e}")
+            # Initialize IGDB client
+            self.igdb = IGDBClient()
+            
+            # Sync Romm platforms (mappings already initialized by database)
+            await self.sync_romm_platforms()
+            
+            logger.debug("Request cog setup completed successfully")
+        except ValueError as e:
+            logger.warning(f"IGDB integration disabled: {e}")
+            self.igdb = None
+            # Still try to sync platforms even without IGDB
+            try:
+                await self.sync_romm_platforms()
+            except Exception as sync_error:
+                logger.error(f"Failed to sync platforms: {sync_error}")
+            
+    async def _get_canonical_platform_name(self, platform_name: str) -> Optional[str]:
+        """Looks up the canonical display_name for a given platform alias."""
+        if not platform_name:
+            return None
+        try:
+            async with self.db.get_connection() as db:
+                cursor = await db.execute(
+                    """SELECT display_name FROM platform_mappings 
+                       WHERE LOWER(display_name) = LOWER(?) OR LOWER(folder_name) = LOWER(?)
+                       LIMIT 1""",
+                    (platform_name, platform_name)
+                )
+                result = await cursor.fetchone()
+                return result[0] if result else platform_name
+        except Exception:
+            # If DB fails, fallback to using the original name
+            return platform_name
+    
+    @property
+    def igdb_enabled(self) -> bool:
+        """Check if IGDB integration is enabled"""
+        return self.igdb is not None
+
+    async def sync_romm_platforms(self):
+        """Sync current Romm platforms with master list"""
+        try:
+            raw_platforms = await self.bot.fetch_api_endpoint('platforms')
+            if not raw_platforms:
+                return
+            
+            async with self.db.get_connection() as db:
+                for platform in raw_platforms:
+                    display_name = self.bot.get_platform_display_name(platform)
+                    platform_name = platform.get('name', '').lower()
+                    
+                    # Try to match by name or folder patterns
+                    cursor = await db.execute('''
+                        SELECT id FROM platform_mappings 
+                        WHERE LOWER(display_name) = LOWER(?)
+                        OR LOWER(folder_name) = LOWER(?)
+                        OR LOWER(folder_name) = LOWER(?)
+                        LIMIT 1
+                    ''', (display_name, platform_name, platform_name.replace(' ', '-')))
+                    
+                    result = await cursor.fetchone()
+                    
+                    if result:
+                        # Update the mapping to show it exists in Romm
+                        await db.execute('''
+                            UPDATE platform_mappings 
+                            SET in_romm = 1, romm_id = ?
+                            WHERE id = ?
+                        ''', (platform['id'], result[0]))
                 
                 await db.commit()
-                logger.info(f"Updated Discord info for {len(rows)} existing user links")
                 
         except Exception as e:
-            logger.error(f"Error updating existing links: {e}")
+            logger.error(f"Error syncing Romm platforms: {e}")
     
-    async def delete_user(self, user_id: int) -> bool:
-        """Delete user from the API"""
+    async def platform_autocomplete_all(self, ctx: discord.AutocompleteContext):
+        """Autocomplete for all platforms, not just those in Romm"""
         try:
-            # Use bot's helper method
-            result = await self.bot.make_authenticated_request(
-                method="DELETE",
-                endpoint=f"users/{user_id}",
-                require_csrf=True  # Though not needed with Bearer auth
-            )
-            return result is not None
+            user_input = ctx.value.lower()
+            
+            # Use the master database's connection method
+            async with self.db.get_connection() as db:
+                cursor = await db.execute('''
+                    SELECT display_name, in_romm, folder_name
+                    FROM platform_mappings
+                    WHERE LOWER(display_name) LIKE ?
+                    OR LOWER(folder_name) LIKE ?
+                    ORDER BY 
+                        in_romm DESC,
+                        display_name
+                    LIMIT 25
+                ''', (f'%{user_input}%', f'%{user_input}%'))
+                
+                results = await cursor.fetchall()
+            
+            # Process results
+            choices = []
+            for display_name, in_romm, folder_name in results:
+                if in_romm:
+                    label = display_name
+                else:
+                    label = f"[+] {display_name}"
+                
+                choices.append(discord.OptionChoice(
+                    name=label[:100],
+                    value=display_name
+                ))
+            
+            return choices
             
         except Exception as e:
-            logger.error(f"Error deleting user {user_id}: {e}", exc_info=True)
-            return False
-
-    async def find_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
-        """Find a user by their username in the API"""
-        try:
-            # Use bot's standard fetch method
-            users_data = await self.bot.fetch_api_endpoint('users')
-            
-            if users_data:
-                logger.info(f"Searching for user with username: {username}")
-                logger.info(f"Available usernames: {[user.get('username', '') for user in users_data]}")
-                return next(
-                    (user for user in users_data if user.get('username', '').lower() == username.lower()),
-                    None
-                )
-            return None
-        except Exception as e:
-            logger.error(f"Error finding user {username}: {e}", exc_info=True)
-            return None
+            logger.error(f"Error in platform autocomplete: {e}")
+            return []
     
-    async def send_invite_link(self, member: discord.Member, role: str = "viewer") -> bool:
-        """Send a standardized invite link to a Discord member."""
+    async def check_if_game_exists(self, platform: str, game_name: str) -> Tuple[bool, List[Dict]]:
+        """Check if a game already exists in the database"""
         try:
-            existing_link = await self.db_manager.get_user_link(member.id)
-            if existing_link:
-                logger.info(f"User {member.display_name} already has a linked account.")
-                return True
+            # Get raw platforms data to access custom_name field
+            raw_platforms = await self.bot.fetch_api_endpoint('platforms')
+            if not raw_platforms:
+                return False, []
 
-            invite_data = await self.bot.make_authenticated_request(
-                method="POST",
-                endpoint="users/invite-link",
-                params={"role": role}
+            # Find platform by name (including custom names)
+            platform_id = None
+            platform_lower = platform.lower()
+            
+            for p in raw_platforms:
+                # Check custom name first
+                custom_name = p.get('custom_name')
+                if custom_name and custom_name.lower() == platform_lower:
+                    platform_id = p.get('id')
+                    break
+                
+                # Check regular name
+                regular_name = p.get('name', '')
+                if regular_name.lower() == platform_lower:
+                    platform_id = p.get('id')
+                    break
+
+            if not platform_id:
+                return False, []
+
+            # Search for the game
+            search_response = await self.bot.fetch_api_endpoint(
+                f'roms?platform_id={platform_id}&search_term={game_name}&limit=25'
             )
+
+            # Handle paginated response
+            if search_response and isinstance(search_response, dict) and 'items' in search_response:
+                search_results = search_response['items']
+            elif search_response and isinstance(search_response, list):
+                search_results = search_response
+            else:
+                search_results = []
+
+            if not search_results:
+                return False, []
+
+            # Return all reasonably matching games
+            matches = []
+            game_name_lower = game_name.lower()
+            for rom in search_results:
+                rom_name = rom.get('name', '').lower()
+                # Simple matching - let the user decide what they want
+                if (game_name_lower in rom_name or 
+                    rom_name in game_name_lower or
+                    self.calculate_similarity(game_name_lower, rom_name) > 0.7):
+                    matches.append(rom)
+
+            return bool(matches), matches
+
+        except Exception as e:
+            logger.error(f"Error checking game existence: {e}")
+            return False, []
+    
+    def calculate_similarity(self, str1: str, str2: str) -> float:
+        """Calculate similarity between two strings"""
+        # Remove common words and characters that might differ
+        common_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to'}
+        special_chars = r'[^\w\s]'
+        
+        str1_clean = re.sub(special_chars, '', ' '.join(word for word in str1.lower().split() if word not in common_words))
+        str2_clean = re.sub(special_chars, '', ' '.join(word for word in str2.lower().split() if word not in common_words))
+        
+        # Simple Levenshtein distance calculation
+        if not str1_clean or not str2_clean:
+            return 0.0
             
-            if not invite_data or 'token' not in invite_data:
-                logger.error(f"Failed to create invite link for {member.display_name}")
-                return False
-            
-            invite_token = invite_data.get('token')
-            invite_url = f"{self.bot.config.DOMAIN}/register?token={invite_token}"
-            
+        longer = str1_clean if len(str1_clean) > len(str2_clean) else str2_clean
+        shorter = str2_clean if len(str1_clean) > len(str2_clean) else str1_clean
+        
+        distance = self._levenshtein_distance(longer, shorter)
+        return 1 - (distance / len(longer))
+
+    def _levenshtein_distance(self, s1: str, s2: str) -> int:
+        """Calculate the Levenshtein distance between two strings"""
+        if len(s1) < len(s2):
+            return self._levenshtein_distance(s2, s1)
+
+        if len(s2) == 0:
+            return len(s1)
+
+        previous_row = range(len(s2) + 1)
+        for i, c1 in enumerate(s1):
+            current_row = [i + 1]
+            for j, c2 in enumerate(s2):
+                insertions = previous_row[j + 1] + 1
+                deletions = current_row[j] + 1
+                substitutions = previous_row[j] + (c1 != c2)
+                current_row.append(min(insertions, deletions, substitutions))
+            previous_row = current_row
+
+        return previous_row[-1]
+        
+    @commands.Cog.listener()
+    async def on_batch_scan_complete(self, new_games: List[Dict[str, str]]):
+        """Handle batch scan completion event with improved matching logic."""
+        async with self.processing_lock:
             try:
-                dm_channel = await self.get_or_create_dm_channel(member)
-                
-                # This is the new, standardized embed
-                embed = discord.Embed(
-                    title="🎮 RomM Invitation",
-                    description=f"You've been invited to access the game library at {self.bot.config.DOMAIN}!",
-                    color=discord.Color.blue()
-                )
-                embed.add_field(
-                    name="📧 Invitation Link",
-                    value=f"[Click here to register your account]({invite_url})",
-                    inline=False
-                )
-                embed.add_field(
-                    name="ℹ️ What is RomM?",
-                    value="RomM is a ROM management system for browsing and playing a game collection from any device.",
-                    inline=False
-                )
-                embed.add_field(
-                    name="⚠️ Important",
-                    value="This invitation link is single-use. Once you register, it cannot be used again.",
-                    inline=False
-                )
-                embed.set_footer(text=f"Your account will have {role} permissions. If you already have an account, you can ignore this.")
-                
-                await dm_channel.send(embed=embed)
-                
-                log_channel = self.bot.get_channel(self.log_channel_id)
-                if log_channel:
-                    log_embed = discord.Embed(
-                        title="📧 Invite Link Sent",
-                        description=f"Sent RomM invite to {member.mention}",
-                        color=discord.Color.green()
-                    )
-                    await log_channel.send(embed=log_embed)
-                
-                logger.info(f"Successfully sent invite link to {member.display_name}")
-                return True
-                
-            except discord.Forbidden:
-                logger.warning(f"Could not DM {member.display_name} - DMs may be disabled.")
-                log_channel = self.bot.get_channel(self.log_channel_id)
-                if log_channel:
-                    await log_channel.send(
-                        embed=discord.Embed(
-                            title="⚠️ Invite Delivery Failed",
-                            description=(
-                                f"Could not DM invite link to {member.mention}\n"
-                                f"**Invite URL:** ||{invite_url}||\n"
-                                "Please send this link to them manually."
-                            ),
-                            color=discord.Color.yellow()
-                        )
-                    )
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error sending invite link to {member.display_name}: {e}", exc_info=True)
-            return False
-    
-    async def handle_role_removal(self, member: discord.Member) -> bool:
-        """Handle removal of the auto-register role"""
-        try:
-            # Check if user exists in our database
-            user_link = await self.db_manager.get_user_link(member.id)
-            if not user_link:
-                logger.warning(f"No RomM account found for {member.display_name}")
-                return False
-
-            # Get the user from RomM API
-            user = await self.find_user_by_username(user_link['romm_username'])
-            if not user:
-                logger.warning(f"User not found in RomM: {user_link['romm_username']}")
-                return False
-            
-            # Check if user is a RomM admin
-            if await self.is_romm_admin(user):
-                logger.warning(f"Attempted to delete admin account for {member.display_name}, skipping")
-                
-                # Notify admins in log channel
-                log_channel = self.bot.get_channel(self.log_channel_id)
-                if log_channel:
-                    await log_channel.send(
-                        embed=discord.Embed(
-                            title="⚠️ Admin Account Protection",
-                            description=(
-                                f"Attempted to delete admin account for {member.mention}\n"
-                                "Account was preserved due to admin status."
-                            ),
-                            color=discord.Color.yellow()
-                        )
-                    )
-                return False
-
-            # Delete the non-admin user
-            if await self.delete_user(user['id']):
-                # Remove from our database
-                await self.db_manager.delete_user_link(member.id)
-                logger.info(f"Deleted user account for {member.display_name}")
-                
-                # Notify the user
-                dm_channel = await self.get_or_create_dm_channel(member)
-                embed = discord.Embed(
-                    title="RomM Account Removed",
-                    description=(
-                        "Your RomM account has been removed due to role changes.\n"
-                        "If this was a mistake, please contact an administrator."
-                    ),
-                    color=discord.Color.red()
-                )
-                await dm_channel.send(embed=embed)
-                
-                # Log the deletion
-                log_channel = self.bot.get_channel(self.log_channel_id)
-                if log_channel:
-                    await log_channel.send(
-                        embed=discord.Embed(
-                            title="User Account Removed",
-                            description=f"Account removed for {member.mention}",
-                            color=discord.Color.red()
-                        )
-                    )
-                return True
-            return False
-        except Exception as e:
-            logger.error(f"Error handling role removal for {member.display_name}: {e}", exc_info=True)
-            return False
-
-    async def link_existing_account(self, member: discord.Member) -> Optional[Dict[str, Any]]:
-        """Check for existing account and prompt user to link it"""
-        try:
-            dm_channel = await self.get_or_create_dm_channel(member)
-            
-            view = discord.ui.View(timeout=300)
-            yes_button = discord.ui.Button(label="Yes", style=discord.ButtonStyle.green, custom_id="yes")
-            no_button = discord.ui.Button(label="No", style=discord.ButtonStyle.red, custom_id="no")
-            
-            async def yes_callback(interaction: discord.Interaction):
-                if interaction.user.id != member.id:
+                if not new_games:
                     return
-                await interaction.response.send_message("Please enter your existing RomM username:")
-                
-                def message_check(m):
-                    return m.author.id == member.id and isinstance(m.channel, discord.DMChannel)
 
-                try:
-                    username_msg = await self.bot.wait_for('message', timeout=300.0, check=message_check)
-                    existing_username = username_msg.content.strip()
-                    logger.info(f"Received username from user: {existing_username}")
+                logger.info(f"Processing batch of {len(new_games)} new games")
+
+                pending_requests = []
+                all_subscribers = defaultdict(list)
+                
+                async with self.db.get_connection() as db:
+                    cursor = await db.execute("SELECT * FROM requests WHERE status = 'pending'")
+                    pending_requests = await cursor.fetchall()
                     
-                    existing_user = await self.find_user_by_username(existing_username)
+                    if not pending_requests:
+                        return
                     
-                    if existing_user:
-                        # Check if it's an admin account
-                        if await self.is_romm_admin(existing_user):
-                            logger.info(f"Admin account found for {existing_username}")
-                            # Store link in database
-                            await self.db_manager.add_user_link(
-                                member.id,
-                                existing_username,
-                                existing_user['id'],
-                                member.display_name,
-                                member.avatar.key if member.avatar else None
-                            )
-                            
-                            await dm_channel.send(
-                                embed=discord.Embed(
-                                    title="✅ Admin Account Linked",
-                                    description=(
-                                        "Your admin account has been verified and linked.\n"
-                                        f"Continue using your existing username `{existing_username}` to log in at {self.bot.config.DOMAIN}\n"
-                                        "Your password remains unchanged."
-                                    ),
-                                    color=discord.Color.green()
-                                )
-                            )
-                            view.stop()
-                            self.temp_storage[member.id] = existing_user
-                            
-                            # Log admin account linking
-                            log_channel = self.bot.get_channel(self.log_channel_id)
-                            if log_channel:
-                                await log_channel.send(
-                                    embed=discord.Embed(
-                                        title="Admin Account Linked",
-                                        description=(
-                                            f"User {member.mention} has linked their Discord account to "
-                                            f"admin account `{existing_username}`"
-                                        ),
-                                        color=discord.Color.gold()
-                                    )
-                                )
-                            return
-                            
-                        # For non-admin accounts, proceed with username update
-                        new_username = await self.sanitize_username(member.display_name)
-                        logger.info(f"Attempting to update username from {existing_username} to {new_username}")
+                    request_ids = [req[0] for req in pending_requests]
+                    placeholders = ','.join('?' * len(request_ids))
+                    cursor = await db.execute(
+                        f"SELECT request_id, user_id FROM request_subscribers WHERE request_id IN ({placeholders})",
+                        request_ids
+                    )
+                    for req_id, user_id in await cursor.fetchall():
+                        all_subscribers[req_id].append(user_id)
+                
+                fulfillments = []
+                notifications = defaultdict(list)
+                
+                for req in pending_requests:
+                    # Unpack the full request tuple
+                    req_id, user_id, _, req_platform, req_game, _, _, _, _, _, _, _, _, req_igdb_id, _, req_igdb_game_name = req
+
+                    for new_game in new_games:
+                        new_game_igdb_id = new_game.get('igdb_id')
+
+                        # NORMALIZE PLATFORM NAMES ---
+                        canonical_req_platform = await self._get_canonical_platform_name(req_platform)
+                        canonical_new_game_platform = await self._get_canonical_platform_name(new_game['platform'])
+                        platform_match = canonical_req_platform and (canonical_req_platform == canonical_new_game_platform)
                         
-                        # Use bot's helper for update
-                        update_params = {"username": new_username}
+                        # PRIORITIZE IGDB NAME FOR SIMILARITY CHECK ---
+                        name_to_compare = req_igdb_game_name if req_igdb_game_name else req_game
+                        name_match = self.calculate_similarity(name_to_compare, new_game['name']) > 0.8
                         
-                        result = await self.bot.make_authenticated_request(
-                            method="PUT",
-                            endpoint=f"users/{existing_user['id']}",
-                            params=update_params,
-                            require_csrf=True
+                        igdb_match = req_igdb_id is not None and new_game_igdb_id is not None and req_igdb_id == new_game_igdb_id
+
+                        if platform_match and (igdb_match or name_match):
+                            fulfillments.append({'req_id': req_id, 'game_name': new_game['name']})
+                            notifications[user_id].append(new_game)
+                            for subscriber_id in all_subscribers.get(req_id, []):
+                                notifications[subscriber_id].append(new_game)
+                            logger.info(f"Request #{req_id} ('{req_game}') matched to new game '{new_game['name']}'.")
+                            break 
+                
+                if fulfillments:
+                    async with self.db.get_connection() as db:
+                        await db.executemany(
+                            """UPDATE requests 
+                               SET status = 'fulfilled', updated_at = CURRENT_TIMESTAMP, 
+                                   notes = ?, auto_fulfilled = 1
+                               WHERE id = ?""",
+                            [(f"Automatically fulfilled - Found: {f['game_name']}", f['req_id']) for f in fulfillments]
                         )
-                        
-                        if result:
-                            # Store link in database
-                            await self.db_manager.add_user_link(
-                                member.id,
-                                existing_username,
-                                existing_user['id'],
-                                member.display_name,
-                                member.avatar.key if member.avatar else None
-                            )
-                            
-                            await dm_channel.send(
-                                embed=discord.Embed(
-                                    title="✅ Account Linked Successfully",
-                                    description=(
-                                        "Your existing account has been linked to your Discord profile.\n"
-                                        f"You can now log in at {self.bot.config.DOMAIN} using:\n"
-                                        f"Username: `{new_username}`\n"
-                                        "Password: [Your existing password]"
-                                    ),
-                                    color=discord.Color.green()
-                                )
-                            )
-                            view.stop()
-                            self.temp_storage[member.id] = existing_user
+                        await db.commit()
+                    
+                    logger.info(f"Sending DMs with links for {len(notifications)} user(s).")
+                    for user_id, fulfilled_games in notifications.items():
+                        try:
+                            user = await self.bot.fetch_user(user_id)
+                            if not user: continue
+
+                            # De-duplicate games in case user subscribed to multiple similar requests
+                            unique_games = {g['id']: g for g in fulfilled_games}.values()
+
+                            for game in unique_games:
+                                game_name = game['name']
+                                rom_id = game['id']
+                                filename = game.get('fs_name') or game.get('file_name')
+                                
+                                romm_url = f"{self.bot.config.DOMAIN}/rom/{rom_id}"
+                                
+                                message_parts = [f"✅ Your request for **{game_name}** is now available!"]
+                                link_parts = [f"[View on RomM]({romm_url})"]
+
+                                if filename:
+                                    safe_filename = quote(filename)
+                                    download_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_id}/content/{safe_filename}?"
+                                    link_parts.append(f"[Direct Download]({download_url})")
+                                
+                                # Join the links with a separator and add them as a single line
+                                message_parts.append(" • ".join(link_parts))
+
+                                message = "\n".join(message_parts)
+                                await user.send(message)
+                                await asyncio.sleep(1)
+
+                        except discord.Forbidden:
+                            logger.warning(f"Could not notify user {user_id}: They have DMs disabled.")
+                        except Exception as e:
+                            logger.warning(f"Could not notify user {user_id}: {e}")
+                    
+            except Exception as e:
+                logger.error(f"Error in batch scan completion handler: {e}", exc_info=True)
+
+    async def check_pending_requests(self, platform: str, game_name: str) -> List[Tuple[int, int, str]]:
+        """Check if there are any pending requests for this game"""
+        try:
+            async with self.db.get_connection() as db:
+                cursor = await db.execute(
+                    """
+                    SELECT id, user_id, game_name 
+                    FROM requests 
+                    WHERE platform = ? AND status = 'pending'
+                    """,
+                    (platform,)
+                )
+                pending_requests = await cursor.fetchall()
+
+                fulfilled_requests = []
+                for req_id, user_id, req_game in pending_requests:
+                    if self.calculate_similarity(game_name.lower(), req_game.lower()) > 0.8:
+                        fulfilled_requests.append((req_id, user_id, req_game))
+
+                return fulfilled_requests
+
+        except Exception as e:
+            logger.error(f"Error checking pending requests: {e}")
+            return []
+
+    async def process_request(self, ctx_or_interaction, platform_name, game, details, selected_game, message):
+        """Process and save the request"""
+        try:
+            # Handle both ctx and interaction objects
+            if hasattr(ctx_or_interaction, 'user'):
+                author = ctx_or_interaction.user
+                author_name = str(ctx_or_interaction.user)
+                
+                async def respond(content=None, embed=None, embeds=None):
+                    kwargs = {}
+                    if content is not None:
+                        kwargs['content'] = content
+                    if embed is not None:
+                        kwargs['embed'] = embed
+                    elif embeds is not None:
+                        kwargs['embeds'] = embeds
+                    
+                    try:
+                        if ctx_or_interaction.response.is_done():
+                            return await ctx_or_interaction.followup.send(**kwargs)
                         else:
-                                error_msg = await dm_channel.send(
-                                    embed=discord.Embed(
-                                        title="❌ Account Linking Failed",
-                                        description=(
-                                            "Failed to update your account. This could be because:\n"
-                                            "1. The username is already taken\n"
-                                            "2. There was a server error\n\n"
-                                            "Creating new account instead..."
-                                        ),
-                                        color=discord.Color.red()
-                                    )
-                                )
-                                view.stop()
-                                self.temp_storage[member.id] = None
-
-                    else:
-                        await dm_channel.send(
-                            embed=discord.Embed(
-                                title="❌ Username Not Found",
-                                description=(
-                                    f"No account found with username: {existing_username}\n"
-                                    "Creating new account instead..."
-                                ),
-                                color=discord.Color.red()
-                            )
-                        )
-                        view.stop()
-                        self.temp_storage[member.id] = None
-                        
-                except asyncio.TimeoutError:
-                    await dm_channel.send("No response received. Creating new account instead...")
-                    view.stop()
-                    self.temp_storage[member.id] = None
-
-            async def no_callback(interaction: discord.Interaction):
-                if interaction.user.id != member.id:
-                    return
-                await interaction.response.send_message("Creating new account for you...")
-                view.stop()
-                self.temp_storage[member.id] = None
-
-            yes_button.callback = yes_callback
-            no_button.callback = no_callback
-            view.add_item(yes_button)
-            view.add_item(no_button)
-            
-            # Store for result
-            self.temp_storage[member.id] = None
-            
-            # Send message with buttons
-            initial_embed = discord.Embed(
-                title="🔗 Link Existing RomM Account",
-                description=(
-                    f"You've been granted access to RomM at {self.bot.config.DOMAIN}. "
-                    "Do you already have an account you'd like to link to your Discord profile?"
-                ),
-                color=discord.Color.blue()
-            )
-            
-            await dm_channel.send(embed=initial_embed, view=view)
-            
-            # Wait for the view to finish
-            await view.wait()
-            
-            # Return the result
-            result = self.temp_storage.get(member.id)
-            self.temp_storage.pop(member.id, None)
-            return result
+                            return await ctx_or_interaction.response.send_message(**kwargs)
+                    except discord.errors.InteractionResponded:
+                        return await ctx_or_interaction.followup.send(**kwargs)
+            else:
+                author = ctx_or_interaction.author
+                author_name = str(ctx_or_interaction.author)
                 
-        except Exception as e:
-            logger.error(f"Error in link_existing_account for {member.display_name}: {e}", exc_info=True)
-            return None    
-
-    async def create_user_account(self, member: discord.Member, interactive: bool = True, use_invite: bool = True) -> bool:
-        """
-        Create or invite a user account.
-        
-        Args:
-            member: Discord member to create account for
-            interactive: Whether to interact with the user (ask about existing accounts)
-            use_invite: Whether to use invite links (True) or direct creation (False)
-        """
-        if use_invite:
-            # Use the new invite-based system
-            return await self.send_invite_link(member)
-        
-        try:
-            # Check if user already has a linked account
-            existing_link = await self.db_manager.get_user_link(member.id)
-            if existing_link:
-                logger.info(f"User {member.display_name} already has a linked account")
-                # Notify user
-                dm_channel = await self.get_or_create_dm_channel(member)
-                await dm_channel.send(
-                    embed=discord.Embed(
-                        title="Existing Account Found",
-                        description=(
-                            f"You already have a RomM account with username: {existing_link['romm_username']}\n"
-                            "You can continue using this account."
-                        ),
+                async def respond(content=None, embed=None, embeds=None):
+                    kwargs = {}
+                    if content is not None:
+                        kwargs['content'] = content
+                    if embed is not None:
+                        kwargs['embed'] = embed
+                    elif embeds is not None:
+                        kwargs['embeds'] = embeds
+                        
+                    return await ctx_or_interaction.respond(**kwargs)
+            
+            # FIRST: Gather all data from database
+            existing_request_id = None
+            user_already_requested = False
+            pending_count = 0
+            
+            async with self.db.get_connection() as db:
+                igdb_id = None
+                if selected_game and selected_game.get('id'):
+                    igdb_id = selected_game['id']
+                # Get existing requests
+                cursor = await db.execute(
+                    """
+                    SELECT id, user_id, username, game_name, igdb_id 
+                    FROM requests 
+                    WHERE platform = ? 
+                    AND status = 'pending'
+                    AND (igdb_id = ? OR igdb_id IS NULL)
+                    """,
+                    (platform_name, igdb_id)
+                )
+                existing_requests = await cursor.fetchall()
+                
+                # Check pending count
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM requests WHERE user_id = ? AND status = 'pending'",
+                    (author.id,)
+                )
+                pending_count = (await cursor.fetchone())[0]
+                
+                # Check if there's a similar pending request
+                existing_request_id = None
+                user_already_requested = False
+                
+                for req_id, req_user_id, req_username, req_game, req_igdb_id in existing_requests:
+                    # If IGDB IDs match, it's definitely the same game
+                    if igdb_id and req_igdb_id and igdb_id == req_igdb_id:
+                        existing_request_id = req_id
+                        original_requester_id = req_user_id
+                        original_requester_name = req_username
+                        
+                        if req_user_id == author.id:
+                            user_already_requested = True
+                            break
+                    # Otherwise use name similarity
+                    elif self.calculate_similarity(game.lower(), req_game.lower()) > 0.8:
+                        existing_request_id = req_id
+                        original_requester_id = req_user_id
+                        original_requester_name = req_username
+                        
+                        if req_user_id == author.id:
+                            user_already_requested = True
+                            break
+                    
+                    # Check if user is already a subscriber
+                    if existing_request_id:
+                        cursor = await db.execute(
+                            """
+                            SELECT COUNT(*) FROM request_subscribers 
+                            WHERE request_id = ? AND user_id = ?
+                            """,
+                            (req_id, author.id)
+                        )
+                        is_subscriber = (await cursor.fetchone())[0] > 0
+                        
+                        if is_subscriber:
+                            user_already_requested = True
+                        break
+                    
+                # If user has already requested this game
+                if user_already_requested:
+                    embed = discord.Embed(
+                        title="📋 Already Requested",
+                        description="You have already requested this game.",
+                        color=discord.Color.orange()
+                    )
+                    
+                    await respond(embed=embed)
+                    return
+                    
+                if pending_count >= 25:
+                    await respond(content="❌ You already have 25 pending requests...")
+                    return
+                    
+                    search_cog = self.bot.get_cog('Search')
+                    platform_display = platform_name
+                    if search_cog:
+                        platform_display = search_cog.get_platform_with_emoji(platform_name)
+                    
+                    embed.add_field(name="Game", value=game, inline=True)
+                    embed.add_field(name="Platform", value=platform_display, inline=True)
+                    embed.add_field(name="Request ID", value=f"#{existing_request_id}", inline=True)
+                    embed.add_field(name="Status", value="⏳ Still Pending", inline=True)
+                    
+                    embed.set_footer(text="You'll receive a DM when this game is added to the collection")
+                    
+                    if selected_game and selected_game.get('cover_url'):
+                        embed.set_thumbnail(url=selected_game['cover_url'])
+                    else:
+                        embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
+                    
+                    await respond(embed=embed)
+                    return
+                
+                # If someone else has requested this game
+                if existing_request_id and author.id != original_requester_id:
+                    # Add user as a subscriber to existing request
+                    await db.execute(
+                        """
+                        INSERT INTO request_subscribers (request_id, user_id, username)
+                        VALUES (?, ?, ?)
+                        """,
+                        (existing_request_id, author.id, author_name)
+                    )
+                    await db.commit()
+                    
+                    # Count total subscribers
+                    cursor = await db.execute(
+                        "SELECT COUNT(*) FROM request_subscribers WHERE request_id = ?",
+                        (existing_request_id,)
+                    )
+                    subscriber_count = (await cursor.fetchone())[0]
+                    
+                    embed = discord.Embed(
+                        title="📋 Request Already Exists",
+                        description=f"This game has already been requested by **{original_requester_name}**",
                         color=discord.Color.blue()
                     )
+                    
+                    search_cog = self.bot.get_cog('Search')
+                    platform_display = platform_name
+                    if search_cog:
+                        platform_display = search_cog.get_platform_with_emoji(platform_name)
+                    
+                    embed.add_field(name="Game", value=game, inline=True)
+                    embed.add_field(name="Platform", value=platform_display, inline=True)
+                    embed.add_field(name="Request ID", value=f"#{existing_request_id}", inline=True)
+                    
+                    embed.add_field(
+                        name="✅ You've been added to the notification list",
+                        value=f"You and {subscriber_count} other user(s) will be notified when this request is fulfilled.",
+                        inline=False
+                    )
+                    
+                    if selected_game and selected_game.get('cover_url'):
+                        embed.set_thumbnail(url=selected_game['cover_url'])
+                    else:
+                        embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
+                    
+                    embed.set_footer(text="You'll receive a DM when this game is added to the collection")
+                    
+                    await respond(embed=embed)
+                    return
+                
+                # Check user's pending request limit
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM requests WHERE user_id = ? AND status = 'pending'",
+                    (author.id,)
                 )
-                return True
+                pending_count = (await cursor.fetchone())[0]
 
-            # Check for existing account to link
-            romm_user = await self.link_existing_account(member)
-            if romm_user:
-                return True  # Account was linked in link_existing_account
+                if pending_count >= 25:
+                    await respond(content="❌ You already have 25 pending requests. Please wait for them to be fulfilled or cancel some.")
+                    return
 
-            # Fix: Use bot's method for token validation
-            if not await self.bot.ensure_valid_token():
-                logger.error("Failed to obtain OAuth token")
-                return False
+                # Add IGDB metadata to details if available
+                if selected_game:
+                    alt_names_str = ""
+                    if selected_game.get('alternative_names'):
+                        alt_names = [f"{alt['name']} ({alt['comment']}" if alt.get('comment') else alt['name'] 
+                                   for alt in selected_game['alternative_names']]
+                        alt_names_str = f"\nAlternative Names: {', '.join(alt_names)}"
+
+                    igdb_details = (
+                        f"IGDB Metadata:\n"
+                        f"Game: {selected_game['name']}{alt_names_str}\n"
+                        f"Release Date: {selected_game['release_date']}\n"
+                        f"Platforms: {', '.join(selected_game['platforms'])}\n"
+                        f"Developers: {', '.join(selected_game['developers']) if selected_game['developers'] else 'Unknown'}\n"
+                        f"Publishers: {', '.join(selected_game['publishers']) if selected_game['publishers'] else 'Unknown'}\n"
+                        f"Genres: {', '.join(selected_game['genres']) if selected_game['genres'] else 'Unknown'}\n"
+                        f"Game Modes: {', '.join(selected_game['game_modes']) if selected_game['game_modes'] else 'Unknown'}\n"
+                        f"Summary: {selected_game['summary']}\n"
+                        f"Cover URL: {selected_game.get('cover_url', 'None')}\n"
+                    )
+                    if details:
+                        details = f"{details}\n\n{igdb_details}"
+                    else:
+                        details = igdb_details
+
+                # Insert the new request
+                async with self.db.get_connection() as db:
+                    
+                    cursor = await db.execute(
+                        """
+                        INSERT INTO requests (user_id, username, platform, game_name, details, igdb_id)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (author.id, author_name, platform_name, game, details, igdb_id)
+                    )
+                    await db.commit()
+                    request_id = cursor.lastrowid
+                    
+                    logger.info(f"Request created - Discord: {author_name} (ID: {author.id}) | Game: '{game}' | Platform: {platform_name} | Request ID: #{request_id}")
+
+                if message and selected_game:
+                    view = GameSelectView(self.bot, matches=[selected_game], platform_name=platform_name)
+                    embed = view.create_game_embed(selected_game)
+                    embed.set_footer(text=f"Request #{request_id} submitted by {author_name}")
+                    await message.edit(embed=embed)
+                else:
+                    # Create basic embed for manual submissions
+                    embed = discord.Embed(
+                        title=f"✅ Request Submitted",
+                        description=f"Your request for **{game}** has been submitted!",
+                        color=discord.Color.green()
+                    )
+                    
+                    search_cog = self.bot.get_cog('Search')
+                    platform_display = platform_name
+                    if search_cog:
+                        platform_display = search_cog.get_platform_with_emoji(platform_name)
+                    
+                    embed.add_field(name="Game", value=game, inline=True)
+                    embed.add_field(name="Platform", value=platform_display, inline=True)
+                    embed.add_field(name="Status", value="⏳ Pending", inline=True)
+                    embed.add_field(name="Request ID", value=f"#{request_id}", inline=True)
+                    
+                    if details and "IGDB Metadata:" not in details:
+                        embed.add_field(name="Details", value=details[:1024], inline=False)
+                    
+                    embed.set_footer(text=f"Request submitted by {author_name}")
+                    embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
+                    
+                    await respond(embed=embed)
+
+        except Exception as e:
+            logger.error(f"Error processing request: {e}")
+            try:
+                if 'respond' in locals():
+                    await respond(content="❌ An error occurred while processing the request.")
+                else:
+                    if hasattr(ctx_or_interaction, 'user'):
+                        await ctx_or_interaction.followup.send("❌ An error occurred while processing the request.")
+                    else:
+                        await ctx_or_interaction.respond("❌ An error occurred while processing the request.")
+            except Exception as error_e:
+                logger.error(f"Could not send error message to user: {error_e}")
+    
+    async def process_request_with_platform(self, ctx_or_interaction, platform_display_name, 
+                                       game, details, selected_game, message, 
+                                       mapping_id, platform_exists):
+        """Process and save the request with platform mapping"""
+        try:
+            # Handle both ctx and interaction objects
+            if hasattr(ctx_or_interaction, 'user'):
+                author = ctx_or_interaction.user
+                author_name = str(ctx_or_interaction.user)
+                
+                async def respond(content=None, embed=None, embeds=None):
+                    kwargs = {}
+                    if content is not None:
+                        kwargs['content'] = content
+                    if embed is not None:
+                        kwargs['embed'] = embed
+                    elif embeds is not None:
+                        kwargs['embeds'] = embeds
+                    
+                    try:
+                        if ctx_or_interaction.response.is_done():
+                            return await ctx_or_interaction.followup.send(**kwargs)
+                        else:
+                            return await ctx_or_interaction.response.send_message(**kwargs)
+                    except discord.errors.InteractionResponded:
+                        return await ctx_or_interaction.followup.send(**kwargs)
+            else:
+                author = ctx_or_interaction.author
+                author_name = str(ctx_or_interaction.author)
+                
+                async def respond(content=None, embed=None, embeds=None):
+                    kwargs = {}
+                    if content is not None:
+                        kwargs['content'] = content
+                    if embed is not None:
+                        kwargs['embed'] = embed
+                    elif embeds is not None:
+                        kwargs['embeds'] = embeds
+                        
+                    return await ctx_or_interaction.respond(**kwargs)
             
-            username = await self.sanitize_username(member.display_name)
-            password = await self.generate_secure_password()
-            
-            # Prepare form data
-            form_data = aiohttp.FormData()
-            form_data.add_field('username', username)
-            form_data.add_field('password', password)
-            form_data.add_field('email', 'none')  # Required field
-            form_data.add_field('role', 'VIEWER')
-            
-            # Create user using bot's helper (it handles CSRF automatically)
-            response_data = await self.bot.make_authenticated_request(
-                method="POST",
-                endpoint="users",
-                form_data=form_data,
-                require_csrf=True
+            async with self.db.get_connection() as db:
+                # Extract IGDB ID if available
+                igdb_id = None
+                igdb_name = None
+                if selected_game and selected_game.get('id'):
+                    igdb_id = selected_game['id']
+                    igdb_name = selected_game.get('name')
+                
+                # Check for existing pending request (only if platform exists in Romm)
+                if platform_exists:
+                    cursor = await db.execute(
+                        """
+                        SELECT id, user_id, username, game_name, igdb_id 
+                        FROM requests 
+                        WHERE platform = ? 
+                        AND status = 'pending'
+                        AND (igdb_id = ? OR igdb_id IS NULL)
+                        """,
+                        (platform_display_name, igdb_id)
+                    )
+                    existing_requests = await cursor.fetchall()
+                    
+                    # Check for existing/duplicate requests...
+                    # (existing duplicate checking code)
+                
+                # Check user's pending request limit
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM requests WHERE user_id = ? AND status = 'pending'",
+                    (author.id,)
+                )
+                pending_count = (await cursor.fetchone())[0]
+
+                if pending_count >= 25:
+                    await respond(content="❌ You already have 25 pending requests. Please wait for them to be fulfilled or cancel some.")
+                    return
+
+                # Add IGDB metadata to details if available
+                if selected_game:
+                    alt_names_str = ""
+                    if selected_game.get('alternative_names'):
+                        alt_names = [f"{alt['name']} ({alt['comment']})" if alt.get('comment') else alt['name'] 
+                                   for alt in selected_game['alternative_names']]
+                        alt_names_str = f"\nAlternative Names: {', '.join(alt_names)}"
+
+                    igdb_details = (
+                        f"IGDB Metadata:\n"
+                        f"Game: {selected_game['name']}{alt_names_str}\n"
+                        f"Release Date: {selected_game.get('release_date', 'Unknown')}\n"
+                        f"Platforms: {', '.join(selected_game.get('platforms', []))}\n"
+                        f"Developers: {', '.join(selected_game.get('developers', [])) if selected_game.get('developers') else 'Unknown'}\n"
+                        f"Publishers: {', '.join(selected_game.get('publishers', [])) if selected_game.get('publishers') else 'Unknown'}\n"
+                        f"Genres: {', '.join(selected_game.get('genres', [])) if selected_game.get('genres') else 'Unknown'}\n"
+                        f"Game Modes: {', '.join(selected_game.get('game_modes', [])) if selected_game.get('game_modes') else 'Unknown'}\n"
+                        f"Summary: {selected_game.get('summary', 'No summary available')}\n"
+                        f"Cover URL: {selected_game.get('cover_url', 'None')}\n"
+                    )
+                    if details:
+                        details = f"{details}\n\n{igdb_details}"
+                    else:
+                        details = igdb_details
+
+                # Insert the new request with platform mapping
+                cursor = await db.execute(
+                    """
+                    INSERT INTO requests (user_id, username, platform, game_name, details, igdb_id, platform_mapping_id, igdb_game_name)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (author.id, author_name, platform_display_name, game, details, igdb_id, mapping_id, igdb_name) # <-- ADD igdb_name HERE
+                )
+                await db.commit()
+                
+                request_id = cursor.lastrowid
+                
+                logger.info(f"Request created - Discord: {author_name} (ID: {author.id}) | Game: '{game}' | Platform: {platform_display_name} | Request ID: #{request_id}")
+
+                if message and selected_game:
+                    view = GameSelectView(self.bot, matches=[selected_game], platform_name=platform_display_name)
+                    embed = view.create_game_embed(selected_game)
+                    embed.set_footer(text=f"Request #{request_id} submitted by {author_name}")
+                    
+                    # Add platform status indicator if platform doesn't exist
+                    if not platform_exists:
+                        embed.add_field(
+                            name="⚠️ Platform Status",
+                            value="This platform needs to be added to the collection before this request can be fulfilled.",
+                            inline=False
+                        )
+                    
+                    await message.edit(embed=embed)
+                else:
+                    # Create basic embed for manual submissions
+                    embed = discord.Embed(
+                        title=f"✅ Request Submitted",
+                        description=f"Your request for **{game}** has been submitted!",
+                        color=discord.Color.green()
+                    )
+                    
+                    search_cog = self.bot.get_cog('Search')
+                    platform_display = platform_display_name
+                    if search_cog and platform_exists:
+                        platform_display = search_cog.get_platform_with_emoji(platform_display_name)
+                    
+                    platform_status = "✅ Available" if platform_exists else "🆕 Not Yet Added"
+                    
+                    embed.add_field(name="Game", value=game, inline=True)
+                    embed.add_field(name="Platform", value=f"{platform_display}\n{platform_status}", inline=True)
+                    embed.add_field(name="Status", value="⏳ Pending", inline=True)
+                    embed.add_field(name="Request ID", value=f"#{request_id}", inline=True)
+                    
+                    if not platform_exists:
+                        embed.add_field(
+                            name="📝 Note",
+                            value="This platform needs to be added to the collection before this request can be fulfilled.",
+                            inline=False
+                        )
+                    
+                    if details and "IGDB Metadata:" not in details:
+                        embed.add_field(name="Details", value=details[:1024], inline=False)
+                    
+                    embed.set_footer(text=f"Request submitted by {author_name}")
+                    embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
+                    
+                    await respond(embed=embed)
+
+        except Exception as e:
+            logger.error(f"Error processing request: {e}")
+            try:
+                if 'respond' in locals():
+                    await respond(content="❌ An error occurred while processing the request.")
+                else:
+                    if hasattr(ctx_or_interaction, 'user'):
+                        await ctx_or_interaction.followup.send("❌ An error occurred while processing the request.")
+                    else:
+                        await ctx_or_interaction.respond("❌ An error occurred while processing the request.")
+            except Exception as error_e:
+                logger.error(f"Could not send error message to user: {error_e}")
+        
+    async def get_request_igdb_data(self, request_id: int) -> Optional[Dict]:
+        """Retrieve IGDB data for a request if IGDB ID was stored"""
+        try:
+            async with self.db.get_connection() as db:
+                cursor = await db.execute(
+                    "SELECT igdb_id, game_name, platform FROM requests WHERE id = ?",
+                    (request_id,)
+                )
+                result = await cursor.fetchone()
+                
+                if result and result[0]:  # If IGDB ID exists
+                    igdb_id = result[0]
+                    game_name = result[1]
+                    platform_name = result[2]
+                    
+                    # You can now use this IGDB ID for direct API calls
+                    # For example, fetch fresh data from IGDB by ID
+                    if self.igdb_enabled:
+                        # This would require adding a method to IGDBClient to fetch by ID
+                        # return await self.igdb.get_game_by_id(igdb_id)
+                        return {"igdb_id": igdb_id, "game_name": game_name, "platform": platform_name}
+                
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error retrieving IGDB data for request: {e}")
+            return None
+    
+    async def continue_request_flow(self, ctx, platform_display_name, game, details, igdb_matches):
+        """Continue with the request flow when user wants different version"""
+        
+        if igdb_matches:
+            # Show IGDB selection
+            select_view = GameSelectView(self.bot, igdb_matches, platform_display_name)
+            initial_embed = select_view.create_game_embed(igdb_matches[0])
+            select_view.message = await ctx.followup.send(
+                "Please select the correct game from the list below:",
+                embed=initial_embed,
+                view=select_view
             )
             
-            if response_data:
-                # Store link in database
-                await self.db_manager.add_user_link(
-                    member.id,
-                    username,
-                    response_data['id'],
-                    member.display_name,
-                    member.avatar.key if member.avatar else None
-                )
-                
-                # Send DM with credentials
-                dm_channel = await self.get_or_create_dm_channel(member)
-                embed = discord.Embed(
-                    title="🎉 RomM Account Created!",
-                    description=f"Your account for {self.bot.config.DOMAIN} has been created.",
-                    color=discord.Color.green()
-                )
-                embed.add_field(name="Username", value=username, inline=False)
-                embed.add_field(name="Password", value=f"||{password}||", inline=False)
-                embed.add_field(
-                    name="⚠️ Important", 
-                    value=f"Please login at {self.bot.config.DOMAIN} and change your password.", 
-                    inline=False
-                )
-                
-                await dm_channel.send(embed=embed)
+            await select_view.wait()
+            
+            if not select_view.selected_game:
+                # Timeout
+                return
+            elif select_view.selected_game == "manual":
+                selected_game = None
+            else:
+                selected_game = select_view.selected_game
+                # Process request with IGDB data including ID
+                await self.process_request(ctx, platform_display_name, game, details, selected_game, select_view.message)
+                return
+        
+        # Process manual request (no IGDB ID)
+        await self.process_request(ctx, platform_display_name, game, details, None, None)
+    
+    @discord.slash_command(name="request", description="Submit a ROM request")
+    async def request(
+        self,
+        ctx: discord.ApplicationContext,
+        platform: discord.Option(
+            str,
+            "Platform for the requested game (existing or new)",
+            required=True,
+            autocomplete=platform_autocomplete_all  # Use the new autocomplete
+        ),
+        game: discord.Option(str, "Name of the game", required=True),
+        details: discord.Option(str, "Additional details (version, region, etc.)", required=False)
+    ):
+        """Submit a request for a ROM with platform validation"""
+        await ctx.defer()
 
-                # Log success
-                log_channel = self.bot.get_channel(self.log_channel_id)
-                if log_channel:
-                    await log_channel.send(
-                        embed=discord.Embed(
-                            title="New User Account Created",
-                            description=f"Account created for {member.mention} with username `{username}`",
+        try:
+            # Clean platform name (remove [NEW] prefix if present)
+            platform_clean = platform.replace("[NEW] ", "")
+            # Check if platform exists in our mappings
+            async with self.db.get_connection() as db:
+                cursor = await db.execute('''
+                    SELECT id, in_romm, romm_id, folder_name, igdb_slug, moby_slug
+                    FROM platform_mappings
+                    WHERE display_name = ?
+                ''', (platform_clean,))
+                
+                platform_mapping = await cursor.fetchone()
+                
+                if not platform_mapping:
+                    # Platform not in our master list - ask for confirmation
+                    await ctx.respond(
+                        f"⚠️ '{platform}' is not in our platform database. "
+                        "Please use a platform from the autocomplete list or contact an admin to add a new platform.",
+                        ephemeral=True
+                    )
+                    return
+                
+                mapping_id, in_romm, romm_id, folder_name, igdb_slug, moby_slug = platform_mapping
+                platform_display_name = platform_clean
+                
+                # If platform exists in Romm, check for existing games
+                if in_romm and romm_id:
+                    # Get the actual Romm platform data
+                    raw_platforms = await self.bot.fetch_api_endpoint('platforms')
+                    if raw_platforms:
+                        for p in raw_platforms:
+                            if p.get('id') == romm_id:
+                                platform_display_name = self.bot.get_platform_display_name(p)
+                                break
+                    
+                    # Check if game exists in current collection
+                    exists, matches = await self.check_if_game_exists(platform_display_name, game)
+                    
+                    if exists:
+                        # Game exists in collection - but also fetch IGDB matches
+                        search_cog = self.bot.get_cog('Search')
+                        platform_with_emoji = search_cog.get_platform_with_emoji(platform_display_name) if search_cog else platform_display_name
+                        
+                        # Fetch IGDB matches regardless of existing games
+                        igdb_matches = []
+                        if self.igdb_enabled:
+                            try:
+                                igdb_platform_slug = None
+                                if platform_mapping:
+                                    igdb_platform_slug = platform_mapping[4]  # igdb_slug from mapping
+                                igdb_matches = await self.igdb.search_game(game, igdb_platform_slug)
+                            except Exception as e:
+                                logger.error(f"Error fetching IGDB data: {e}")
+                        
+                        # Create combined view showing both existing games AND IGDB options
+                        view = ExistingGameWithIGDBView(
+                            self.bot, 
+                            matches,           # Existing games in collection
+                            igdb_matches,      # IGDB search results
+                            platform_display_name, 
+                            game, 
+                            ctx.author.id
+                        )
+                        
+                        # Check if any IGDB games remain after filtering
+                        has_other_games = bool(view.filtered_igdb_matches)
+                        
+                        embed = discord.Embed(
+                            title="Games Found in Collection",
+                            description=f"Found {len(matches)} game(s) matching '{game}' that are already available:",
                             color=discord.Color.blue()
                         )
-                    )
+                        
+                        # Show first few existing games
+                        for i, rom in enumerate(matches[:3]):
+                            embed.add_field(
+                                name=f"✅ {rom.get('name', 'Unknown')}",
+                                value=f"Available now - {rom.get('fs_name', 'Unknown')}",
+                                inline=False
+                            )
+                        
+                        if len(matches) > 3:
+                            embed.add_field(
+                                name="...",
+                                value=f"And {len(matches) - 3} more available",
+                                inline=False
+                            )
+                        
+                        # Update instructions based on what's available
+                        instructions = ["• **Select an existing game** from the dropdown to download it"]
+                        
+                        if has_other_games:
+                            instructions.append(f"• **Request a different game** - Found {len(view.filtered_igdb_matches)} other game(s) on IGDB")
+                        
+                        instructions.append("• Click **Request Different Version** for ROM hacks, patches, or specific versions")
+                        
+                        embed.add_field(
+                            name="What would you like to do?",
+                            value="\n".join(instructions),
+                            inline=False
+                        )
+                        
+                        message = await ctx.respond(embed=embed, view=view)
+                        
+                        if isinstance(message, discord.Interaction):
+                            view.message = await message.original_response()
+                        else:
+                            view.message = message
+                        
+                        await view.wait()
+                        return
                 
-                return True
-            else:
-                logger.error(f"Failed to create user account for {member.display_name}")
-                return False
+                # Search IGDB for game metadata if enabled
+                igdb_matches = []
+                if self.igdb_enabled:
+                    try:
+                        # Get IGDB slug from mapping to use for platform filtering
+                        igdb_platform_slug = None
+                        if platform_mapping:
+                            igdb_platform_slug = platform_mapping[3]  # igdb_slug from mapping
+                        
+                        # Pass platform slug for filtering if available
+                        igdb_matches = await self.igdb.search_game(game, igdb_platform_slug)
+                    except Exception as e:
+                        logger.error(f"Error fetching IGDB data: {e}")
+                
+                # Game doesn't exist OR user wants different version - show IGDB selection
+                if igdb_matches:
+                    select_view = GameSelectView(self.bot, igdb_matches, platform_display_name)
+                    initial_embed = select_view.create_game_embed(igdb_matches[0])
+                    
+                    # Adjust message based on context
+                    intro_text = "Please select the correct game from the list below:"
+                    
+                    select_view.message = await ctx.followup.send(
+                        intro_text,
+                        embed=initial_embed,
+                        view=select_view
+                    )
+                    
+                    await select_view.wait()
+                    
+                    if not select_view.selected_game:
+                        # Timeout
+                        timeout_view = discord.ui.View()
+                        timeout_button = discord.ui.Button(
+                            label="Selection Timed Out",
+                            style=discord.ButtonStyle.secondary,
+                            disabled=True
+                        )
+                        timeout_view.add_item(timeout_button)
+                        await select_view.message.edit(view=timeout_view)
+                        return
+                    elif select_view.selected_game == "manual":
+                        selected_game = None
+                    else:
+                        selected_game = select_view.selected_game
+                        await self.process_request_with_platform(
+                            ctx, 
+                            platform_display_name, 
+                            game, 
+                            details, 
+                            selected_game, 
+                            select_view.message,
+                            mapping_id,
+                            in_romm
+                        )
+                        return
+                
+                # No IGDB matches or manual entry selected - process without IGDB data
+                await self.process_request_with_platform(
+                    ctx, 
+                    platform_display_name, 
+                    game, 
+                    details, 
+                    None, 
+                    None,
+                    mapping_id,
+                    in_romm
+                )
 
         except Exception as e:
-            logger.error(f"Error creating account for {member.display_name}: {e}", exc_info=True)
-            return False
+            logger.error(f"Error submitting request: {e}")
+            await ctx.respond("❌ An error occurred while submitting your request.")
     
-    @commands.Cog.listener()
-    async def on_member_update(self, before: discord.Member, after: discord.Member):
-        """Listen for role changes and handle account invitation/deletion"""
-        if self.auto_register_role_id == 0:
-            return
-
-        had_role = any(role.id == self.auto_register_role_id for role in before.roles)
-        has_role = any(role.id == self.auto_register_role_id for role in after.roles)
-        
-        if has_role and not had_role:
-            # Role was added - send invite link instead of creating account
-            logger.info(f"Auto-register role added to {after.display_name}, sending invite link")
-            await self.send_invite_link(after)
-        elif had_role and not has_role:
-            # Role was removed
-            logger.info(f"Auto-register role removed from {after.display_name}, removing account if exists")
-            await self.handle_role_removal(after)
-
-    @commands.Cog.listener()
-    async def on_ready(self):
-        """Initialize database when cog is ready"""
-        logger.info("UserManager Cog is ready!")
-
-    @discord.slash_command(name="user_manager", description="User management interface")
-    @is_admin()
-    async def user_manager(self, ctx: discord.ApplicationContext):
-        """Open the comprehensive user management interface"""
+    @discord.slash_command(name="my_requests", description="View and manage your ROM requests")
+    async def my_requests(
+        self, 
+        ctx: discord.ApplicationContext,
+        show_pending_only: discord.Option(
+            bool,
+            "Show only pending requests instead of all",
+            required=False,
+            default=False
+        )
+    ):
+        """View and manage your submitted requests with interactive controls"""
         await ctx.defer(ephemeral=True)
-        
-        # Ensure we have valid authentication
-        if not await self.bot.ensure_valid_token():
-            await ctx.followup.send("❌ Failed to authenticate with API!", ephemeral=True)
-            return
-        
-        # Force refresh of user data before opening the interface
+
         try:
-            # Bypass cache to get fresh user data
-            fresh_users = await self.bot.fetch_api_endpoint('users', bypass_cache=True)
-            if fresh_users:
-                logger.info(f"Refreshed user data: {len(fresh_users)} users found")
-            else:
-                logger.warning("Failed to refresh user data from API")
+            async with self.db.get_connection() as db:
+                # Fetch requests based on show_pending_only parameter
+                if show_pending_only:
+                    cursor = await db.execute(
+                        "SELECT * FROM requests WHERE user_id = ? AND status = 'pending' ORDER BY created_at DESC",
+                        (ctx.author.id,)
+                    )
+                    viewing_mode = "pending"
+                else:
+                    cursor = await db.execute(
+                        "SELECT * FROM requests WHERE user_id = ? ORDER BY created_at DESC",
+                        (ctx.author.id,)
+                    )
+                    viewing_mode = "all"
+                
+                requests = await cursor.fetchall()
+
+                if not requests:
+                    if show_pending_only:
+                        embed = discord.Embed(
+                            title="No Pending Requests",
+                            description="You don't have any pending requests.\n\nUse `/my_requests` to view all your requests including fulfilled and cancelled ones.",
+                            color=discord.Color.green()
+                        )
+                        await ctx.respond(embed=embed, ephemeral=True)
+                    else:
+                        embed = discord.Embed(
+                            title="No Requests",
+                            description="You haven't made any requests yet.\n\nUse `/request` to submit a ROM request!",
+                            color=discord.Color.light_grey()
+                        )
+                        embed.set_footer(text="Start by requesting a game you'd like to see added")
+                        await ctx.respond(embed=embed, ephemeral=True)
+                    return
+
+                # Count statuses for summary
+                status_counts = {
+                    'pending': 0,
+                    'fulfilled': 0,
+                    'cancelled': 0,
+                    'reject': 0
+                }
+                for req in requests:
+                    status = req[6]
+                    if status in status_counts:
+                        status_counts[status] += 1
+
+                # Create paginated view
+                view = UserRequestsView(self.bot, requests, ctx.author.id, self.bot.db)
+                embed = view.create_request_embed(requests[0])
+                
+                # Build status summary
+                status_parts = []
+                if status_counts['pending'] > 0:
+                    status_parts.append(f"⏳ {status_counts['pending']} pending")
+                if status_counts['fulfilled'] > 0:
+                    status_parts.append(f"✅ {status_counts['fulfilled']} fulfilled")
+                if status_counts['cancelled'] > 0:
+                    status_parts.append(f"🚫 {status_counts['cancelled']} cancelled")
+                if status_counts['reject'] > 0:
+                    status_parts.append(f"❌ {status_counts['reject']} rejected")
+                
+                status_summary = " | ".join(status_parts)
+                
+                # Add viewing mode indicator to the message
+                mode_text = "⏳ **Viewing: Pending Requests Only**" if show_pending_only else "📋 **Viewing: All Your Requests**"
+                hint_text = "\n*Use `/my_requests show_pending_only:True` to see only pending requests*" if not show_pending_only else "\n*Use `/my_requests` to see all requests*"
+                
+                message = await ctx.respond(
+                    content=f"{mode_text}\n📊 **Summary:** {status_summary}",
+                    embed=embed, 
+                    view=view,
+                    ephemeral=True
+                )
+                
+                # Store message reference for editing
+                if isinstance(message, discord.Interaction):
+                    view.message = await message.original_response()
+                else:
+                    view.message = message
+
         except Exception as e:
-            logger.error(f"Error refreshing user data: {e}")
-            # Continue anyway - the view will try to fetch data itself
-        
-        # Create and populate the view
-        view = UserManagementView(self.bot, self, ctx.guild)
-        await view.populate_discord_users()
-        
-        # Send initial message
-        embed = view.create_status_embed()
-        message = await ctx.followup.send(embed=embed, view=view, ephemeral=True)
-        
-        if isinstance(message, discord.Interaction):
-            view.message = await message.original_response()
-        else:
-            view.message = message
+            logger.error(f"Error fetching requests: {e}")
+            await ctx.respond("❌ An error occurred while fetching your requests.", ephemeral=True)
+
+    @discord.slash_command(name="request_admin", description="Admin interface for managing ROM requests")
+    @is_admin()
+    async def request_admin(
+        self,
+        ctx: discord.ApplicationContext,
+        show_all: discord.Option(
+            bool,
+            "Show all requests instead of just pending ones",
+            required=False,
+            default=False
+        )
+    ):
+        """Admin interface for managing requests - shows pending by default"""
+        await ctx.defer(ephemeral=True)
+
+        try:
+            async with self.db.get_connection() as db:
+                # Fetch requests based on show_all parameter
+                if show_all:
+                    cursor = await db.execute(
+                        "SELECT * FROM requests ORDER BY created_at DESC"
+                    )
+                    viewing_mode = "all"
+                else:
+                    cursor = await db.execute(
+                        "SELECT * FROM requests WHERE status = 'pending' ORDER BY created_at ASC"
+                    )
+                    viewing_mode = "pending"
+                
+                requests = await cursor.fetchall()
+
+                if not requests:
+                    if show_all:
+                        await ctx.respond("📭 No requests found in the system.", ephemeral=True)
+                    else:
+                        embed = discord.Embed(
+                            title="No Pending Requests",
+                            description="There are currently no pending requests.\n\nUse `/request_admin show_all:True` to view all requests including fulfilled and rejected ones.",
+                            color=discord.Color.green()
+                        )
+                        embed.set_footer(text="All requests have been processed!")
+                        await ctx.respond(embed=embed)
+                    return
+
+                # Create paginated view
+                view = RequestAdminView(self.bot, requests, ctx.author.id, self.bot.db)
+                
+                # Fetch user avatar for the first request
+                user_avatar_url = None
+                try:
+                    user = self.bot.get_user(requests[0][1])  # requests[0][1] is user_id
+                    if not user:
+                        user = await self.bot.fetch_user(requests[0][1])
+                    if user and user.avatar:
+                        user_avatar_url = user.avatar.url
+                    elif user:
+                        user_avatar_url = user.default_avatar.url
+                except:
+                    pass
+
+                embed = view.create_request_embed(requests[0], user_avatar_url)  # Pass avatar URL
+                
+                # Add viewing mode indicator to the message
+                mode_text = "📋 **Viewing: All Requests**" if show_all else "⏳ **Viewing: Pending Requests Only**"
+                hint_text = "\n *Use `/request_admin show_all:True` to see all requests*" if not show_all else ""
+                
+                message = await ctx.respond(
+                    content=f"{mode_text}",
+                    embed=embed, 
+                    view=view
+                )
+                
+                # Store message reference for editing
+                if isinstance(message, discord.Interaction):
+                    view.message = await message.original_response()
+                else:
+                    view.message = message
+
+        except Exception as e:
+            logger.error(f"Error in request admin command: {e}")
+            await ctx.respond("❌ An error occurred while loading the requests interface.", ephemeral=True)
 
 def setup(bot):
-    """Setup function with enable check"""
-    if os.getenv('ENABLE_USER_MANAGER', 'TRUE').upper() == 'FALSE':
-        logger.info("UserManager Cog is disabled via ENABLE_USER_MANAGER")
-        return
-    
-    bot.add_cog(UserManager(bot))
-    #logger.info("UserManager Cog enabled and loaded")
+    bot.add_cog(Request(bot))
