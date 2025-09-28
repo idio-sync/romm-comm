@@ -108,9 +108,18 @@ win_xp_gui|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main
 # Utilities
 bios|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/bios.png                      
 qr_code|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/qr_code.gif               
+
+# Bot only emojis
+# Logos
+hash|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/link-hasheous.png
+igdb|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/link-igdb.png
+lauchbox|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/link-launchbox.png
+retroachievements|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/link-RA.png
+romm|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/link-romm.png
+steamgrid|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/link-steamgrid.png
 vhs|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/vhs.png                        
 
-# Extra bot only emojis
+# Extra Platforms
 cd|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/cd.png
 jaguar_cd|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/jaguar_cd.png
 loopy|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/loopy.png
@@ -121,7 +130,6 @@ pico|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.back
 ps5|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ps5.png
 teknoparrot|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/teknoparrot.png
 xbone|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/xbone.png
-
 
 # Icon source:
 # https://www.deviantart.com/starvingartist/art/Antiseptic-Videogame-Systems-23217105
