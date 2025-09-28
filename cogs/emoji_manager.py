@@ -43,7 +43,7 @@ class EmojiManager(commands.Cog):
             'Atari Jaguar': ['jaguar'],
             'Atari Jaguar CD': ['jaguar_cd'],
             'Atari Lynx': ['lynx'],
-            'Casio Loopy': ['loopy],
+            'Casio Loopy': ['loopy'],
             'Commodore C64/128/MAX': ['c64'],
             'Dreamcast': ['dreamcast'],
             'Family Computer': ['famicom'],
@@ -428,4 +428,5 @@ class EmojiManager(commands.Cog):
 
 def setup(bot):
     bot.add_cog(EmojiManager(bot))
+
 
