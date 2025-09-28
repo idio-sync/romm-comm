@@ -1117,6 +1117,7 @@ class Search(commands.Cog):
         # Map of common platform name variations
         self.platform_variants = {
             '3DO Interactive Multiplayer': ['3do'],
+            'Adobe Flash': ['flash'],
             'Apple II': ['apple_ii'],
             'Amiga': ['amiga'],
             'Amiga CD32': ['cd32'],
@@ -1131,6 +1132,7 @@ class Search(commands.Cog):
             'Atari Jaguar': ['jaguar'],
             'Atari Jaguar CD': ['jaguar_cd'],
             'Atari Lynx': ['lynx'],
+            'Browser': ['flash'],
             'Casio Loopy': ['loopy'],
             'Commodore C64/128/MAX': ['c64'],
             'Dreamcast': ['dreamcast'],
@@ -1138,6 +1140,7 @@ class Search(commands.Cog):
             'Famicom': ['famicom'],
             'Family Computer Disk System': ['fds'],
             'Famicom Disk System': ['fds'],
+            'Flash': ['flash'],
             'FM Towns': ['fm_towns'],
             'Game & Watch': ['game_and_watch'],
             'Game Boy': ['gameboy', 'gameboy_pocket'],
@@ -1196,6 +1199,7 @@ class Search(commands.Cog):
             'Vectrex': ['vectrex'],
             'Virtual Boy': ['virtual_boy'],
             'Visual Memory Unit / Visual Memory System': ['vmu'],
+            'Web Browser': ['flash'],
             'Wii': ['wii'],
             'Windows': ['pc'],
             'WonderSwan': ['wonderswan'],
