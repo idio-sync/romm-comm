@@ -25,6 +25,7 @@ dos|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backe
 ds|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ds.png
 dsi|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/dsi.png
 dreamcast|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/dreamcast.png
+famicom|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/famocom.png
 fds|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/fds.png
 fm_towns|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/fm_towns.png
 game_and_watch|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/game_and_watch.png
@@ -110,6 +111,16 @@ qr_code|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.b
 vhs|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/vhs.png                        
 
 # Extra bot only emojis
+cd|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/cd.png
+jaguar_cd|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/jaguar_cd.png
+loopy|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/loopy.png
+mega_duck|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/mega_duck.png
+mouse|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/mouse.png
+pc_fx|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/pc_fx.png
+pico|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/pico.png
+ps5|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ps5.png
+teknoparrot|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/teknoparrot.png
+xbone|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/xbone.png
 
 
 # Icon source:
