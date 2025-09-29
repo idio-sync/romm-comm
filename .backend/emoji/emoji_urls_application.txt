@@ -117,7 +117,8 @@ lauchbox|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.
 retroachievements|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/link-RA.png
 romm|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/link-romm.png
 steamgrid|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/link-steamgrid.png
-vhs|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/vhs.png                        
+vhs|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/vhs.png     
+youtube|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/youtube.png
 
 # Extra Platforms
 cd|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/cd.png
