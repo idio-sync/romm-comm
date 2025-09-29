@@ -144,7 +144,7 @@ RECENT_ROMS_BULK_THRESHOLD=25
 - `UPDATE_VOICE_NAMES` — Enable voice channel stats (default: `true`).
 - `REQUESTS_ENABLED` — Enable request commands (default: `true`).
 - `IGDB_CLIENT_ID`, `IGDB_CLIENT_SECRET` — For request metadata (can be shared with RomM).
-- `AUTO_REGISTER_ROLE_ID` — Role that triggers automatic RomM account creation.
+- `AUTO_REGISTER_ROLE_ID` — Role that triggers automatic RomM invite link DMs to users.
 - `CHANNEL_ID` — Channel for sync results and user manager logs.
 - `RECENT_ROMS_*` — Controls for recent-ROM posting (enabled, channel id, thresholds).
 
@@ -273,3 +273,4 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
