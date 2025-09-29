@@ -329,6 +329,72 @@ class EmojiManager(commands.Cog):
         finally:
             self.sync_in_progress = False
 
+    def get_emoji(self, name: str, guild: discord.Guild = None) -> str:
+        """
+        Resolve an emoji name to its Discord format.
+        Priority: Application emojis > Server emojis > Text fallback
+        
+        Args:
+            name: The emoji name (with or without colons)
+            guild: Optional guild for server-specific emojis
+        
+        Returns:
+            Formatted emoji string or text fallback
+        """
+        # Strip colons if present
+        clean_name = name.strip(':').lower().replace('-', '_')
+        
+        # 1. Check application emojis first (work everywhere)
+        if clean_name in self.bot.emoji_dict:
+            emoji = self.bot.emoji_dict[clean_name]
+            return str(emoji)  # This returns <:name:id> format
+        
+        # 2. Check server-specific emojis if guild provided
+        if guild and guild.id in self.server_emojis:
+            if clean_name in self.server_emojis[guild.id]:
+                emoji = self.server_emojis[guild.id][clean_name]
+                return str(emoji)  # This returns <:name:id> format
+        
+        # 3. Fallback to text format
+        return f":{clean_name}:"
+    
+    def format_text(self, text: str, guild: discord.Guild = None) -> str:
+        """
+        Replace all :emoji_name: patterns in text with actual emojis.
+        
+        Args:
+            text: Text containing :emoji: patterns
+            guild: Optional guild for server-specific emojis
+        
+        Returns:
+            Text with emojis replaced
+        """
+        import re
+        
+        def replace_emoji(match):
+            emoji_name = match.group(1)
+            return self.get_emoji(emoji_name, guild)
+        
+        # Find all :emoji_name: patterns and replace them
+        pattern = r':([a-zA-Z0-9_\-]+):'
+        return re.sub(pattern, replace_emoji, text)
+    
+    def get_all_available_emojis(self, guild: discord.Guild = None) -> dict:
+        """
+        Get all available emojis for debugging/listing.
+        
+        Returns dict with 'application' and 'server' emoji lists
+        """
+        available = {
+            'application': list(self.bot.emoji_dict.keys()),
+            'server': []
+        }
+        
+        if guild and guild.id in self.server_emojis:
+            available['server'] = list(self.server_emojis[guild.id].keys())
+        
+        return available
+    
     @commands.Cog.listener()
     async def on_guild_join(self, guild: discord.Guild):
         """When bot joins a new server, sync emojis"""
