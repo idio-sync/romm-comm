@@ -287,9 +287,13 @@ class RequestAdminView(discord.ui.View):
             igdb_link_name = igdb_name.lower().replace(' ', '-')
             igdb_link_name = re.sub(r'[^a-z0-9-]', '', igdb_link_name)
             igdb_url = f"https://www.igdb.com/games/{igdb_link_name}"
+            
+            # Get the formatted emoji using the helper method
+            igdb_emoji = self.bot.get_formatted_emoji('igdb')
+            
             embed.add_field(
                 name="Links",
-                value=f"[IGDB]({igdb_url})",
+                value=f"[{igdb_emoji} IGDB]({igdb_url})",
                 inline=True
             )
         
@@ -979,9 +983,13 @@ class UserRequestsView(discord.ui.View):
             igdb_link_name = igdb_name.lower().replace(' ', '-')
             igdb_link_name = re.sub(r'[^a-z0-9-]', '', igdb_link_name)
             igdb_url = f"https://www.igdb.com/games/{igdb_link_name}"
+            
+            # Get the formatted emoji using the helper method
+            igdb_emoji = self.bot.get_formatted_emoji('igdb')
+            
             embed.add_field(
                 name="Links",
-                value=f"[IGDB]({igdb_url})",
+                value=f"[{igdb_emoji} IGDB]({igdb_url})",
                 inline=True
             )
         
@@ -1480,11 +1488,19 @@ class GameSelectView(discord.ui.View):
         igdb_url = f"https://www.igdb.com/games/{igdb_name}"
         
         # Links section
-        embed.add_field(
-            name="Links",
-            value=f"[IGDB]({igdb_url})",
-            inline=True
-        )
+        if igdb_name:
+            igdb_link_name = igdb_name.lower().replace(' ', '-')
+            igdb_link_name = re.sub(r'[^a-z0-9-]', '', igdb_link_name)
+            igdb_url = f"https://www.igdb.com/games/{igdb_link_name}"
+            
+            # Get the formatted emoji using the helper method
+            igdb_emoji = self.bot.get_formatted_emoji('igdb')
+            
+            embed.add_field(
+                name="Links",
+                value=f"[{igdb_emoji} IGDB]({igdb_url})",
+                inline=True
+            )
         
         return embed
 
