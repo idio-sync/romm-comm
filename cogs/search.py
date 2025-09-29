@@ -268,16 +268,35 @@ class ROM_View(discord.ui.View):
                 if companies_str:
                     embed.add_field(name="Companies", value=companies_str, inline=True)
             
-            links = [
-                f"[Romm]({romm_url})",
-                f"[IGDB]({igdb_url})"
+            # Build the links section with two rows
+            romm_emoji = self.bot.get_formatted_emoji('romm')
+            igdb_emoji = self.bot.get_formatted_emoji('igdb')
+            ra_emoji = self.bot.get_formatted_emoji('retroachievements')
+            launchbox_emoji = self.bot.get_formatted_emoji('launchbox')
+            hash_emoji = self.bot.get_formatted_emoji('hash')
+
+            # Top row links
+            top_row_links = [
+                f"[{romm_emoji} RomM]({romm_url})",
+                f"[{igdb_emoji} IGDB]({igdb_url})"
             ]
-            
+
+            # Add YouTube to top row if available
+            if youtube_video_id := rom_data.get('youtube_video_id'):
+                youtube_emoji = self.bot.get_formatted_emoji('youtube')
+                youtube_url = f"https://www.youtube.com/watch?v={youtube_video_id}"
+                top_row_links.append(f"[{youtube_emoji} Trailer]({youtube_url})")
+
+            # Build the final links value
+            links_value = " ".join(top_row_links)
+
+            # Add achievements on second row if available
             if ra_id := rom_data.get('ra_id'):
                 ra_url = f"https://retroachievements.org/game/{ra_id}"
-                links.append(f"[RetroAchievements]({ra_url})")
-            
-            embed.add_field(name="Links", value=" • ".join(links), inline=True)
+                links_value += f"\n[{ra_emoji} Achievements]({ra_url})"
+
+            # Add the field to embed
+            embed.add_field(name="Links", value=links_value, inline=True)
             
             # File information (rest remains the same as original)
             if rom_data.get('multi') and rom_data.get('files'):
@@ -1117,7 +1136,6 @@ class Search(commands.Cog):
         # Map of common platform name variations
         self.platform_variants = {
             '3DO Interactive Multiplayer': ['3do'],
-            'Adobe Flash': ['flash'],
             'Apple II': ['apple_ii'],
             'Amiga': ['amiga'],
             'Amiga CD32': ['cd32'],
@@ -1132,7 +1150,6 @@ class Search(commands.Cog):
             'Atari Jaguar': ['jaguar'],
             'Atari Jaguar CD': ['jaguar_cd'],
             'Atari Lynx': ['lynx'],
-            'Browser': ['flash'],
             'Casio Loopy': ['loopy'],
             'Commodore C64/128/MAX': ['c64'],
             'Dreamcast': ['dreamcast'],
@@ -1140,7 +1157,6 @@ class Search(commands.Cog):
             'Famicom': ['famicom'],
             'Family Computer Disk System': ['fds'],
             'Famicom Disk System': ['fds'],
-            'Flash': ['flash'],
             'FM Towns': ['fm_towns'],
             'Game & Watch': ['game_and_watch'],
             'Game Boy': ['gameboy', 'gameboy_pocket'],
@@ -1199,7 +1215,6 @@ class Search(commands.Cog):
             'Vectrex': ['vectrex'],
             'Virtual Boy': ['virtual_boy'],
             'Visual Memory Unit / Visual Memory System': ['vmu'],
-            'Web Browser': ['flash'],
             'Wii': ['wii'],
             'Windows': ['pc'],
             'WonderSwan': ['wonderswan'],
