@@ -12,6 +12,12 @@ from enum import Enum
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.WARNING)
 
+def is_admin():
+    """Check if the user is the admin"""
+    async def predicate(ctx: discord.ApplicationContext):
+        return ctx.bot.is_admin(ctx.author)
+    return commands.check(predicate)
+
 class ScanType(str, Enum):
     """Enum for scan types to prevent typos and provide better code completion"""
     QUICK = "quick"
@@ -126,7 +132,7 @@ class Scan(commands.Cog):
                 
                 # Only send messages if we have a channel (Discord-initiated scan)
                 if self.last_channel and not self.external_scan:
-                    await self.last_channel.send(f"🔠Scanning platform: {platform_name}")
+                    await self.last_channel.send(f"🔍 Scanning platform: {platform_name}")
                     
             except Exception as e:
                 logger.error(f"Error handling platform scan update: {e}")
@@ -352,7 +358,8 @@ class Scan(commands.Cog):
             
         return await search_cog.platform_autocomplete(ctx)
 
-    @discord.slash_command(name="scan", description="ROM scanning commands")
+    @discord.slash_command(name="scan", description="ROM scanning commands (Admin only)")
+    @is_admin()
     async def scan(
         self,
         ctx: discord.ApplicationContext,
@@ -412,6 +419,7 @@ class Scan(commands.Cog):
             logger.error(f"Error in scan command: {e}", exc_info=True)
             await ctx.respond(f"⌠Error executing scan command: {str(e)}")
 
+    # [Rest of the methods remain the same - _scan_platform, _scan_full, etc.]
     async def _scan_platform(self, ctx: discord.ApplicationContext, platform: str):
         """Handle platform-specific scan"""
         try:
@@ -479,7 +487,7 @@ class Scan(commands.Cog):
             
             self.new_games = []
             await self.sio.emit('scan', options)
-            await ctx.respond(f"🔠Started scanning platform: {platform_display_name}")
+            await ctx.respond(f"🔍 Started scanning platform: {platform_display_name}")
             
         except Exception as e:
             self.is_scanning = False
@@ -518,7 +526,7 @@ class Scan(commands.Cog):
         }
         
         await self.sio.emit('scan', options)
-        await ctx.respond("🔠Started full system scan")
+        await ctx.respond("🔍 Started full system scan")
 
     async def _scan_stop(self, ctx: discord.ApplicationContext):
         """Handle scan stop command"""
@@ -623,7 +631,7 @@ class Scan(commands.Cog):
         }
         
         await self.sio.emit('scan', options)
-        await ctx.respond("🔠Started scanning unidentified ROMs")
+        await ctx.respond("🔍 Started scanning unidentified ROMs")
 
     async def _scan_hashes(self, ctx: discord.ApplicationContext):
         """Handle ROM hash update scan"""
@@ -642,7 +650,7 @@ class Scan(commands.Cog):
         }
         
         await self.sio.emit('scan', options)
-        await ctx.respond("🔠Started updating ROM hashes")
+        await ctx.respond("🔍 Started updating ROM hashes")
 
     async def _scan_new_platforms(self, ctx: discord.ApplicationContext):
         """Handle new platforms scan"""
@@ -661,7 +669,7 @@ class Scan(commands.Cog):
         }
         
         await self.sio.emit('scan', options)
-        await ctx.respond("🔠Started scanning for new platforms")
+        await ctx.respond("🔍 Started scanning for new platforms")
 
     async def _scan_partial(self, ctx: discord.ApplicationContext):
         """Handle partial metadata scan"""
@@ -680,7 +688,7 @@ class Scan(commands.Cog):
         }
         
         await self.sio.emit('scan', options)
-        await ctx.respond("🔠Started scanning ROMs with partial metadata")
+        await ctx.respond("🔍 Started scanning ROMs with partial metadata")
 
     async def _scan_summary(self, ctx: discord.ApplicationContext):
         """Handle scan summary request"""
