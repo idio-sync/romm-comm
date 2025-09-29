@@ -138,29 +138,25 @@ RECENT_ROMS_BULK_THRESHOLD=25
 - `USER` / `PASS` — API credentials for RomM.
 
 **Common optional settings (defaults shown where applicable):**
-- `ADMIN_ID` — User ID allowed to run admin commands (scan, sync users, etc.).
+- `ADMIN_ID` — User OR role ID allowed to run admin commands (scan, sync users, etc.).
 - `DOMAIN` — Public domain for download links (default: `No website configured`).
 - `SYNC_RATE` — How often to sync with the API in seconds (default: `3600`).
 - `UPDATE_VOICE_NAMES` — Enable voice channel stats (default: `true`).
 - `REQUESTS_ENABLED` — Enable request commands (default: `true`).
 - `IGDB_CLIENT_ID`, `IGDB_CLIENT_SECRET` — For request metadata (can be shared with RomM).
 - `AUTO_REGISTER_ROLE_ID` — Role that triggers automatic RomM account creation.
-- `SHOW_API_SUCCESS` — Show API sync results and errors in Discord (default: `false`).
 - `CHANNEL_ID` — Channel for sync results and user manager logs.
-- `CACHE_TTL` — Cache TTL in seconds (default: `3900`).
-- `API_TIMEOUT` — API request timeout in seconds (default: `10`).
 - `RECENT_ROMS_*` — Controls for recent-ROM posting (enabled, channel id, thresholds).
 
 ---
 
-## Recently Added ROM Notifications
+## Recently Added Game Notifications
 <img align="right" width="300" height="300" src=".github/screenshots/RecentlyAddedSingle.png">
 
-- When enabled (`RECENT_ROMS_ENABLED=true`) the bot posts newly added ROMs to the configured channel.
-- Multiple ROMs that occur within the configured batch window are grouped into a single batched response by platform.
-- Large imports can trigger flood protection; thresholds for maximum listed ROMs and flood limits are adjustable via env vars.
+- When enabled (`RECENT_ROMS_ENABLED=true`) the bot posts newly added games to the configured channel.
+- If multiple games added from a scan, the notification shows a list of games grouped into a single response sorted by platform.
 
-**Note:** Avoid enabling recent-ROM notifications before initial scans. Long-running imports may overload the bot or cause noisy notifications.
+**Note:** Game IDs are stored after scanning, if a game ID is not stored, it will trigger a notification. This means full rescans of platforms scanned in before the bot was present will trigger the notification.
 
 ---
 
@@ -192,12 +188,14 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 - On first boot or when joining a server, the bot uploads a standard set of custom console emojis (default ~50).
 - If the server has boosted Nitro/extra emoji slots available, the bot can upload an extended emoji set; if Nitro is later removed the bot reverts to the standard list to preserve the most-used emojis.
 - Emojis are used throughout bot responses to visually identify platforms when a matching emoji exists on the server. The extended emoji set covers less popular consoles as well as variants.
+- The bot has an even more extended list of emojis that it uploads to itself which are only usable in bot replies. This consists of every emoji on teh previous two lists plus logos and more obscure console emojis.
+- If you want to delete the emojis uploaded to the server (usable by users) you can, emojis used in bot responses will not be affected and the server emoji sync is tracked so they will not be reuploaded. 
 
 ---
 
 ## Available Commands
 
-- `/search [platform] [game]` — Search ROMs with interactive results and optional QR code for console installs.
+- `/search [platform] [game]` — Search ROMs with interactive results and optional QR code for console installs. 
 - `/request`, `/my_requests`, `/request_admin` — Submit, view, and manage requests.
 - `/random [platform]` — Fetch a random ROM (platform optional).
 - `/firmware [platform]` — List firmware files with hash details and download links.
@@ -235,13 +233,13 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 - `/manage_users` — Manage Romm and Discord users (admin only).
 - Discord users can be linked to Romm users, entries in dropdown show if a user is linked or not (and to what user names).
 - Linking is useful for keeping track of who on the server has a Romm account, also for enriching request information in the request manager.
-- Unlinking accounts removes Romm user from server (unless user is an admin).
-- Select Discord user and hit 'Create New Romm Account' button to manually onboard user to Romm via DM (see Onboarding via role).
+- Unlinking accounts deletes or disables (or just unlinks) Romm user from server (unless user is an admin).
+- Select Discord user and hit 'Send Invite' button to manually onboard user to Romm via DM (see Onboarding via role).
 
 **Onboarding via role:**
-- Creates RomM accounts automatically when specified role is added to Discord user.
+- Sends RomM invite links automatically when specified role is added to Discord user.
 - Uses Discord display name + suffixes, generates a random password and DMs the user their login info.
-- Deletes RomM accounts created by the bot when the role is removed, skips admin accounts.
+- Deletes or disables RomM accounts created by the bot when the role is removed (or just unlinks), skips admin accounts.
 
 ---
 
@@ -275,31 +273,3 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
