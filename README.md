@@ -16,7 +16,7 @@ A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) A
 - [Discord Bot Token Creation](#discord-bot-token-creation)
 - [RomM Settings](#romm-settings)
 - [Configuration](#configuration)
-- [Recently Added ROM Notifications](#recently-added-rom-notifications)
+- [Recently Added Game Notifications](#recently-added-game-notifications)
 - [Visible Statistics](#visible-statistics)
 - [Emojis](#emojis)
 - [Available Commands](#available-commands)
@@ -273,4 +273,5 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
