@@ -3193,7 +3193,7 @@ class Request(commands.Cog):
             logger.error(f"Error fetching requests: {e}")
             await ctx.respond("❌ An error occurred while fetching your requests.", ephemeral=True)
 
-    @discord.slash_command(name="request_admin", description="Admin interface for managing ROM requests")
+    @discord.slash_command(name="request_admin", description="Interface for managing ROM requests (admin only)")
     @is_admin()
     async def request_admin(
         self,
