@@ -130,6 +130,7 @@ mouse|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.bac
 pc_fx|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/pc_fx.png
 pico|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/pico.png
 ps5|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ps5.png
+sfam|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/sfam.png
 teknoparrot|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/teknoparrot.png
 xbone|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/xbone.png
 
