@@ -62,21 +62,9 @@ class RecentRomsMonitor(commands.Cog):
         self.platform_cache_time: Optional[datetime] = None
         self.platform_cache_ttl = timedelta(minutes=30)
         
-        # Connection tracking
-        self.last_successful_connect = time.time()
-        self.connection_errors = 0
-        
-        # Socket.IO client - runs in main event loop
-        self.sio = socketio.AsyncClient(
-            logger=False,
-            engineio_logger=False,
-            reconnection=True,
-            reconnection_attempts=0,
-            reconnection_delay=2,
-            reconnection_delay_max=60,
-            randomization_factor=0.5
-        )
-        self._connection_lock = asyncio.Lock()
+        # Use shared SocketIO manager
+        self.sio = bot.socketio_manager.sio
+  
         self._handlers_registered = False
         
         if self.enabled:
@@ -96,8 +84,6 @@ class RecentRomsMonitor(commands.Cog):
         async def connect():
             """Handle connection event"""
             logger.info("✅ RecentRomsMonitor connected to websocket server")
-            self.last_successful_connect = time.time()
-            self.connection_errors = 0
             async with self.scan_lock:
                 self.current_scan_roms.clear()
                 self.current_scan_names.clear()
@@ -108,7 +94,6 @@ class RecentRomsMonitor(commands.Cog):
         async def disconnect():
             """Handle disconnection event"""
             logger.warning("RecentRomsMonitor disconnected from websocket server")
-            self.connection_errors += 1
             
             # Cancel any pending timer
             if self.scan_completion_timer and not self.scan_completion_timer.done():
@@ -122,7 +107,6 @@ class RecentRomsMonitor(commands.Cog):
         async def connect_error(data):
             """Handle connection errors"""
             logger.error(f"Socket.IO connection error: {data}")
-            self.connection_errors += 1
         
         @self.sio.on('scan:scanning_rom')
         async def on_scanning_rom(data):
@@ -260,12 +244,6 @@ class RecentRomsMonitor(commands.Cog):
             # Setup socket handlers
             self.setup_socket_handlers()
             
-            # Connect to websocket
-            await self.ensure_connected()
-            
-            # Start connection health monitor
-            self.bot.loop.create_task(self.monitor_connection_health())
-            
             # Start cleanup task
             self.cleanup_task.start()
             
@@ -273,111 +251,6 @@ class RecentRomsMonitor(commands.Cog):
             
         except Exception as e:
             logger.error(f"Error setting up Recent ROMs monitor: {e}", exc_info=True)
-    
-    async def ensure_connected(self):
-        """Ensure Socket.IO connection with retry logic"""
-        async with self._connection_lock:
-            if self.sio.connected:
-                return
-            
-            max_retries = 5
-            retry_delay = 2
-            
-            for attempt in range(max_retries):
-                try:
-                    logger.info(f"Connecting to Socket.IO (attempt {attempt + 1}/{max_retries})...")
-                    
-                    # Prepare Basic Auth
-                    base_url = self.config.API_BASE_URL.rstrip('/')
-                    auth_string = f"{self.config.USER}:{self.config.PASS}"
-                    auth_bytes = auth_string.encode('ascii')
-                    base64_auth = base64.b64encode(auth_bytes).decode('ascii')
-                    
-                    headers = {
-                        'Authorization': f'Basic {base64_auth}',
-                        'User-Agent': 'RommBot/1.0'
-                    }
-                    
-                    logger.debug(f"Connecting to: {base_url}")
-                    
-                    await self.sio.connect(
-                        base_url,
-                        headers=headers,
-                        wait_timeout=30,
-                        transports=['websocket'],
-                        socketio_path='ws/socket.io'
-                    )
-                    
-                    logger.info("✅ Socket.IO connected successfully")
-                    return
-                    
-                except Exception as e:
-                    logger.error(f"Connection attempt {attempt + 1} failed: {e}")
-                    
-                    if attempt < max_retries - 1:
-                        wait_time = retry_delay * (2 ** attempt)
-                        logger.info(f"Retrying in {wait_time} seconds...")
-                        await asyncio.sleep(wait_time)
-                    else:
-                        logger.error("All connection attempts failed, will retry via health monitor")
-                        # Don't raise - let health monitor handle reconnection
-    
-    async def monitor_connection_health(self):
-        """Monitor connection with HTTP API health checks"""
-        await asyncio.sleep(30)  # Initial delay
-        
-        consecutive_failures = 0
-        max_failures = 3
-        
-        while True:
-            try:
-                # Check if socket thinks it's connected
-                if not self.sio.connected:
-                    logger.warning("Socket.IO disconnected, attempting reconnection...")
-                    await self.ensure_connected()
-                    consecutive_failures = 0
-                    await asyncio.sleep(30)
-                    continue
-                
-                # Verify RomM API is actually reachable
-                try:
-                    # Quick timeout - if API doesn't respond in 5s, something's wrong
-                    platforms = await asyncio.wait_for(
-                        self.bot.fetch_api_endpoint('platforms', bypass_cache=True),
-                        timeout=5.0
-                    )
-                    
-                    if platforms is not None:
-                        consecutive_failures = 0
-                        logger.debug("RomM API health check passed")
-                    else:
-                        consecutive_failures += 1
-                        logger.warning(f"RomM API returned None ({consecutive_failures}/{max_failures})")
-                        
-                except asyncio.TimeoutError:
-                    consecutive_failures += 1
-                    logger.warning(f"RomM API timeout ({consecutive_failures}/{max_failures})")
-                except Exception as e:
-                    consecutive_failures += 1
-                    logger.warning(f"RomM API error ({consecutive_failures}/{max_failures}): {e}")
-                
-                # Force reconnect if health checks keep failing
-                if consecutive_failures >= max_failures:
-                    logger.error("RomM API unreachable but socket still connected - forcing reconnection...")
-                    try:
-                        await self.sio.disconnect()
-                    except:
-                        pass
-                    await asyncio.sleep(2)
-                    await self.ensure_connected()
-                    consecutive_failures = 0
-                
-                # Check every 60 seconds (not too aggressive)
-                await asyncio.sleep(60)
-                
-            except Exception as e:
-                logger.error(f"Error in connection health monitor: {e}")
-                await asyncio.sleep(60)
     
     @tasks.loop(hours=1)
     async def cleanup_task(self):
@@ -837,7 +710,7 @@ class RecentRomsMonitor(commands.Cog):
         
         embed.add_field(
             name="Access",
-            value=" • ".join(access_links),
+            value=" ".join(access_links),
             inline=True
         )
         
@@ -1159,11 +1032,12 @@ class RecentRomsMonitor(commands.Cog):
                     inline=False
                 )
             
-            # Add view collection field with links in the value
+            # View collection field with link
             romm_url = self.bot.config.DOMAIN
+            romm_emoji = self.bot.get_formatted_emoji('romm')
             embed.add_field(
                 name="View Collection",
-                value=f"[Browse all games]({romm_url}/gallery)",
+                value=f"[{romm_emoji} Browse all games]({romm_url})",
                 inline=False
             )
         
