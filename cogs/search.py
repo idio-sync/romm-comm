@@ -1207,6 +1207,7 @@ class Search(commands.Cog):
             'Sega Saturn': ['saturn_2'],
             'Sharp X68000': ['x68000'],
             'Sinclair Zxs': ['zx_spectrum'],
+            'Super Famicom': ['sfam'],
             'Super Nintendo Entertainment System': ['snes'],
             'Switch': ['switch', 'switch_docked'],
             'Teknoparrot': ['teknoparrot'],
