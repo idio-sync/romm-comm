@@ -574,7 +574,14 @@ class RommBot(discord.Bot):
                     }
                 )
             return self.session
-
+    
+    def get_formatted_emoji(self, name: str) -> str:
+        """Get formatted emoji string for use in embeds"""
+        emoji_manager = self.get_cog('EmojiManager')
+        if emoji_manager:
+            return emoji_manager.get_emoji(name)
+        return f":{name}:"
+    
     @tasks.loop(seconds=300)  # Default to 5 minutes, will be updated in before_loop
     async def update_loop(self):
         """Periodic API data update task."""
