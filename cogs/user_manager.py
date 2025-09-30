@@ -1642,7 +1642,7 @@ class UserManager(commands.Cog):
         """Initialize database when cog is ready"""
         logger.info("UserManager Cog is ready!")
 
-    @discord.slash_command(name="user_manager", description="User management interface")
+    @discord.slash_command(name="user_manager", description="User management interface (admin only)")
     @is_admin()
     async def user_manager(self, ctx: discord.ApplicationContext):
         """Open the comprehensive user management interface"""
