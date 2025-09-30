@@ -62,12 +62,16 @@ class RecentRomsMonitor(commands.Cog):
         self.platform_cache_time: Optional[datetime] = None
         self.platform_cache_ttl = timedelta(minutes=30)
         
+        # Connection tracking
+        self.last_successful_connect = time.time()
+        self.connection_errors = 0
+        
         # Socket.IO client - runs in main event loop
         self.sio = socketio.AsyncClient(
             logger=False,
             engineio_logger=False,
             reconnection=True,
-            reconnection_attempts=0,  # Infinite reconnection attempts
+            reconnection_attempts=0,
             reconnection_delay=2,
             reconnection_delay_max=60,
             randomization_factor=0.5
@@ -92,18 +96,19 @@ class RecentRomsMonitor(commands.Cog):
         async def connect():
             """Handle connection event"""
             logger.info("✅ RecentRomsMonitor connected to websocket server")
+            self.last_successful_connect = time.time()
+            self.connection_errors = 0
             async with self.scan_lock:
                 self.current_scan_roms.clear()
                 self.current_scan_names.clear()
-            
-            # Clear recently processed on reconnect
             async with self.processing_lock:
                 self.recently_processed.clear()
-        
+
         @self.sio.event
         async def disconnect():
             """Handle disconnection event"""
-            logger.info("RecentRomsMonitor disconnected from websocket server")
+            logger.warning("RecentRomsMonitor disconnected from websocket server")
+            self.connection_errors += 1
             
             # Cancel any pending timer
             if self.scan_completion_timer and not self.scan_completion_timer.done():
@@ -112,11 +117,12 @@ class RecentRomsMonitor(commands.Cog):
                     await self.scan_completion_timer
                 except asyncio.CancelledError:
                     pass
-        
+
         @self.sio.event
         async def connect_error(data):
             """Handle connection errors"""
             logger.error(f"Socket.IO connection error: {data}")
+            self.connection_errors += 1
         
         @self.sio.on('scan:scanning_rom')
         async def on_scanning_rom(data):
@@ -317,20 +323,61 @@ class RecentRomsMonitor(commands.Cog):
                         # Don't raise - let health monitor handle reconnection
     
     async def monitor_connection_health(self):
-        """Monitor connection and reconnect if needed"""
+        """Monitor connection with HTTP API health checks"""
         await asyncio.sleep(30)  # Initial delay
+        
+        consecutive_failures = 0
+        max_failures = 3
         
         while True:
             try:
+                # Check if socket thinks it's connected
                 if not self.sio.connected:
                     logger.warning("Socket.IO disconnected, attempting reconnection...")
                     await self.ensure_connected()
+                    consecutive_failures = 0
+                    await asyncio.sleep(30)
+                    continue
                 
-                await asyncio.sleep(30)  # Check every 30 seconds
+                # Verify RomM API is actually reachable
+                try:
+                    # Quick timeout - if API doesn't respond in 5s, something's wrong
+                    platforms = await asyncio.wait_for(
+                        self.bot.fetch_api_endpoint('platforms', bypass_cache=True),
+                        timeout=5.0
+                    )
+                    
+                    if platforms is not None:
+                        consecutive_failures = 0
+                        logger.debug("RomM API health check passed")
+                    else:
+                        consecutive_failures += 1
+                        logger.warning(f"RomM API returned None ({consecutive_failures}/{max_failures})")
+                        
+                except asyncio.TimeoutError:
+                    consecutive_failures += 1
+                    logger.warning(f"RomM API timeout ({consecutive_failures}/{max_failures})")
+                except Exception as e:
+                    consecutive_failures += 1
+                    logger.warning(f"RomM API error ({consecutive_failures}/{max_failures}): {e}")
+                
+                # Force reconnect if health checks keep failing
+                if consecutive_failures >= max_failures:
+                    logger.error("RomM API unreachable but socket still connected - forcing reconnection...")
+                    try:
+                        await self.sio.disconnect()
+                    except:
+                        pass
+                    await asyncio.sleep(2)
+                    await self.ensure_connected()
+                    consecutive_failures = 0
+                
+                # Check every 60 seconds (not too aggressive)
+                await asyncio.sleep(60)
                 
             except Exception as e:
                 logger.error(f"Error in connection health monitor: {e}")
-                await asyncio.sleep(30)
+                await asyncio.sleep(60)
     
     @tasks.loop(hours=1)
     async def cleanup_task(self):
