@@ -13,6 +13,8 @@ import time
 import re
 from database_manager import MasterDatabase
 from pathlib import Path
+import socketio
+import base64 
 
 # Configure logging
 logging.basicConfig(
@@ -64,6 +66,139 @@ class RateLimit:
                 await asyncio.sleep(wait_time)
         
         self.calls.append(now)
+
+class SocketIOManager:
+    """Shared Socket.IO connection manager for all cogs"""
+    
+    def __init__(self, config):
+        self.config = config
+        self.sio = socketio.AsyncClient(
+            logger=False,
+            engineio_logger=False,
+            reconnection=True,
+            reconnection_attempts=0,
+            reconnection_delay=2,
+            reconnection_delay_max=60,
+            randomization_factor=0.5
+        )
+        self._connection_lock = asyncio.Lock()
+        self._connection_errors = 0
+        self._last_successful_connect = time.time()
+        self._health_monitor_task = None
+        
+    async def connect(self):
+        """Connect to RomM Socket.IO server"""
+        async with self._connection_lock:
+            if self.sio.connected:
+                return True
+            
+            max_retries = 5
+            retry_delay = 2
+            
+            for attempt in range(max_retries):
+                try:
+                    logger.info(f"SocketIO Manager connecting (attempt {attempt + 1}/{max_retries})...")
+                    
+                    base_url = self.config.API_BASE_URL.rstrip('/')
+                    auth_string = f"{self.config.USER}:{self.config.PASS}"
+                    auth_bytes = auth_string.encode('ascii')
+                    base64_auth = base64.b64encode(auth_bytes).decode('ascii')
+                    
+                    headers = {
+                        'Authorization': f'Basic {base64_auth}',
+                        'User-Agent': 'RommBot/1.0'
+                    }
+                    
+                    await self.sio.connect(
+                        base_url,
+                        headers=headers,
+                        wait_timeout=30,
+                        transports=['websocket'],
+                        socketio_path='ws/socket.io'
+                    )
+                    
+                    self._last_successful_connect = time.time()
+                    self._connection_errors = 0
+                    logger.info("✅ SocketIO Manager connected successfully")
+                    return True
+                    
+                except Exception as e:
+                    logger.error(f"Connection attempt {attempt + 1} failed: {e}")
+                    self._connection_errors += 1
+                    
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (2 ** attempt)
+                        await asyncio.sleep(wait_time)
+            
+            return False
+    
+    async def disconnect(self):
+        """Disconnect from server"""
+        try:
+            if self.sio.connected:
+                await self.sio.disconnect()
+        except Exception as e:
+            logger.error(f"Error disconnecting SocketIO: {e}")
+    
+    async def start_health_monitor(self, bot):
+        """Start connection health monitoring"""
+        if self._health_monitor_task and not self._health_monitor_task.done():
+            return
+        
+        self._health_monitor_task = asyncio.create_task(self._monitor_health(bot))
+    
+    async def _monitor_health(self, bot):
+        """Monitor connection health with HTTP checks"""
+        await asyncio.sleep(30)
+        
+        consecutive_failures = 0
+        max_failures = 3
+        
+        while True:
+            try:
+                if not self.sio.connected:
+                    logger.warning("SocketIO disconnected, reconnecting...")
+                    await self.connect()
+                    consecutive_failures = 0
+                    await asyncio.sleep(30)
+                    continue
+                
+                # Verify API is reachable
+                try:
+                    platforms = await asyncio.wait_for(
+                        bot.fetch_api_endpoint('platforms', bypass_cache=True),
+                        timeout=5.0
+                    )
+                    
+                    if platforms is not None:
+                        consecutive_failures = 0
+                        logger.debug("SocketIO health check passed")
+                    else:
+                        consecutive_failures += 1
+                        logger.warning(f"API check failed ({consecutive_failures}/{max_failures})")
+                        
+                except asyncio.TimeoutError:
+                    consecutive_failures += 1
+                    logger.warning(f"API timeout ({consecutive_failures}/{max_failures})")
+                except Exception as e:
+                    consecutive_failures += 1
+                    logger.warning(f"API error ({consecutive_failures}/{max_failures}): {e}")
+                
+                if consecutive_failures >= max_failures:
+                    logger.error("Forcing reconnection due to failed health checks...")
+                    try:
+                        await self.sio.disconnect()
+                    except:
+                        pass
+                    await asyncio.sleep(2)
+                    await self.connect()
+                    consecutive_failures = 0
+                
+                await asyncio.sleep(60)
+                
+            except Exception as e:
+                logger.error(f"Error in health monitor: {e}")
+                await asyncio.sleep(60)
 
 class Config:
     """Configuration manager with validation."""
@@ -152,6 +287,19 @@ class RommBot(discord.Bot):
         
         # Register error handler
         self.application_command_error = self.on_application_command_error
+        
+        # Shared scan state across cogs
+        self.scan_state = {
+            'is_scanning': False,
+            'scan_start_time': None,
+            'initiated_by': None,  # 'discord', 'romm', or None
+            'scan_type': None,
+            'channel_id': None
+        }
+        self.scan_state_lock = asyncio.Lock()
+        
+        # Shared SocketIO manager
+        self.socketio_manager = None 
 
     async def get_oauth_token(self) -> bool:
         """Get initial OAuth token using username/password."""
@@ -436,6 +584,25 @@ class RommBot(discord.Bot):
             
             logger.info("✅ Database initialization verified successfully")
             
+            # Initialize shared SocketIO manager
+            logger.info("Initializing SocketIO manager...")
+            print("About to create SocketIOManager...")
+            
+            try:
+                self.socketio_manager = SocketIOManager(self.config)
+                print(f"SocketIOManager created: {self.socketio_manager}")
+                print(f"SocketIO client: {self.socketio_manager.sio}")
+            except Exception as e:
+                print(f"FAILED to create SocketIOManager: {e}")
+                logger.error(f"Failed to create SocketIOManager: {e}", exc_info=True)
+                raise
+            
+            print("Attempting to connect...")
+            await self.socketio_manager.connect()
+            print("Connected! Starting health monitor...")
+            await self.socketio_manager.start_health_monitor(self)
+            logger.info("✅ SocketIO manager initialized")
+            
             # Initialize OAuth tokens AFTER database
             logger.info("Initializing OAuth tokens...")
             if not await self.get_oauth_token():
@@ -444,6 +611,9 @@ class RommBot(discord.Bot):
                 logger.info("✅ OAuth tokens initialized successfully")
                 
         except Exception as e:
+            print(f"=" * 50)
+            print(f"SETUP HOOK FAILED: {e}")
+            print(f"=" * 50)
             logger.error(f"❌ Setup hook failed: {e}", exc_info=True)
             # Re-raise to prevent bot from starting with broken database
             raise
@@ -534,6 +704,17 @@ class RommBot(discord.Bot):
             if self.db is None:
                 self.db = MasterDatabase()
             await self.db.initialize()
+        
+        # ADD THIS: Initialize SocketIO manager if not already done
+        if self.socketio_manager is None:
+            logger.info("Initializing SocketIO manager...")
+            try:
+                self.socketio_manager = SocketIOManager(self.config)
+                await self.socketio_manager.connect()
+                await self.socketio_manager.start_health_monitor(self)
+                logger.info("✅ SocketIO manager initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize SocketIO manager: {e}", exc_info=True)
         
         # Load cogs only after database is confirmed ready
         self.load_all_cogs()
