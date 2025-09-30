@@ -293,7 +293,7 @@ class RequestAdminView(discord.ui.View):
             
             embed.add_field(
                 name="Links",
-                value=f"[{igdb_emoji} IGDB]({igdb_url})",
+                value=f"[**{igdb_emoji} IGDB**]({igdb_url})",
                 inline=True
             )
         
@@ -989,7 +989,7 @@ class UserRequestsView(discord.ui.View):
             
             embed.add_field(
                 name="Links",
-                value=f"[{igdb_emoji} IGDB]({igdb_url})",
+                value=f"[**{igdb_emoji} IGDB**]({igdb_url})",
                 inline=True
             )
         
@@ -1498,7 +1498,7 @@ class GameSelectView(discord.ui.View):
             
             embed.add_field(
                 name="Links",
-                value=f"[{igdb_emoji} IGDB]({igdb_url})",
+                value=f"[**{igdb_emoji} IGDB**]({igdb_url})",
                 inline=True
             )
         
