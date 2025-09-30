@@ -821,7 +821,7 @@ class RecentRomsMonitor(commands.Cog):
         
         return embed, cover_file
     
-    def calculate_grid_dimensions(self, num_images: int) -> tuple[int, int, int, int]:
+    def calculate_grid_dimensions(self, num_images: int) -> Tuple[int, int, int, int]:
         """
         Calculate optimal grid dimensions and thumbnail size based on number of images.
         Returns: (cols, rows, thumb_width, thumb_height)
