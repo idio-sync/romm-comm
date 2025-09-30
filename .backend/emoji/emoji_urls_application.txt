@@ -25,7 +25,7 @@ dos|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backe
 ds|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/ds.png
 dsi|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/dsi.png
 dreamcast|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/dreamcast.png
-famicom|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/famocom.png
+famicom|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/famicom.png
 fds|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/fds.png
 fm_towns|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/fm_towns.png
 game_and_watch|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/game_and_watch.png
