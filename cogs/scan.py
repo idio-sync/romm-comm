@@ -383,7 +383,6 @@ class Scan(commands.Cog):
             "full": "Perform a full system scan",
             "stop": "Stop the current scan",
             "status": "Check current scan status",
-            "detect": "Detect and show scan status",
             "unidentified": "Scan unidentified ROMs",
             "hashes": "Update ROM hashes",
             "new": "Scan new platforms only",
@@ -399,7 +398,6 @@ class Scan(commands.Cog):
 
     async def platform_name_autocomplete(self, ctx: discord.AutocompleteContext):
         """Autocomplete for platform names"""
-        # Remove the conditional check - just always show platforms
         search_cog = self.bot.get_cog('Search')
         if not search_cog:
             return []
@@ -408,7 +406,7 @@ class Scan(commands.Cog):
 
     @commands.slash_command(
         name="scan",
-        description="Scan ROMs and fetch metadata"
+        description="Scan ROMs and fetch metadata (admin only)"
     )
     @is_admin()
     async def scan(
