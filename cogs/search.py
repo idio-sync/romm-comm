@@ -33,6 +33,7 @@ class ROM_View(discord.ui.View):
         self.platform_name = platform_name
         self.message = initial_message
         self._selected_rom = None
+        self.emoji_dict = {}
 
         # Create ROM select menu only
         self.select = discord.ui.Select(
@@ -277,15 +278,15 @@ class ROM_View(discord.ui.View):
 
             # Top row links
             top_row_links = [
-                f"[{romm_emoji} RomM]({romm_url})",
-                f"[{igdb_emoji} IGDB]({igdb_url})"
+                f"[**{romm_emoji} RomM**]({romm_url})",
+                f"[**{igdb_emoji} IGDB**]({igdb_url})"
             ]
 
             # Add YouTube to top row if available
             if youtube_video_id := rom_data.get('youtube_video_id'):
                 youtube_emoji = self.bot.get_formatted_emoji('youtube')
                 youtube_url = f"https://www.youtube.com/watch?v={youtube_video_id}"
-                top_row_links.append(f"[{youtube_emoji} Trailer]({youtube_url})")
+                top_row_links.append(f"[**{youtube_emoji} Trailer**]({youtube_url})")
 
             # Build the final links value
             links_value = " ".join(top_row_links)
@@ -293,7 +294,7 @@ class ROM_View(discord.ui.View):
             # Add achievements on second row if available
             if ra_id := rom_data.get('ra_id'):
                 ra_url = f"https://retroachievements.org/game/{ra_id}"
-                links_value += f"\n[{ra_emoji} Achievements]({ra_url})"
+                links_value += f"\n[**{ra_emoji} Achievements**]({ra_url})"
 
             # Add the field to embed
             embed.add_field(name="Links", value=links_value, inline=True)
@@ -1302,7 +1303,7 @@ class Search(commands.Cog):
                 return f"{platform_name} {server_emojis_by_name[variant]}"
             
             # Priority 2: Check for a global application emoji.
-            # This hasattr check also helps with any startup race conditions.
+            # Add safe checking here
             if hasattr(self.bot, 'emoji_dict') and variant in self.bot.emoji_dict:
                 return f"{platform_name} {self.bot.emoji_dict[variant]}"
 
