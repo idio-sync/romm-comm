@@ -1,6 +1,10 @@
 # RomM-ComM (RomM Communicator Module)
 
+<img align="left" src=".github/logo_small.png">
+
 A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) API to provide information about your ROM collection, handle user ROM requsts, and control RomM from Discord.
+
+---
 
 <p align="center">
   <img src=".github/Demo.gif" width="60%">
@@ -273,5 +277,6 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
