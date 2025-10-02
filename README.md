@@ -77,7 +77,7 @@ A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) A
 2. Install dependencies:
 
 ```bash
-pip install py-cord aiohttp python-dotenv qrcode Pillow python-socketio requests aiosqlite
+pip install py-cord aiohttp python-dotenv qrcode Pillow python-socketio requests aiosqlite python-dateutil
 ```
 
 ---
@@ -302,6 +302,7 @@ GGREQUESTZ_PASSWORD=your_password
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
