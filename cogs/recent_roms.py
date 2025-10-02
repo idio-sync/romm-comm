@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands, tasks
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import socketio
 from typing import Dict, List, Optional, Set, Union, Tuple
 import json
@@ -20,6 +20,13 @@ import time
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+def is_admin():
+    """Check if the user is the admin"""
+    async def predicate(ctx: discord.ApplicationContext):
+        # This check relies on the is_admin method in your main bot class
+        return ctx.bot.is_admin(ctx.author)
+    return commands.check(predicate)
 
 class RecentRomsMonitor(commands.Cog):
     """Monitor ROMs via WebSocket connection to RomM scan events"""
@@ -112,6 +119,13 @@ class RecentRomsMonitor(commands.Cog):
         async def on_scanning_rom(data):
             """Handle new ROM being scanned"""
             try:
+                # Capture scan start time on first ROM
+                async with self.bot.scan_state_lock:
+                    if self.bot.scan_state['is_scanning'] and not self.bot.scan_state.get('notification_cutoff_time'):
+                        # Store cutoff with 10-second buffer to handle clock skew
+                        self.bot.scan_state['notification_cutoff_time'] = datetime.utcnow() - timedelta(seconds=10)
+                        logger.info(f"Set notification cutoff time: {self.bot.scan_state['notification_cutoff_time']}")
+                
                 # API sends 'id' and 'name', not 'rom_id' and 'rom_name'
                 rom_id = data.get('id') or data.get('rom_id')
                 rom_name = data.get('name') or data.get('rom_name', 'Unknown')
@@ -203,9 +217,15 @@ class RecentRomsMonitor(commands.Cog):
                         self.current_scan_names.clear()
                         
                         logger.info(f"Scan complete, processing {len(roms_to_process)} ROMs")
+                        # DON'T await here - let it run independently
                         asyncio.create_task(self.handle_scan_complete(roms_to_process, stats))
                     else:
                         logger.info("Scan complete with no identified ROMs to process")
+                        # Clear cutoff time only if no ROMs to process
+                        async with self.bot.scan_state_lock:
+                            if 'notification_cutoff_time' in self.bot.scan_state:
+                                del self.bot.scan_state['notification_cutoff_time']
+                                logger.debug("Cleared notification cutoff time (no ROMs)")
                         
             except Exception as e:
                 logger.error(f"Error handling scan:done event: {e}", exc_info=True)
@@ -233,6 +253,9 @@ class RecentRomsMonitor(commands.Cog):
     async def setup(self):
         """Initialize IGDB client and connect to websocket"""
         try:
+            # Run database migration
+            await self.migrate_add_message_id()
+            
             # Initialize IGDB
             await self.initialize_igdb()
             
@@ -286,7 +309,7 @@ class RecentRomsMonitor(commands.Cog):
             roms = list(unique_roms.values())
             
             logger.info(f"Processing scan batch of {len(roms)} unique ROMs")
-            
+                        
             # Batch database check
             rom_ids = [rom['id'] for rom in roms]
             posted_ids = await self.get_posted_rom_ids(rom_ids)
@@ -310,6 +333,12 @@ class RecentRomsMonitor(commands.Cog):
             logger.info("Triggering API data refresh after scan completion")
             await self.bot.update_api_data()
             
+            # Clear cutoff time AFTER all processing is complete
+            async with self.bot.scan_state_lock:
+                if 'notification_cutoff_time' in self.bot.scan_state:
+                    del self.bot.scan_state['notification_cutoff_time']
+                    logger.debug("Cleared notification cutoff time after processing")
+            
         except Exception as e:
             logger.error(f"Error during batch processing: {e}", exc_info=True)
             
@@ -319,6 +348,12 @@ class RecentRomsMonitor(commands.Cog):
                     rom_id = rom['id']
                     if rom_id in self.currently_processing:
                         self.currently_processing.remove(rom_id)
+            
+            # Clear cutoff time even on error
+            async with self.bot.scan_state_lock:
+                if 'notification_cutoff_time' in self.bot.scan_state:
+                    del self.bot.scan_state['notification_cutoff_time']
+                    logger.debug("Cleared notification cutoff time after error")
     
     async def get_posted_rom_ids(self, rom_ids: List[int]) -> Set[int]:
         """Batch check if ROMs have been posted"""
@@ -392,6 +427,36 @@ class RecentRomsMonitor(commands.Cog):
         except Exception as e:
             logger.error(f"Error enriching ROMs with platform names: {e}")
     
+    async def fetch_rom_details_batch(self, rom_ids: List[int], batch_size: int = 30) -> List[Dict]:
+        """Fetch detailed ROM data in parallel batches"""
+        all_details = []
+        
+        for i in range(0, len(rom_ids), batch_size):
+            batch = rom_ids[i:i + batch_size]
+            
+            # Fetch this batch in parallel
+            tasks = [
+                self.bot.fetch_api_endpoint(f'roms/{rom_id}', bypass_cache=True)
+                for rom_id in batch
+            ]
+            
+            try:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Filter out exceptions and None results
+                for rom_id, result in zip(batch, results):
+                    if isinstance(result, Exception):
+                        logger.warning(f"Error fetching ROM {rom_id}: {result}")
+                    elif result:
+                        all_details.append(result)
+                    else:
+                        logger.warning(f"No data returned for ROM {rom_id}")
+                        
+            except Exception as e:
+                logger.error(f"Error in batch fetch: {e}")
+        
+        return all_details
+    
     async def process_scan_batch(self, roms: List[Dict]):
         """Process and post the ROMs from a completed scan"""
         if not roms:
@@ -404,64 +469,127 @@ class RecentRomsMonitor(commands.Cog):
         
         try:
             batch_id = datetime.utcnow().isoformat()
-            is_flood = len(roms) >= self.bulk_display_threshold
+            
+            # Get cutoff time from scan state
+            cutoff_time = None
+            async with self.bot.scan_state_lock:
+                cutoff_time = self.bot.scan_state.get('notification_cutoff_time')
+            
+            if not cutoff_time:
+                logger.warning("No cutoff time found, will notify about all ROMs")
+            
+            # Fetch detailed ROM data in parallel batches
+            rom_ids = [rom['id'] for rom in roms]
+            fetch_start = time.time()
+            detailed_roms = await self.fetch_rom_details_batch(rom_ids, batch_size=30)
+            fetch_duration = time.time() - fetch_start
+            
+            logger.info(f"Fetched details for {len(detailed_roms)}/{len(rom_ids)} ROMs in {fetch_duration:.2f}s")
+            
+            if not detailed_roms:
+                logger.warning("Could not fetch details for any ROMs")
+                return
+            
+            # Filter ROMs by created_at timestamp
+            new_roms = []
+            filtered_count = 0
+            parse_errors = 0
+            
+            for rom in detailed_roms:
+                created_at_str = rom.get('created_at')
+                
+                if not created_at_str:
+                    logger.warning(f"ROM {rom.get('id')} has no created_at timestamp, including it")
+                    new_roms.append(rom)
+                    continue
+                
+                try:
+                    # Parse ISO format datetime
+                    from dateutil.parser import parse
+                    created_at = parse(created_at_str)
+                    
+                    # Ensure timezone-aware (convert to UTC if needed)
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=timezone.utc)
+                    else:
+                        created_at = created_at.astimezone(timezone.utc)
+                    
+                    # Remove timezone info for comparison (both should be UTC now)
+                    created_at = created_at.replace(tzinfo=None)
+                    
+                    # Filter: only include ROMs created during or after the scan
+                    if cutoff_time and created_at < cutoff_time:
+                        logger.debug(f"Filtering out ROM {rom.get('name')} (created {created_at} < cutoff {cutoff_time})")
+                        filtered_count += 1
+                    else:
+                        new_roms.append(rom)
+                        
+                except Exception as e:
+                    logger.warning(f"Error parsing created_at for ROM {rom.get('id')}: {e}, including it")
+                    new_roms.append(rom)
+                    parse_errors += 1
+            
+            if filtered_count > 0:
+                logger.info(f"Filtered out {filtered_count} pre-existing ROMs, {len(new_roms)} are genuinely new")
+            if parse_errors > 0:
+                logger.warning(f"Had {parse_errors} timestamp parsing errors")
+            
+            if not new_roms:
+                logger.info("No new ROMs to post after filtering")
+                return
             
             # Enrich ROM data with platform names
-            await self.enrich_roms_with_platform_names(roms)
+            await self.enrich_roms_with_platform_names(new_roms)
             
-            # Mark as posted BEFORE sending to prevent duplicate notifications
-            # This prevents race conditions from duplicate socket events or multiple ROM versions
-            await self.mark_as_posted(roms, batch_id)
+            # Mark as posted BEFORE sending
+            await self.mark_as_posted(new_roms, batch_id)
             
-            # Send to Discord based on batch size
+            # Rest of existing posting logic...
+            is_flood = len(new_roms) >= self.bulk_display_threshold
             discord_success = False
+            message_id = None
             
-            if len(roms) == 1:
-                # Single ROM - detailed embed
-                rom = roms[0]
+            if len(new_roms) == 1:
+                rom = new_roms[0]
                 embed, cover_file = await self.create_single_rom_embed(rom)
                 
                 try:
                     if cover_file:
-                        await channel.send(embed=embed, file=cover_file)
+                        message = await channel.send(embed=embed, file=cover_file)
                     else:
-                        await channel.send(embed=embed)
+                        message = await channel.send(embed=embed)
+                    message_id = message.id
                     discord_success = True
                 except Exception as e:
                     logger.error(f"Failed to send single ROM to Discord: {e}")
-                    # Rollback: remove from posted_roms since notification failed
                     await self.unmark_as_posted([rom['id']])
                 finally:
-                    # Clean up file object
                     if cover_file and hasattr(cover_file, 'fp'):
                         cover_file.fp.close()
-                    
             else:
-                # Multiple ROMs - batch embed
-                embed, composite_cover_file = await self.create_batch_embed(roms)
+                embed, composite_cover_file = await self.create_batch_embed(new_roms)
                 
                 try:
                     if composite_cover_file:
-                        await channel.send(embed=embed, file=composite_cover_file)
+                        message = await channel.send(embed=embed, file=composite_cover_file)
                     else:
-                        await channel.send(embed=embed)
+                        message = await channel.send(embed=embed)
+                    message_id = message.id
                     discord_success = True
                 except Exception as e:
                     logger.error(f"Failed to send batch to Discord: {e}")
-                    # Rollback: remove from posted_roms since notification failed
-                    await self.unmark_as_posted([rom['id'] for rom in roms])
+                    await self.unmark_as_posted([rom['id'] for rom in new_roms])
                 finally:
-                    # Clean up file object
                     if composite_cover_file and hasattr(composite_cover_file, 'fp'):
                         composite_cover_file.fp.close()
             
-            if discord_success:
-                logger.info(f"Posted {len(roms)} new ROM(s) from scan")
+            if discord_success and message_id:
+                await self.update_message_ids(new_roms, message_id, batch_id)
+                logger.info(f"Posted {len(new_roms)} new ROM(s) from scan (message_id: {message_id})")
                 
                 # Dispatch to request system
                 requests_cog = self.bot.get_cog('Request')
                 if requests_cog:
-                    logger.debug(f"Dispatching batch_scan_complete event with {len(roms)} ROMs")
                     self.bot.dispatch('batch_scan_complete', [
                         {
                             'id': rom['id'],
@@ -470,18 +598,11 @@ class RecentRomsMonitor(commands.Cog):
                             'fs_name': rom.get('fs_name', ''),
                             'file_name': rom.get('file_name', '')
                         }
-                        for rom in roms
+                        for rom in new_roms
                     ])
-            else:
-                logger.error("Failed to post to Discord, ROMs unmarked for retry")
-        
+            
         except Exception as e:
             logger.error(f"Error processing scan batch: {e}", exc_info=True)
-            # On unexpected error, try to rollback
-            try:
-                await self.unmark_as_posted([rom['id'] for rom in roms])
-            except Exception as rollback_error:
-                logger.error(f"Failed to rollback posted status: {rollback_error}")
     
     async def mark_as_posted(self, roms: List[Dict], batch_id: str = None):
         """Mark ROMs as posted to prevent duplicates"""
@@ -553,6 +674,60 @@ class RecentRomsMonitor(commands.Cog):
     async def download_cover_image(self, rom: Dict) -> Optional[discord.File]:
         """Legacy method for compatibility"""
         return await self.download_cover_image_with_retry(rom)
+    
+    async def update_message_ids(self, roms: List[Dict], message_id: int, batch_id: str):
+        """Update posted ROMs with their Discord message ID"""
+        try:
+            async with self.db.get_connection() as conn:
+                await conn.executemany(
+                    "UPDATE posted_roms SET message_id = ? WHERE rom_id = ? AND batch_id = ?",
+                    [(message_id, rom['id'], batch_id) for rom in roms]
+                )
+                await conn.commit()
+                logger.debug(f"Updated {len(roms)} ROM(s) with message_id {message_id}")
+        except Exception as e:
+            logger.error(f"Error updating message IDs: {e}")
+
+    async def get_recent_notifications(self, limit: int = 10, days: int = 7) -> List[Dict]:
+        """Get recent ROM notifications with message IDs"""
+        try:
+            async with self.db.get_connection() as conn:
+                cursor = await conn.execute(
+                    """
+                    SELECT DISTINCT message_id, batch_id, posted_at
+                    FROM posted_roms 
+                    WHERE message_id IS NOT NULL 
+                    AND posted_at > datetime('now', '-' || ? || ' days')
+                    ORDER BY posted_at DESC 
+                    LIMIT ?
+                    """,
+                    (days, limit)
+                )
+                results = await cursor.fetchall()
+                
+                notifications = []
+                for row in results:
+                    message_id, batch_id, posted_at = row
+                    
+                    # Get all ROMs in this batch
+                    rom_cursor = await conn.execute(
+                        "SELECT rom_id, rom_name, platform_name FROM posted_roms WHERE batch_id = ?",
+                        (batch_id,)
+                    )
+                    roms = await rom_cursor.fetchall()
+                    
+                    notifications.append({
+                        'message_id': message_id,
+                        'batch_id': batch_id,
+                        'posted_at': posted_at,
+                        'roms': [{'id': r[0], 'name': r[1], 'platform': r[2]} for r in roms]
+                    })
+                
+                return notifications
+                
+        except Exception as e:
+            logger.error(f"Error fetching recent notifications: {e}")
+            return []
     
     async def initialize_igdb(self):
         """Initialize IGDB client if available"""
@@ -1044,6 +1219,155 @@ class RecentRomsMonitor(commands.Cog):
         embed.set_footer(text=f"Batch update • {len(roms)} new games • Use /search to download")
         
         return embed, composite_file
+    
+    @discord.slash_command(
+        name="refresh_recent_metadata",
+        description="Refresh posted recent ROM notifications with latest metadata (admin only)."
+    )
+    @discord.option(
+        "count",
+        description="Number of recent notifications to refresh (default: 1)",
+        required=False,
+        min_value=1,
+        max_value=20,
+        default=1
+    )
+    @is_admin()
+    async def refresh_recent(self, ctx: discord.ApplicationContext, count: int = 5):
+        """Refresh recent ROM notifications with updated metadata"""
+        if not self.enabled:
+            await ctx.respond("Recent ROMs monitoring is disabled.", ephemeral=True)
+            return
+        
+        await ctx.defer(ephemeral=True)
+        
+        try:
+            # Get recent notifications
+            notifications = await self.get_recent_notifications(limit=count, days=7)
+            
+            if not notifications:
+                await ctx.followup.send("No recent notifications found to refresh.", ephemeral=True)
+                return
+            
+            channel = self.bot.get_channel(self.recent_roms_channel_id)
+            if not channel:
+                await ctx.followup.send("Recent ROMs channel not found.", ephemeral=True)
+                return
+            
+            refreshed = 0
+            failed = 0
+            skipped = 0
+            
+            for notification in notifications:
+                try:
+                    message_id = notification['message_id']
+                    rom_data = notification['roms']
+                    
+                    # Try to fetch the message
+                    try:
+                        message = await channel.fetch_message(message_id)
+                    except discord.NotFound:
+                        logger.warning(f"Message {message_id} not found (deleted?)")
+                        skipped += 1
+                        continue
+                    except discord.Forbidden:
+                        logger.error(f"No permission to access message {message_id}")
+                        skipped += 1
+                        continue
+                    
+                    # Re-fetch ROM data from API
+                    rom_ids = [rom['id'] for rom in rom_data]
+                    updated_roms = []
+                    
+                    for rom_id in rom_ids:
+                        try:
+                            rom_details = await self.bot.fetch_api_endpoint(f'roms/{rom_id}', bypass_cache=True)
+                            if rom_details:
+                                updated_roms.append(rom_details)
+                        except Exception as e:
+                            logger.warning(f"Could not fetch ROM {rom_id}: {e}")
+                    
+                    if not updated_roms:
+                        skipped += 1
+                        continue
+                    
+                    # Enrich with platform names
+                    await self.enrich_roms_with_platform_names(updated_roms)
+                    
+                    # Recreate embed(s)
+                    if len(updated_roms) == 1:
+                        # Single ROM
+                        embed, cover_file = await self.create_single_rom_embed(updated_roms[0])
+                        
+                        try:
+                            if cover_file:
+                                # Can't replace attachments, so send new message and delete old
+                                new_message = await channel.send(embed=embed, file=cover_file)
+                                await message.delete()
+                                # Update message ID in database
+                                await self.update_message_ids(updated_roms, new_message.id, notification['batch_id'])
+                            else:
+                                # Just update embed
+                                await message.edit(embed=embed)
+                            refreshed += 1
+                        finally:
+                            if cover_file and hasattr(cover_file, 'fp'):
+                                cover_file.fp.close()
+                    else:
+                        # Batch
+                        embed, composite_file = await self.create_batch_embed(updated_roms)
+                        
+                        try:
+                            if composite_file:
+                                # Can't replace attachments, so send new message and delete old
+                                new_message = await channel.send(embed=embed, file=composite_file)
+                                await message.delete()
+                                # Update message ID in database
+                                await self.update_message_ids(updated_roms, new_message.id, notification['batch_id'])
+                            else:
+                                # Just update embed
+                                await message.edit(embed=embed)
+                            refreshed += 1
+                        finally:
+                            if composite_file and hasattr(composite_file, 'fp'):
+                                composite_file.fp.close()
+                    
+                except Exception as e:
+                    logger.error(f"Error refreshing notification: {e}")
+                    failed += 1
+            
+            # Summary
+            summary_parts = []
+            if refreshed > 0:
+                summary_parts.append(f"Refreshed {refreshed} notification(s)")
+            if skipped > 0:
+                summary_parts.append(f"Skipped {skipped} (deleted/inaccessible)")
+            if failed > 0:
+                summary_parts.append(f"Failed {failed}")
+            
+            summary = " | ".join(summary_parts) if summary_parts else "No notifications refreshed"
+            await ctx.followup.send(summary, ephemeral=True)
+            
+        except Exception as e:
+            logger.error(f"Error in refresh_recent command: {e}", exc_info=True)
+            await ctx.followup.send(f"Error refreshing notifications: {str(e)}", ephemeral=True)
+    
+    async def migrate_add_message_id(self):
+        """Add message_id column to posted_roms table if it doesn't exist"""
+        try:
+            async with self.db.get_connection() as conn:
+                # Check if column exists
+                cursor = await conn.execute("PRAGMA table_info(posted_roms)")
+                columns = await cursor.fetchall()
+                column_names = [col[1] for col in columns]
+                
+                if 'message_id' not in column_names:
+                    await conn.execute("ALTER TABLE posted_roms ADD COLUMN message_id INTEGER")
+                    await conn.commit()
+                    logger.info("Added message_id column to posted_roms table")
+        except Exception as e:
+            logger.error(f"Error migrating database: {e}")
+    
     
     def cog_unload(self):
         """Cleanup when cog is unloaded"""
