@@ -38,7 +38,7 @@ A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) A
 ### Current
 
 - **Recently Added**: Posts recently added ROM updates to a configured channel (batched when multiple ROMs are added).
-- **Request system**: Submit and manage ROM requests entirely from Discord. Requests are enriched with IGDB metadata when available.
+- **Request system**: Submit and manage ROM requests entirely from Discord. Requests are enriched with IGDB metadata when available. Optional [GGRequestz](https://github.com/XTREEMMAK/ggrequestz) integration. 
 - **Search**: Platform-specific searches and a random ROM roll. Results include metadata and download links.
 - **Stats**: Near real-time collection statistics shown in voice channel names, the bot "Now Playing" status, and via commands.
 - **Multi-file support**: Searches support multi-file games; users can select one, several, or all files to download.
@@ -131,6 +131,11 @@ RECENT_ROMS_ENABLED=true
 RECENT_ROMS_CHANNEL_ID=your_channel_id
 RECENT_ROMS_MAX_PER_POST=10
 RECENT_ROMS_BULK_THRESHOLD=25
+GGREQUESTZ_ENABLED=false
+GGREQUESTZ_URL=http://ip:port
+GGREQUESTZ_USERNAME=your_username
+GGREQUESTZ_PASSWORD=your_password
+
 ```
 
 ### Configuration details
@@ -151,6 +156,22 @@ RECENT_ROMS_BULK_THRESHOLD=25
 - `AUTO_REGISTER_ROLE_ID` — Role that triggers automatic RomM invite link DMs to users.
 - `CHANNEL_ID` — Channel for sync results and user manager logs.
 - `RECENT_ROMS_*` — Controls for recent-ROM posting (enabled, channel id, thresholds).
+- `GGREQUESTZ_ENABLED` — Enable GGrrequestz for request managmenet (default: false).
+- `GGREQUESTZ_URL` — Base URL for your GGRequestz instance (use `http://ip:port` or a domain).
+- `GGREQUESTZ_USERNAME` / `GGREQUESTZ_PASSWORD`  — Your GGRequestz credentials.
+
+---
+
+## Available Commands
+
+- `/search [platform] [game]` — Search ROMs with interactive results and optional QR code for console installs. 
+- `/request`, `/my_requests`, `/request_admin` — Submit, view, and manage requests.
+- `/random [platform]` — Fetch a random ROM (platform optional).
+- `/firmware [platform]` — List firmware files with hash details and download links.
+- `/scan [option]` — Run or check scans (admin only): `full`, `platform`, `stop`, `status`, `unidentified`, `hashes`, `new_platforms`, `partial`, `summary`.
+- `/platforms` — Display all available platforms with their ROM counts.
+- `/user_manager` — Manage Romm and Discord users (linking, new account prompting, etc.) (admin only).
+- `/refresh_recent_metadata` — Refresh recently added game notifiction metadata/covers (admin only).
 
 ---
 
@@ -159,8 +180,8 @@ RECENT_ROMS_BULK_THRESHOLD=25
 
 - When enabled (`RECENT_ROMS_ENABLED=true`) the bot posts newly added games to the configured channel.
 - If multiple games added from a scan, the notification shows a list of games grouped into a single response sorted by platform.
-
-**Note:** Game IDs are stored after scanning, if a game ID is not stored, it will trigger a notification. This means full rescans of platforms scanned in before the bot was present will trigger the notification.
+- `/refresh_recent_metadata [count: n]` where n is the number of messages you want to go back and refresh, from the most recent. Default is 1, which is the most recently posted notification.
+- If only text is changed, the notification is edited. If covers change, the original message is deleted and a new message is posted with the new cover. This due to a Discord file attachment limitation.
 
 ---
 
@@ -197,18 +218,6 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 
 ---
 
-## Available Commands
-
-- `/search [platform] [game]` — Search ROMs with interactive results and optional QR code for console installs. 
-- `/request`, `/my_requests`, `/request_admin` — Submit, view, and manage requests.
-- `/random [platform]` — Fetch a random ROM (platform optional).
-- `/firmware [platform]` — List firmware files with hash details and download links.
-- `/scan [option]` — Run or check scans (admin only): `full`, `platform`, `stop`, `status`, `unidentified`, `hashes`, `new_platforms`, `partial`, `summary`.
-- `/platforms` — Display all available platforms with their ROM counts.
-- `/user_manager` — Manage Romm and Discord users (linking, new account prompting, etc.) (admin only).
-
----
-
 ## Requests
 
 <img align="right" width="300" height="450" src=".github/screenshots/RequestManager.png">
@@ -227,6 +236,22 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 - View, filter, and manage pending requests.
 - Manually mark as fulfilled, reject or add notes.
 - Requester's Discord avatar is present in the request embed as the thumbnail.
+
+**GGRequestz Integration**
+- If enabled, requests get sent to [GGRequestz](https://github.com/XTREEMMAK/ggrequestz) for management.
+- Requests that are detected during a scan are automatically marked as fulfilled in GGRequestz and users are notified in Discord.
+- Manual fulfillments and rejections made in Discord are synced to GGRequestz, users are notified in Discord.
+- Requests fulfilled or rejected in GGRequestz are synced to Discord when an admin runs /request_admin or a user runs /my_requests, request status is always accurate when checked. 
+- Requests in GGRequestz are only synced back to Discord if they originated from a Discord user. 
+- Requests in GGRequestz from Discord are "Requested By" the GGRequestz user that you login as in the bot env variables, Discord user is listed in request details. 
+
+Add the below variables to your .env to enable:
+```
+GGREQUESTZ_ENABLED=true
+GGREQUESTZ_URL=http://ip:port
+GGREQUESTZ_USERNAME=your_username
+GGREQUESTZ_PASSWORD=your_password
+```
 
 ---
 
@@ -277,6 +302,7 @@ The bot updates its "Now Playing" / status with the total ROM count whenever it 
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
