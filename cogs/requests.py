@@ -384,6 +384,31 @@ class RequestAdminView(discord.ui.View):
                 
                 logger.info(f"Request fulfilled manually - Admin: {interaction.user} | Request ID: #{request_id} | Discord: {current_request[2]} (ID: {current_request[1]}) | Game: '{current_request[4]}' | Platform: {current_request[3]}")
                 
+                # Sync to ggrequestz if enabled
+                ggr = self.bot.get_cog('GGRequestzIntegration')
+                if ggr and ggr.enabled:
+                    # Get the ggr_request_id for this Discord request
+                    cursor = await db.execute(
+                        "SELECT ggr_request_id FROM requests WHERE id = ?",
+                        (request_id,)
+                    )
+                    result = await cursor.fetchone()
+                    
+                    if result and result[0]:
+                        ggr_request_id = result[0]
+                        # Update status in ggrequestz
+                        sync_result = await ggr.update_request_status(
+                            ggr_request_id=ggr_request_id,
+                            status='fulfilled',
+                            admin_name=str(interaction.user),
+                            notes=f"Manually fulfilled by {interaction.user}"
+                        )
+                        
+                        if sync_result.get('success'):
+                            logger.info(f"✅ Synced manual fulfillment to ggrequestz for request #{request_id} (GGR ID: {ggr_request_id})")
+                        else:
+                            logger.error(f"❌ Failed to sync manual fulfillment to ggrequestz: {sync_result.get('error')}")
+                
                 # Get all subscribers for this request
                 cursor = await db.execute(
                     "SELECT user_id FROM request_subscribers WHERE request_id = ?",
@@ -479,6 +504,29 @@ class RequestAdminView(discord.ui.View):
                         await db.commit()
                         
                         logger.info(f"Request rejected - Admin: {modal_interaction.user} | Request ID: #{request_id} | Discord: {self.request_data[2]} (ID: {self.request_data[1]}) | Game: '{self.request_data[4]}' | Platform: {self.request_data[3]} | Reason: {reason or 'No reason provided'}")
+                        
+                        # Sync to ggrequestz if enabled
+                        ggr = self.view.bot.get_cog('GGRequestzIntegration')
+                        if ggr and ggr.enabled:
+                            cursor = await db.execute(
+                                "SELECT ggr_request_id FROM requests WHERE id = ?",
+                                (request_id,)
+                            )
+                            result = await cursor.fetchone()
+                            
+                            if result and result[0]:
+                                ggr_request_id = result[0]
+                                sync_result = await ggr.update_request_status(
+                                    ggr_request_id=ggr_request_id,
+                                    status='rejected',
+                                    admin_name=str(interaction.user),
+                                    notes=f"Rejected by {interaction.user}"
+                                )
+                                
+                                if sync_result.get('success'):
+                                    logger.info(f"✅ Synced rejection to ggrequestz for request #{request_id} (GGR ID: {ggr_request_id})")
+                                else:
+                                    logger.error(f"❌ Failed to sync rejection to ggrequestz: {sync_result.get('error')}")
                         
                         # Notify user
                         try:
@@ -2010,6 +2058,7 @@ class Request(commands.Cog):
         self.db = bot.db
         
         self.requests_enabled = bot.config.REQUESTS_ENABLED
+        self.ggr = None
         bot.loop.create_task(self.setup())
         self.processing_lock = asyncio.Lock()
 
@@ -2038,6 +2087,13 @@ class Request(commands.Cog):
                 await self.sync_romm_platforms()
             except Exception as sync_error:
                 logger.error(f"Failed to sync platforms: {sync_error}")
+        
+        # Get GGRequestz integration
+        self.ggr = self.bot.get_cog('GGRequestzIntegration')
+        if self.ggr and self.ggr.enabled:
+            logger.info("✅ Request cog using GGRequestz integration")
+        else:
+            logger.info("📁 Request cog using local database only")
             
     async def _get_canonical_platform_name(self, platform_name: str) -> Optional[str]:
         """Looks up the canonical display_name for a given platform alias."""
@@ -2251,7 +2307,10 @@ class Request(commands.Cog):
                 all_subscribers = defaultdict(list)
                 
                 async with self.db.get_connection() as db:
-                    cursor = await db.execute("SELECT * FROM requests WHERE status = 'pending'")
+                    cursor = await db.execute("""
+                        SELECT id, user_id, platform, game_name, igdb_id, igdb_game_name 
+                        FROM requests WHERE status = 'pending'
+                    """)
                     pending_requests = await cursor.fetchall()
                     
                     if not pending_requests:
@@ -2270,8 +2329,8 @@ class Request(commands.Cog):
                 notifications = defaultdict(list)
                 
                 for req in pending_requests:
-                    # Unpack the full request tuple
-                    req_id, user_id, _, req_platform, req_game, _, _, _, _, _, _, _, _, req_igdb_id, _, req_igdb_game_name = req
+                    # Simplify the unpacking to match the new, explicit query
+                    req_id, user_id, req_platform, req_game, req_igdb_id, req_igdb_game_name = req
 
                     for new_game in new_games:
                         new_game_igdb_id = new_game.get('igdb_id')
@@ -2305,6 +2364,34 @@ class Request(commands.Cog):
                             [(f"Automatically fulfilled - Found: {f['game_name']}", f['req_id']) for f in fulfillments]
                         )
                         await db.commit()
+                
+                # Sync status to ggrequestz
+                if self.ggr and self.ggr.enabled:
+                    for fulfillment in fulfillments:
+                        req_id = fulfillment['req_id']
+                        
+                        # Get the ggr_request_id for this Discord request
+                        async with self.db.get_connection() as db:
+                            cursor = await db.execute(
+                                "SELECT ggr_request_id FROM requests WHERE id = ?",
+                                (req_id,)
+                            )
+                            result = await cursor.fetchone()
+                            
+                            if result and result[0]:
+                                ggr_request_id = result[0]
+                                # Update status in ggrequestz
+                                result = await self.ggr.update_request_status(
+                                    ggr_request_id=ggr_request_id,
+                                    status='fulfilled',
+                                    admin_name='Auto-Fulfillment Bot',
+                                    notes=f"Automatically fulfilled - Found: {fulfillment['game_name']}"
+                                )
+                                
+                                if result.get('success'):
+                                    logger.info(f"✅ Synced fulfillment to ggrequestz for request #{req_id} (GGR ID: {ggr_request_id})")
+                                else:
+                                    logger.error(f"❌ Failed to sync fulfillment to ggrequestz: {result.get('error')}")
                     
                     logger.info(f"Sending DMs with links for {len(notifications)} user(s).")
                     for user_id, fulfilled_games in notifications.items():
@@ -2323,15 +2410,17 @@ class Request(commands.Cog):
                                 romm_url = f"{self.bot.config.DOMAIN}/rom/{rom_id}"
                                 
                                 message_parts = [f"✅ Your request for **{game_name}** is now available!"]
-                                link_parts = [f"[View on RomM]({romm_url})"]
-
+                                
+                                romm_emoji = self.bot.get_formatted_emoji('romm')
+                                link_parts = [f"{romm_emoji} [**View in RomM**]({romm_url})"]
+                                
                                 if filename:
                                     safe_filename = quote(filename)
                                     download_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_id}/content/{safe_filename}?"
-                                    link_parts.append(f"[Direct Download]({download_url})")
+                                    link_parts.append(f"⬇️ [**Download**]({download_url})")
                                 
                                 # Join the links with a separator and add them as a single line
-                                message_parts.append(" • ".join(link_parts))
+                                message_parts.append(" ".join(link_parts))
 
                                 message = "\n".join(message_parts)
                                 await user.send(message)
@@ -2721,7 +2810,7 @@ class Request(commands.Cog):
                     existing_requests = await cursor.fetchall()
                     
                     # Check for existing/duplicate requests...
-                    # (existing duplicate checking code)
+                    # (existing duplicate checking code - keeping it as is)
                 
                 # Check user's pending request limit
                 cursor = await db.execute(
@@ -2734,7 +2823,10 @@ class Request(commands.Cog):
                     await respond(content="❌ You already have 25 pending requests. Please wait for them to be fulfilled or cancel some.")
                     return
 
-                # Add IGDB metadata to details if available
+                # Store user's additional details separately (for local DB)
+                user_details = details
+
+                # Add IGDB metadata to details for LOCAL database storage
                 if selected_game:
                     alt_names_str = ""
                     if selected_game.get('alternative_names'):
@@ -2759,19 +2851,52 @@ class Request(commands.Cog):
                     else:
                         details = igdb_details
 
-                # Insert the new request with platform mapping
+                # Always store in local database FIRST to get the request_id
                 cursor = await db.execute(
                     """
                     INSERT INTO requests (user_id, username, platform, game_name, details, igdb_id, platform_mapping_id, igdb_game_name)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (author.id, author_name, platform_display_name, game, details, igdb_id, mapping_id, igdb_name) # <-- ADD igdb_name HERE
+                    (author.id, author_name, platform_display_name, game, details, igdb_id, mapping_id, igdb_name)
                 )
                 await db.commit()
-                
-                request_id = cursor.lastrowid
-                
-                logger.info(f"Request created - Discord: {author_name} (ID: {author.id}) | Game: '{game}' | Platform: {platform_display_name} | Request ID: #{request_id}")
+
+                request_id = cursor.lastrowid  # Get the Discord request ID
+
+                # NOW try to create in GGRequestz with the Discord request ID
+                ggr_request_id = None
+
+                if self.ggr and self.ggr.enabled:
+                    try:
+                        # Use IGDB name if available, otherwise fall back to user's input
+                        game_name_for_ggr = igdb_name if igdb_name else game
+                        
+                        result = await self.ggr.create_request(
+                            game_name=game_name_for_ggr,  # Use IGDB name
+                            platform=platform_display_name,
+                            user_id=author.id,
+                            username=author_name,
+                            igdb_id=igdb_id,
+                            details=user_details,
+                            discord_request_id=request_id  # Pass the Discord request ID
+                        )
+                        
+                        if result.get('success'):
+                            ggr_request_id = result.get('request_id')
+                            logger.info(f"Request created in GGRequestz: ID {ggr_request_id}")
+                            
+                            # Update the local record with the GGR ID
+                            await db.execute(
+                                "UPDATE requests SET ggr_request_id = ? WHERE id = ?",
+                                (ggr_request_id, request_id)
+                            )
+                            await db.commit()
+                        else:
+                            logger.warning(f"GGRequestz creation failed: {result.get('error')}")
+                    except Exception as e:
+                        logger.error(f"GGRequestz error: {e}")
+
+                logger.info(f"Request created - Discord: {author_name} ({author_name}) (ID: {author.id}) | Game: '{game}' | Platform: {platform_display_name} | Local ID: #{request_id} | GGR ID: {ggr_request_id or 'N/A'}")
 
                 if message and selected_game:
                     view = GameSelectView(self.bot, matches=[selected_game], platform_name=platform_display_name)
@@ -2814,8 +2939,8 @@ class Request(commands.Cog):
                             inline=False
                         )
                     
-                    if details and "IGDB Metadata:" not in details:
-                        embed.add_field(name="Details", value=details[:1024], inline=False)
+                    if user_details and "IGDB Metadata:" not in user_details:
+                        embed.add_field(name="Details", value=user_details[:1024], inline=False)
                     
                     embed.set_footer(text=f"Request submitted by {author_name}")
                     embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
@@ -2891,6 +3016,88 @@ class Request(commands.Cog):
         
         # Process manual request (no IGDB ID)
         await self.process_request(ctx, platform_display_name, game, details, None, None)
+    
+    async def _sync_statuses_from_ggrequestz(self, user_id: Optional[int] = None):
+        """Sync request statuses from ggrequestz to Discord database"""
+        if not self.ggr or not self.ggr.enabled:
+            return
+        
+        try:
+            async with self.db.get_connection() as db:
+                # Build query based on whether we're syncing for a specific user or all
+                if user_id:
+                    cursor = await db.execute(
+                        """
+                        SELECT id, ggr_request_id, status, user_id, game_name 
+                        FROM requests 
+                        WHERE user_id = ?
+                        AND ggr_request_id IS NOT NULL 
+                        AND status IN ('pending', 'approved')
+                        """,
+                        (user_id,)
+                    )
+                else:
+                    cursor = await db.execute(
+                        """
+                        SELECT id, ggr_request_id, status, user_id, game_name 
+                        FROM requests 
+                        WHERE ggr_request_id IS NOT NULL 
+                        AND status IN ('pending', 'approved')
+                        """
+                    )
+                
+                discord_requests = await cursor.fetchall()
+                
+                if not discord_requests:
+                    return
+                
+                logger.debug(f"Syncing {len(discord_requests)} requests from ggrequestz")
+                
+                for discord_req in discord_requests:
+                    discord_id, ggr_id, discord_status, req_user_id, game_name = discord_req
+                    
+                    # Get current status from ggrequestz
+                    ggr_request = await self.ggr.get_request_by_id(ggr_id)
+                    
+                    if not ggr_request:
+                        continue
+                    
+                    ggr_status = ggr_request.get('status')
+                    
+                    # Map ggrequestz status to Discord status
+                    status_mapping = {
+                        'pending': 'pending',
+                        'approved': 'approved',
+                        'fulfilled': 'fulfilled',
+                        'rejected': 'rejected',
+                        'cancelled': 'cancelled'
+                    }
+                    
+                    mapped_status = status_mapping.get(ggr_status)
+                    
+                    # If status changed, update Discord database
+                    if mapped_status and mapped_status != discord_status:
+                        logger.info(f"Syncing status for request #{discord_id}: {discord_status} → {mapped_status}")
+                        
+                        notes = ggr_request.get('admin_notes', '')
+                        update_note = f"Synced from ggrequestz: {notes}" if notes else "Synced from ggrequestz"
+                        
+                        await db.execute(
+                            """
+                            UPDATE requests 
+                            SET status = ?, 
+                                notes = ?,
+                                updated_at = CURRENT_TIMESTAMP 
+                            WHERE id = ?
+                            """,
+                            (mapped_status, update_note, discord_id)
+                        )
+                        await db.commit()
+                        
+                        logger.info(f"✅ Synced status for request #{discord_id} from ggrequestz")
+        
+        except Exception as e:
+            logger.error(f"Error syncing statuses from ggrequestz: {e}", exc_info=True)
     
     @discord.slash_command(name="request", description="Submit a ROM request")
     async def request(
@@ -3108,6 +3315,9 @@ class Request(commands.Cog):
         await ctx.defer(ephemeral=True)
 
         try:
+            # Sync statuses from ggrequestz first
+            await self._sync_statuses_from_ggrequestz(ctx.author.id)
+            
             async with self.db.get_connection() as db:
                 # Fetch requests based on show_pending_only parameter
                 if show_pending_only:
@@ -3209,6 +3419,9 @@ class Request(commands.Cog):
         await ctx.defer(ephemeral=True)
 
         try:
+            # Sync statuses from ggrequestz first
+            await self._sync_statuses_from_ggrequestz()
+            
             async with self.db.get_connection() as db:
                 # Fetch requests based on show_all parameter
                 if show_all:
