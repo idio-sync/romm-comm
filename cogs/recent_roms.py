@@ -17,6 +17,7 @@ from PIL import Image
 from io import BytesIO
 import aiohttp
 import time
+from dateutil.parser import parse as parse_datetime
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -505,8 +506,7 @@ class RecentRomsMonitor(commands.Cog):
                 
                 try:
                     # Parse ISO format datetime
-                    from dateutil.parser import parse
-                    created_at = parse(created_at_str)
+                    created_at = parse_datetime(created_at_str)
                     
                     # Ensure timezone-aware (convert to UTC if needed)
                     if created_at.tzinfo is None:
