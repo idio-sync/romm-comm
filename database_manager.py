@@ -116,7 +116,7 @@ class MasterDatabase:
                 logger.error(f"Unexpected error during table creation: {e}")
                 raise
             
-            # Perform migration if needed
+            # Perform migration from seperate db setup if needed
             if needs_migration:
                 logger.info("Starting migration of old databases...")
                 try:
@@ -125,6 +125,9 @@ class MasterDatabase:
                     logger.error(f"Migration failed: {e}")
                     # Migration failure is not critical for new installations
                     logger.warning("Continuing despite migration failure")
+                    
+            # Migrate for GGRequestz support (adds column if needed)
+            await self.migrate_for_ggrequestz()
             
             logger.debug("Initializing platform mappings...")
             await self.initialize_platform_mappings()
@@ -248,7 +251,7 @@ class MasterDatabase:
                                                   'details', 'status', 'created_at', 'updated_at', 
                                                   'fulfilled_by', 'fulfiller_name', 'notes', 
                                                   'auto_fulfilled', 'igdb_id', 'platform_mapping_id',
-                                                  'igdb_game_name']:
+                                                  'igdb_game_name', 'ggr_request_id']:
                                             if col in request_dict:
                                                 insert_cols.append(col)
                                                 insert_vals.append(request_dict[col])
@@ -396,6 +399,39 @@ class MasterDatabase:
             logger.error(f"Critical error during migration: {e}", exc_info=True)
             raise
     
+    async def migrate_for_ggrequestz(self):
+        """Add GGRequestz integration support to existing databases"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                # Check if column already exists
+                cursor = await db.execute("PRAGMA table_info(requests)")
+                columns = await cursor.fetchall()
+                column_names = [col[1] for col in columns]
+                
+                if 'ggr_request_id' in column_names:
+                    logger.debug("GGRequestz column already exists")
+                    return True
+                
+                # Add column
+                logger.info("Adding ggr_request_id column for GGRequestz integration...")
+                await db.execute(
+                    "ALTER TABLE requests ADD COLUMN ggr_request_id INTEGER"
+                )
+                
+                # Add index
+                await db.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_ggr_request_id ON requests(ggr_request_id)"
+                )
+                
+                await db.commit()
+                
+                logger.info("✅ GGRequestz migration completed successfully")
+                return True
+                
+        except Exception as e:
+            logger.error(f"GGRequestz migration failed: {e}")
+            return False
+    
     async def _create_recent_roms_tables(self, db):
         """Create tables for RecentRoms cog"""
         logger.debug("Creating posted_roms table...")
@@ -406,6 +442,7 @@ class MasterDatabase:
                 platform_name TEXT,
                 rom_name TEXT,
                 posted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                message_id INTEGER,
                 batch_id TEXT
             )
         ''')
@@ -441,7 +478,8 @@ class MasterDatabase:
                 auto_fulfilled BOOLEAN DEFAULT 0,
                 igdb_id INTEGER,
                 platform_mapping_id INTEGER,
-                igdb_game_name TEXT
+                igdb_game_name TEXT,
+                ggr_request_id INTEGER
             )
         ''')
         
@@ -481,7 +519,8 @@ class MasterDatabase:
         await db.execute('CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status)')
         await db.execute('CREATE INDEX IF NOT EXISTS idx_requests_user ON requests(user_id)')
         await db.execute('CREATE INDEX IF NOT EXISTS idx_platform_mappings_name ON platform_mappings(display_name)')
-        
+        # await db.execute('CREATE INDEX IF NOT EXISTS idx_ggr_request_id ON requests(ggr_request_id)')
+
         logger.debug("Request table indexes created")
     
     async def _create_user_tables(self, db):
