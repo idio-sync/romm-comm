@@ -157,6 +157,8 @@ class SocketIOManager:
         consecutive_failures = 0
         max_failures = 3
         
+        health_check_timeout = bot.config.API_TIMEOUT + 10  # Add 10s buffer
+        
         while True:
             try:
                 if not self.sio.connected:
@@ -170,7 +172,7 @@ class SocketIOManager:
                 try:
                     platforms = await asyncio.wait_for(
                         bot.fetch_api_endpoint('platforms', bypass_cache=True),
-                        timeout=5.0
+                        timeout=health_check_timeout
                     )
                     
                     if platforms is not None:
@@ -182,7 +184,7 @@ class SocketIOManager:
                         
                 except asyncio.TimeoutError:
                     consecutive_failures += 1
-                    logger.warning(f"API timeout ({consecutive_failures}/{max_failures})")
+                    logger.warning(f"API timeout after {health_check_timeout}s ({consecutive_failures}/{max_failures})")
                 except Exception as e:
                     consecutive_failures += 1
                     logger.warning(f"API error ({consecutive_failures}/{max_failures}): {e}")
@@ -191,17 +193,17 @@ class SocketIOManager:
                     logger.error("Forcing reconnection due to failed health checks...")
                     try:
                         await self.sio.disconnect()
-                    except:
+                    except Exception:
                         pass
                     await asyncio.sleep(2)
                     await self.connect()
                     consecutive_failures = 0
                 
                 await asyncio.sleep(60)
-                
+            
             except Exception as e:
-                logger.error(f"Error in health monitor: {e}")
-                await asyncio.sleep(60)
+                logger.error(f"Error in health monitor: {e}", exc_info=True)
+                await asyncio.sleep(60)  # Wait before retrying
 
 class Config:
     """Configuration manager with validation."""
@@ -216,13 +218,15 @@ class Config:
         self.UPDATE_VOICE_NAMES = os.getenv('UPDATE_VOICE_NAMES', 'true').lower() == 'true'
         self.SHOW_API_SUCCESS = os.getenv('SHOW_API_SUCCESS', 'false').lower() == 'true'
         self.CACHE_TTL = int(os.getenv('CACHE_TTL', 3900))  # 65 minutes default
-        self.API_TIMEOUT = int(os.getenv('API_TIMEOUT', 10))  # 10 seconds default
+        self.API_TIMEOUT = int(os.getenv('API_TIMEOUT', 30))  # 30 seconds default
         self.USER = os.getenv('USER')
         self.PASS = os.getenv('PASS')
         requests_env = os.getenv('REQUESTS_ENABLED', 'TRUE').upper()
         self.REQUESTS_ENABLED = requests_env == 'TRUE'
         
         self.validate()
+        
+        logger.debug("RommBot.__init__() completed")
 
     def validate(self):
         """Validate configuration values."""
@@ -254,7 +258,7 @@ class RommBot(discord.Bot):
         super().__init__(
             command_prefix="!",
             intents=intents,
-            application_id=os.getenv('RommBot/1.0')
+            # application_id=os.getenv('RommBot/1.0')
         )
 
         # Initialize bot attributes    
@@ -272,10 +276,6 @@ class RommBot(discord.Bot):
         self.refresh_token: Optional[str] = None
         self.token_expiry: float = 0
         self.token_lock = asyncio.Lock()
-        
-        # Initialize session with proper headers
-        self.session: Optional[aiohttp.ClientSession] = None
-        self._session_lock = asyncio.Lock()
         
         # CSRF token management
         self.csrf_token: Optional[str] = None
@@ -502,6 +502,8 @@ class RommBot(discord.Bot):
                         headers["Authorization"] = f"Bearer {self.access_token}"
                         async with session.request(method, url, **request_kwargs) as retry_response:
                             return await handle_response(retry_response)
+                    else:
+                        return None
                 else:
                     return await handle_response(response)
                     
@@ -570,55 +572,55 @@ class RommBot(discord.Bot):
     
     async def setup_hook(self):
         """Initialize database and other async resources before bot starts"""
-        logger.info("Starting bot setup hook...")
-        
-        try:
+        try:    
             # Initialize database FIRST before anything else
-            logger.info("Initializing database...")
+            logger.debug("Initializing database...")
             self.db = MasterDatabase()
             await self.db.initialize()
+            logger.debug("Database initialize() completed")
             
             # Verify tables were created
             table_status = await self.db.verify_tables_exist()
+            logger.debug(f"Table verification result: {table_status}")
+            
             if not all(table_status.values()):
                 missing_tables = [t for t, exists in table_status.items() if not exists]
                 logger.error(f"Missing tables after initialization: {missing_tables}")
                 raise Exception(f"Database initialization incomplete: missing tables {missing_tables}")
             
-            logger.info("✅ Database initialization verified successfully")
+            logger.debug("✅ Database initialization verified successfully")
             
             # Initialize shared SocketIO manager
-            logger.info("Initializing SocketIO manager...")
-            print("About to create SocketIOManager...")
+            logger.debug("About to initialize SocketIO manager...")
             
             try:
                 self.socketio_manager = SocketIOManager(self.config)
-                print(f"SocketIOManager created: {self.socketio_manager}")
-                print(f"SocketIO client: {self.socketio_manager.sio}")
+                logger.debug(f"SocketIOManager created successfully")
+                
+                logger.debug("Attempting to connect to SocketIO...")
+                connect_result = await self.socketio_manager.connect()
+                logger.debug(f"SocketIO connect result: {connect_result}")
+                
+                logger.debug("Starting health monitor...")
+                await self.socketio_manager.start_health_monitor(self)
+                logger.debug("✅ SocketIO manager initialized")
+                
             except Exception as e:
-                print(f"FAILED to create SocketIOManager: {e}")
-                logger.error(f"Failed to create SocketIOManager: {e}", exc_info=True)
+                logger.error(f"FAILED to initialize SocketIOManager: {e}", exc_info=True)
                 raise
             
-            print("Attempting to connect...")
-            await self.socketio_manager.connect()
-            print("Connected! Starting health monitor...")
-            await self.socketio_manager.start_health_monitor(self)
-            logger.info("✅ SocketIO manager initialized")
-            
             # Initialize OAuth tokens AFTER database
-            logger.info("Initializing OAuth tokens...")
+            logger.debug("Initializing OAuth tokens...")
             if not await self.get_oauth_token():
                 logger.warning("Failed to obtain OAuth tokens, some features may not work")
             else:
                 logger.info("✅ OAuth tokens initialized successfully")
-                
+                            
         except Exception as e:
-            print(f"=" * 50)
-            print(f"SETUP HOOK FAILED: {e}")
-            print(f"=" * 50)
-            logger.error(f"❌ Setup hook failed: {e}", exc_info=True)
-            # Re-raise to prevent bot from starting with broken database
+            logger.error("=" * 50)
+            logger.error(f"SETUP HOOK FAILED: {e}")
+            logger.error("=" * 50)
+            logger.error("Full traceback:", exc_info=True)
             raise
     
     def load_all_cogs(self):
@@ -702,22 +704,23 @@ class RommBot(discord.Bot):
         logger.info(f'{self.user} has connected to Discord!')
         
         # Check that database is initialized
-        if self.db is None or not self.db._initialized:
-            # Try to initialize it now as a fallback
-            if self.db is None:
-                self.db = MasterDatabase()
-            await self.db.initialize()
+        #if self.db is None or not self.db._initialized:
+        #    # Try to initialize it now as a fallback
+        #    if self.db is None:
+        #        self.db = MasterDatabase()
+        #    await self.db.initialize()
         
-        # ADD THIS: Initialize SocketIO manager if not already done
-        if self.socketio_manager is None:
-            logger.info("Initializing SocketIO manager...")
-            try:
-                self.socketio_manager = SocketIOManager(self.config)
-                await self.socketio_manager.connect()
-                await self.socketio_manager.start_health_monitor(self)
-                logger.info("✅ SocketIO manager initialized")
-            except Exception as e:
-                logger.error(f"Failed to initialize SocketIO manager: {e}", exc_info=True)
+        # Initialize SocketIO manager if not already done
+        #if self.socketio_manager is None:
+        #    logger.warning("SocketIO manager was not initialized in setup_hook!")
+        #    logger.info("Initializing SocketIO manager...")
+        #    try:
+        #        self.socketio_manager = SocketIOManager(self.config)
+        #        await self.socketio_manager.connect()
+        #        await self.socketio_manager.start_health_monitor(self)
+        #        logger.info("✅ SocketIO manager initialized")
+        #    except Exception as e:
+        #        logger.error(f"Failed to initialize SocketIO manager: {e}", exc_info=True)
         
         # Load cogs only after database is confirmed ready
         self.load_all_cogs()
@@ -745,16 +748,36 @@ class RommBot(discord.Bot):
         # Start update loop if not running
         if not self.update_loop.is_running():
             self.update_loop.start()
+        
+        # Start token refresh loop if not running
+        if not self.refresh_token_task.is_running():
+            self.refresh_token_task.start()
                     
     async def ensure_session(self) -> aiohttp.ClientSession:
-        """Ensure an active session exists and return it."""
+        """Ensure an active session exists with optimized settings."""
         async with self._session_lock:
             if self.session is None or self.session.closed:
+                # Configure connector with keepalive
+                connector = aiohttp.TCPConnector(
+                    limit=10,                      # Max connections
+                    limit_per_host=5,              # Max per host
+                    ttl_dns_cache=300,             # DNS cache 5 min
+                    force_close=False,             # Enable keepalive
+                    enable_cleanup_closed=True,
+                    keepalive_timeout=75           # Keep connections alive
+                )
+                
                 self.session = aiohttp.ClientSession(
-                    timeout=aiohttp.ClientTimeout(total=self.config.API_TIMEOUT),
+                    connector=connector,
+                    timeout=aiohttp.ClientTimeout(
+                        total=self.config.API_TIMEOUT,      # Overall timeout
+                        connect=5,                           # Connection timeout
+                        sock_read=self.config.API_TIMEOUT   # Read timeout
+                    ),
                     headers={
                         "User-Agent": "RommBot/1.0",
-                        "Accept": "application/json"
+                        "Accept": "application/json",
+                        "Connection": "keep-alive"          # Explicit keepalive
                     }
                 )
             return self.session
@@ -790,8 +813,8 @@ class RommBot(discord.Bot):
         self.update_loop.change_interval(seconds=self.config.SYNC_RATE)
         logger.debug("Update loop initialized")
 
-    async def fetch_api_endpoint(self, endpoint: str, bypass_cache: bool = False) -> Optional[Dict]:
-        """Fetch data from API with caching and error handling."""
+    async def fetch_api_endpoint(self, endpoint: str, bypass_cache: bool = False, max_retries: int = 2) -> Optional[Dict]:
+        """Fetch data from API with caching, error handling, and retries."""
         # Bypass cache if specified
         if not bypass_cache:
             cached_data = self.cache.get(endpoint)
@@ -799,71 +822,58 @@ class RommBot(discord.Bot):
                 logger.debug(f"Returning cached data for {endpoint}")
                 return cached_data
 
-        try:
-            # Ensure we have a valid token
-            if not await self.ensure_valid_token():
-                logger.error("Failed to obtain valid OAuth token")
-                return None
-                
-            session = await self.ensure_session()
-            url = f"{self.config.API_BASE_URL}/api/{endpoint}"
-            
-            headers = {
-                "Authorization": f"Bearer {self.access_token}",
-                "Accept": "application/json"
-            }
-            
-            # DEBUG: Log the request details
-            logger.debug(f"Making request to: {url}")
-            logger.debug(f"Using token: {self.access_token[:20] if self.access_token else 'None'}...")
-            logger.debug(f"Authorization header: Bearer {self.access_token[:20] if self.access_token else 'None'}...")
-        
-            async with session.get(url, headers=headers) as response:
-                content_type = response.headers.get('content-type', '')
-                
-                # DEBUG: Log response details
-                logger.debug(f"Response status: {response.status}")
-                logger.debug(f"Response content-type: {content_type}")
-                
-                if response.status == 401:
-                    logger.debug("Got 401, attempting to refresh token")
-                    if await self.ensure_valid_token():
-                        headers["Authorization"] = f"Bearer {self.access_token}"
-                        async with session.get(url, headers=headers) as retry_response:
-                            if retry_response.status == 200 and 'application/json' in retry_response.headers.get('content-type', ''):
-                                data = await retry_response.json()
-                                logger.debug(f"Fetched fresh data for {endpoint} after token refresh")
-                                if data:
-                                    self.cache.set(endpoint, data)
-                                return data
-                            else:
-                                logger.warning(f"API returned status {retry_response.status} for endpoint {endpoint}")
-                                return None
-                elif response.status == 200:
-                    if 'application/json' in content_type:
-                        try:
-                            data = await response.json()
-                            logger.debug(f"Fetched fresh data for {endpoint}")
-                            if data:
-                                self.cache.set(endpoint, data)
-                            return data
-                        except Exception as e:
-                            logger.error(f"Error parsing JSON from {endpoint}: {e}")
-                            return None
-                    else:
-                        logger.error(f"Expected JSON but got {content_type} for {endpoint}")
-                        # DEBUG: Log the actual response content
-                        response_text = await response.text()
-                        logger.error(f"Response content (first 500 chars): {response_text[:500]}")
-                        return None
-                else:
-                    logger.warning(f"API returned status {response.status} for endpoint {endpoint}")
-                    response_text = await response.text()
-                    logger.warning(f"Response content: {response_text[:200]}")
+        for attempt in range(max_retries + 1):
+            try:
+                # Ensure we have a valid token
+                if not await self.ensure_valid_token():
+                    logger.error("Failed to obtain valid OAuth token")
                     return None
                     
-        except Exception as e:
-            logger.error(f"Error fetching {endpoint}: {e}")
+                session = await self.ensure_session()
+                url = f"{self.config.API_BASE_URL}/api/{endpoint}"
+                
+                headers = {
+                    "Authorization": f"Bearer {self.access_token}",
+                    "Accept": "application/json"
+                }
+                
+                logger.debug(f"Making request to: {url} (attempt {attempt + 1}/{max_retries + 1})")
+            
+                async with session.get(url, headers=headers) as response:
+                    logger.debug(f"Response status: {response.status}")
+                    logger.debug(f"Response content-type: {response.headers.get('content-type', 'unknown')}")
+                    
+                    if response.status == 200:
+                        data = await response.json()
+                        logger.debug(f"Fetched fresh data for {endpoint}")
+                        self.cache.set(endpoint, data)
+                        return data
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"API returned status {response.status}: {error_text}")
+                        
+                        # Don't retry on auth failures
+                        if response.status in [401, 403]:
+                            return None
+                            
+            except asyncio.TimeoutError:
+                if attempt < max_retries:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    logger.warning(f"Request timeout, retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries + 1})")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"Request failed after {max_retries + 1} attempts (timeout)")
+                    return None
+                    
+            except Exception as e:
+                if attempt < max_retries:
+                    wait_time = 2 ** attempt
+                    logger.warning(f"Request error: {e}, retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries + 1})")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"Request failed after {max_retries + 1} attempts: {e}")
+                    return None
+        
         return None
 
     @staticmethod
@@ -1003,6 +1013,12 @@ class RommBot(discord.Bot):
 
 async def main():
     bot = RommBot()
+    
+    # Manually initialize - py-cord's auto setup_hook isn't working
+    logger.debug("Running manual initialization...")
+    await bot.setup_hook()
+    logger.info("Initialization complete, starting bot...")
+    
     try:        
         await bot.start(bot.config.TOKEN)
     except Exception as e:
@@ -1029,3 +1045,5 @@ if __name__ == "__main__":
         logger.info("Bot shutting down...")
     except Exception as e:
         logger.error("Error running bot:", exc_info=True)
+
+
