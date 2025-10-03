@@ -594,7 +594,7 @@ class MasterDatabase:
                 for table in expected_tables:
                     table_status[table] = table in existing_tables
                 
-                logger.info(f"Table verification: {table_status}")
+                logger.debug(f"Table verification: {table_status}")
                 
         except Exception as e:
             logger.error(f"Error verifying tables: {e}")
