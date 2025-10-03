@@ -471,6 +471,7 @@ class ROM_View(discord.ui.View):
 
     async def update_file_select(self, rom_data: Dict):
         """Update the file selection menu with available files"""
+        logger.debug(f"Data received for {rom_data.get('name')}: playable is {rom_data.get('playable')}")
         try:
             # Remove existing file components if they exist
             components_to_remove = []
@@ -560,7 +561,7 @@ class ROM_View(discord.ui.View):
                     url=base_url  # No file_ids parameter = download all
                 )
                 self.add_item(self.download_all)
-
+                
             else:
                 # Single file download button
                 file_name = quote(rom_data.get('fs_name', 'unknown_file'))
@@ -573,6 +574,17 @@ class ROM_View(discord.ui.View):
                     url=download_url
                 )
                 self.add_item(self.download_all)
+                
+            # Play button for emujs
+            if rom_data.get('playable'):
+                emulatorjs_url = f"{self.bot.config.DOMAIN}/rom/{rom_data['id']}/ejs"
+                play_button = discord.ui.Button(
+                    label="Play",
+                    style=discord.ButtonStyle.link,
+                    url=emulatorjs_url,
+                    emoji="▶️"
+                )
+                self.add_item(play_button)
 
         except Exception as e:
             logger.error(f"Error updating file select: {e}")
@@ -1230,6 +1242,16 @@ class Search(commands.Cog):
     async def initialize_platform_emoji_mappings(self):
         """Initialize platform -> emoji mappings using API data"""
         await self.bot.wait_until_ready()
+        
+        # Wait for emojis to be loaded
+        max_wait = 30  # seconds
+        for _ in range(max_wait * 2):  # Check every 0.5 seconds
+            if hasattr(self.bot, 'emoji_dict') and len(self.bot.emoji_dict) > 0:
+                logger.info(f"Emoji dict ready with {len(self.bot.emoji_dict)} emojis")
+                break
+            await asyncio.sleep(0.5)
+        else:
+            logger.warning("Emoji dict not populated after waiting, continuing anyway")
         
         try:
             # Get platforms from API
