@@ -45,9 +45,9 @@ A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) A
 - **Firmware search**: Lists firmware files for a platform with names, sizes, hashes, and download links.
 - **Scans**: Start/stop/status for different RomM scan types. The bot reports progress and a summary on completion.
 - **Emojis**: Uploads custom console emojis on install; uses emojis in responses and stats. Nitro-aware to expand/revert the emoji set.
-- **QR code generation**: Generate QR codes for 3DS/Vita installs by reacting to /search replies with QR emoji (requires download endpoint auth to be disabled on the RomM instance).
+- **QR code generation**: Generate QR codes for 3DS/Vita [FBI Reloaded](https://github.com/TheRealZora/FBI-Reloaded)/[VitaShell](https://github.com/RealYoti/VitaShell) installs by reacting to /search replies with QR emoji (requires download endpoint auth to be disabled on the RomM instance).
 - **RomM user management**: Auto-create RomM accounts for Discord users via role assignment; manage Romm > Discord user linking via gui in Discord.
-- **Switch Shop info**: Command to display instructions for connecting to a Tinfoil endpoint (download endpoint auth must be disabled).
+- **Switch Shop info**: Command to display instructions for connecting to a [Tinfoil](https://tinfoil.io/Download) endpoint (download endpoint auth must be disabled).
 - **Rate-limited Discord interactions**: Built-in rate limiting to avoid overloading the Discord API.
 
 ### Planned
@@ -302,6 +302,7 @@ GGREQUESTZ_PASSWORD=your_password
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
