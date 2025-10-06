@@ -266,8 +266,12 @@ class ROM_View(discord.ui.View):
                     companies_str = ", ".join(company_list)
                 else:
                     companies_str = str(companies)
-                if companies_str:
-                    embed.add_field(name="Companies", value=companies_str, inline=True)
+
+                # Truncate to Discord's 1024 character limit
+                if len(companies_str) > 1024:
+                    companies_str = companies_str[:1021] + "..."
+                
+                embed.add_field(name="Companies", value=companies_str, inline=True)
             
             # Build the links section with two rows
             romm_emoji = self.bot.get_formatted_emoji('romm')
