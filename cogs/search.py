@@ -470,10 +470,9 @@ class ROM_View(discord.ui.View):
             return None
 
     async def update_file_select(self, rom_data: Dict):
-        """Update the file selection menu with available files"""
-        logger.debug(f"Data received for {rom_data.get('name')}: playable is {rom_data.get('playable')}")
+        """Update file selection dropdown for multi-file ROMs"""
         try:
-            # Remove existing file components if they exist
+            # Clear existing file-related components
             components_to_remove = []
             for item in self.children:
                 if isinstance(item, (discord.ui.Button, discord.ui.Select)) and item != self.select:
@@ -482,185 +481,260 @@ class ROM_View(discord.ui.View):
             for item in components_to_remove:
                 self.remove_item(item)
 
-            # Initialize filename and ID maps as instance variables
+            # Initialize tracking variables
             self.filename_map = {}
             self.file_id_map = {}
+            self.selected_files = set()  # Track selected files
+            self.file_info_map = {}  # Store file info for quick access
 
             if rom_data.get('multi') and rom_data.get('files'):
                 files = rom_data.get('files', [])
                 if not files:
                     return
                 
-                # Sort files - group by subfolder first, then by size/name
+                # Sort and prepare files
                 files_with_subfolder = [(f, self.get_file_subfolder(f)) for f in files]
                 files_with_subfolder.sort(key=lambda x: (x[1] is not None, x[1], x[0].get('file_name', '').lower()))
                 
-                # Limit to 25 files for dropdown (Discord limit)
+                # Limit to 25 files (Discord limit)
                 display_files = files_with_subfolder[:25]
                 
-                # Create file select with appropriate max_values
+                # Create file select with dynamic placeholder
                 self.file_select = discord.ui.Select(
-                    placeholder="Select files to download",
+                    placeholder=self._get_file_select_placeholder(),
                     custom_id="file_select",
-                    min_values=1,
+                    min_values=0,  # Allow deselection
                     max_values=min(len(display_files), 25)
                 )
                 
-                # Add file options with subfolder in label
+                # Add file options with better formatting
                 for i, (file_info, subfolder) in enumerate(display_files):
-                    size_bytes = file_info.get('file_size_bytes', 0)
-                    size = self.format_file_size(size_bytes)
-                    
-                    # Format label with subfolder prefix if present
-                    file_name = file_info['file_name'][:75]
-                    if subfolder:
-                        label = f"[{subfolder}] {file_name} ({size})"
-                    else:
-                        label = f"{file_name} ({size})"
-                    
-                    # Truncate label if too long (Discord has a 100 char limit for labels)
-                    if len(label) > 100:
-                        # Truncate filename portion to fit
-                        max_name_len = 100 - len(f"[{subfolder}]  ({size})") if subfolder else 100 - len(f" ({size})")
-                        truncated_name = file_name[:max_name_len-3] + "..."
-                        if subfolder:
-                            label = f"[{subfolder}] {truncated_name} ({size})"
-                        else:
-                            label = f"{truncated_name} ({size})"
-                    
-                    # Create shortened value and map it to full filename AND file ID
                     short_value = f"file_{i}"
                     self.filename_map[short_value] = file_info['file_name']
                     self.file_id_map[short_value] = str(file_info.get('id'))
+                    self.file_info_map[short_value] = (file_info, subfolder)
+                    
+                    # Format option label
+                    label = self._format_file_option_label(file_info, subfolder, short_value)
                     
                     self.file_select.add_option(
                         label=label,
-                        value=short_value
+                        value=short_value,
+                        emoji=self._get_file_emoji(short_value, subfolder)
                     )
                 
                 self.file_select.callback = self.file_select_callback
                 self.add_item(self.file_select)
 
-                # Create proper base URL for multi-file downloads
+                # Create download buttons
                 file_name = quote(rom_data.get('fs_name', 'unknown_file'))
                 base_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_data['id']}/content/{file_name}"
 
-                # Download Selected button starts disabled
+                # Download Selected button (initially disabled)
                 self.download_selected = discord.ui.Button(
-                    label="Download Selected",
+                    label="Download Selected (0 files)",
                     style=discord.ButtonStyle.link,
-                    url=base_url,  # Will be updated when files are selected
+                    url=base_url,
                     disabled=True
                 )
                 self.add_item(self.download_selected)
 
-                # Download All button - no file_ids parameter means all files
+                # Download All button
+                total_size = sum(f.get('file_size_bytes', 0) for f in rom_data.get('files', []))
+                all_files_label = f"Download All ({len(files)} files, {self.format_file_size(total_size)})"
+                
                 self.download_all = discord.ui.Button(
-                    label="Download All",
+                    label=all_files_label,
                     style=discord.ButtonStyle.link,
-                    url=base_url  # No file_ids parameter = download all
+                    url=base_url
                 )
                 self.add_item(self.download_all)
-                
+
             else:
-                # Single file download button
-                file_name = quote(rom_data.get('fs_name', 'unknown_file'))
-                file_size = self.format_file_size(rom_data.get('fs_size_bytes', 0))
-                download_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_data['id']}/content/{file_name}"
-                
-                self.download_all = discord.ui.Button(
-                    label=f"Download ({file_size})",
-                    style=discord.ButtonStyle.link,
-                    url=download_url
-                )
-                self.add_item(self.download_all)
-                
-            # Play button for emujs
-            if rom_data.get('playable'):
-                emulatorjs_url = f"{self.bot.config.DOMAIN}/rom/{rom_data['id']}/ejs"
-                play_button = discord.ui.Button(
-                    label="Play",
-                    style=discord.ButtonStyle.link,
-                    url=emulatorjs_url,
-                    emoji="▶️"
-                )
-                self.add_item(play_button)
+                # Single file download
+                self._add_single_file_download(rom_data)
 
         except Exception as e:
             logger.error(f"Error updating file select: {e}")
-            logger.error(f"ROM data: {rom_data}")
             raise
 
+    def _get_file_select_placeholder(self) -> str:
+        """Generate dynamic placeholder based on selected files"""
+        if not self.selected_files:
+            return "Select files to download"
+        
+        count = len(self.selected_files)
+        if count == 1:
+            # Show the name of the single selected file
+            file_id = next(iter(self.selected_files))
+            if file_id in self.filename_map:
+                filename = self.filename_map[file_id]
+                if len(filename) > 30:
+                    filename = filename[:27] + "..."
+                return f"Selected: {filename}"
+            return "1 file selected"
+        else:
+            # Calculate total size of selected files
+            total_size = 0
+            for file_id in self.selected_files:
+                if file_id in self.file_info_map:
+                    file_info, _ = self.file_info_map[file_id]
+                    total_size += file_info.get('file_size_bytes', 0)
+            
+            size_str = self.format_file_size(total_size)
+            return f"{count} files selected ({size_str})"
+
+    def _format_file_option_label(self, file_info: Dict, subfolder: Optional[str], short_value: str) -> str:
+        """Format file option label with selection indicator"""
+        size = self.format_file_size(file_info.get('file_size_bytes', 0))
+        file_name = file_info['file_name'][:75]
+        
+        # Add checkmark if selected
+        selected_prefix = "✓ " if short_value in self.selected_files else ""
+        
+        # Build label
+        if subfolder:
+            label = f"{selected_prefix}[{subfolder}] {file_name} ({size})"
+        else:
+            label = f"{selected_prefix}{file_name} ({size})"
+        
+        # Truncate if too long
+        if len(label) > 100:
+            max_name_len = 100 - len(f"{selected_prefix}[{subfolder}]  ({size})") if subfolder else 100 - len(f"{selected_prefix} ({size})")
+            truncated_name = file_name[:max_name_len-3] + "..."
+            if subfolder:
+                label = f"{selected_prefix}[{subfolder}] {truncated_name} ({size})"
+            else:
+                label = f"{selected_prefix}{truncated_name} ({size})"
+        
+        return label
+
+    def _get_file_emoji(self, short_value: str, subfolder: Optional[str]) -> Optional[str]:
+        """Get emoji for file option based on state and type"""
+        if short_value in self.selected_files:
+            return "✅"  # Selected indicator
+        return self.get_subfolder_icon(subfolder)
+
+    def _add_single_file_download(self, rom_data: Dict):
+        """Add download button for single file ROM"""
+        file_name = quote(rom_data.get('fs_name', 'unknown_file'))
+        file_size = self.format_file_size(rom_data.get('fs_size_bytes', 0))
+        download_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_data['id']}/content/{file_name}"
+        
+        self.download_all = discord.ui.Button(
+            label=f"Download ({file_size})",
+            style=discord.ButtonStyle.link,
+            url=download_url
+        )
+        self.add_item(self.download_all)
+
     async def file_select_callback(self, interaction: discord.Interaction):
-        """Handle file selection"""
+        """Handle file selection with improved feedback"""
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("This selection isn't for you!", ephemeral=True)
             return
 
         try:
-            selected_short_values = interaction.data['values']
-            logger.debug(f"Selected short values: {selected_short_values}")
-            logger.debug(f"File ID map: {self.file_id_map}")
+            selected_values = interaction.data.get('values', [])
             
-            if selected_short_values and hasattr(self, 'file_id_map'):
-                # Get the file IDs for selected files
-                selected_file_ids = [self.file_id_map[short_value] for short_value in selected_short_values]
-                
-                # Create the download URL with file_ids parameter
-                file_name = quote(self._selected_rom.get('fs_name', 'unknown_file'))
-                base_url = f"{self.bot.config.DOMAIN}/api/roms/{self._selected_rom['id']}/content/{file_name}"
-                
-                if selected_file_ids:
-                    # Use file_ids parameter as expected by backend
-                    file_ids_param = ','.join(selected_file_ids)
-                    download_url = f"{base_url}?file_ids={file_ids_param}"
-                else:
-                    download_url = base_url
-                
-                logger.debug(f"Generated download URL: {download_url}")
-                
-                # Remove old download buttons
-                for item in self.children[:]:
-                    if isinstance(item, discord.ui.Button):
-                        self.remove_item(item)
-                
-                # Add new download selected button with updated URL
-                self.download_selected = discord.ui.Button(
-                    label="Download Selected",
-                    style=discord.ButtonStyle.link,
-                    url=download_url,
-                    disabled=False
+            # Update selected files set
+            self.selected_files = set(selected_values)
+            
+            logger.debug(f"Selected files: {selected_values}")
+            
+            # Update the dropdown to show new selection state
+            self.file_select.placeholder = self._get_file_select_placeholder()
+            
+            # Rebuild options with selection indicators
+            self.file_select.options.clear()
+            for short_value, (file_info, subfolder) in self.file_info_map.items():
+                label = self._format_file_option_label(file_info, subfolder, short_value)
+                self.file_select.add_option(
+                    label=label,
+                    value=short_value,
+                    emoji=self._get_file_emoji(short_value, subfolder)
                 )
-                self.add_item(self.download_selected)
-
-                # Re-add download all button (no file_ids = all files)
-                all_raw_filename = self._selected_rom.get('fs_name', 'unknown_file')
-                all_file_name = quote(all_raw_filename, safe='')
-                download_all_url = f"{self.bot.config.DOMAIN}/api/roms/{self._selected_rom['id']}/content/{all_file_name}"
-                self.download_all = discord.ui.Button(
-                    label="Download All",
-                    style=discord.ButtonStyle.link,
-                    url=download_all_url
-                )
-                self.add_item(self.download_all)
-                
-                await interaction.response.edit_message(view=self)
-            else:
-                # Disable download selected button if no files selected
-                for item in self.children[:]:
-                    if isinstance(item, discord.ui.Button) and item.label == "Download Selected":
-                        item.disabled = True
-                await interaction.response.edit_message(view=self)
-                
+            
+            # Update download buttons
+            await self._update_download_buttons(interaction)
+            
         except Exception as e:
-            logger.error(f"Error in file select callback: {e}")
-            logger.error(f"Selected values: {selected_short_values if 'selected_short_values' in locals() else 'undefined'}")
-            logger.error(f"ROM data: {self._selected_rom if hasattr(self, '_selected_rom') else 'No ROM selected'}")
-            try:
-                await interaction.response.defer(ephemeral=True)
-                await interaction.followup.send("An error occurred while processing your selection", ephemeral=True)
-            except discord.errors.InteractionResponded:
-                await interaction.followup.send("An error occurred while processing your selection", ephemeral=True)
+            logger.error(f"Error in file selection: {e}", exc_info=True)
+            await interaction.response.send_message(
+                "An error occurred while updating selection. Please try again.",
+                ephemeral=True
+            )
+
+    async def _update_download_buttons(self, interaction: discord.Interaction):
+        """Update download buttons based on selection"""
+        # Remove old buttons
+        buttons_to_remove = [item for item in self.children if isinstance(item, discord.ui.Button)]
+        for button in buttons_to_remove:
+            self.remove_item(button)
+        
+        if self.selected_files and hasattr(self, 'file_id_map'):
+            # Get selected file IDs
+            selected_file_ids = [self.file_id_map[sv] for sv in self.selected_files if sv in self.file_id_map]
+            
+            # Calculate total size of selected files
+            total_size = 0
+            for file_id in self.selected_files:
+                if file_id in self.file_info_map:
+                    file_info, _ = self.file_info_map[file_id]
+                    total_size += file_info.get('file_size_bytes', 0)
+            
+            # Create download URL with file_ids
+            file_name = quote(self._selected_rom.get('fs_name', 'unknown_file'))
+            base_url = f"{self.bot.config.DOMAIN}/api/roms/{self._selected_rom['id']}/content/{file_name}"
+            
+            if selected_file_ids:
+                file_ids_param = ','.join(selected_file_ids)
+                download_url = f"{base_url}?file_ids={file_ids_param}"
+            else:
+                download_url = base_url
+            
+            # Add updated download selected button
+            count = len(self.selected_files)
+            size_str = self.format_file_size(total_size)
+            self.download_selected = discord.ui.Button(
+                label=f"Download Selected ({count} {'file' if count == 1 else 'files'}, {size_str})",
+                style=discord.ButtonStyle.link,
+                url=download_url,
+                disabled=False
+            )
+            self.add_item(self.download_selected)
+        else:
+            # No files selected - disable download selected
+            file_name = quote(self._selected_rom.get('fs_name', 'unknown_file'))
+            base_url = f"{self.bot.config.DOMAIN}/api/roms/{self._selected_rom['id']}/content/{file_name}"
+            
+            self.download_selected = discord.ui.Button(
+                label="Download Selected (0 files)",
+                style=discord.ButtonStyle.link,
+                url=base_url,
+                disabled=True
+            )
+            self.add_item(self.download_selected)
+        
+        # Re-add download all button
+        if hasattr(self, '_selected_rom') and self._selected_rom:
+            files = self._selected_rom.get('files', [])
+            total_size = sum(f.get('file_size_bytes', 0) for f in files)
+            all_files_label = f"Download All ({len(files)} files, {self.format_file_size(total_size)})"
+        else:
+            all_files_label = "Download All"
+        
+        file_name = quote(self._selected_rom.get('fs_name', 'unknown_file'))
+        download_all_url = f"{self.bot.config.DOMAIN}/api/roms/{self._selected_rom['id']}/content/{file_name}"
+        
+        self.download_all = discord.ui.Button(
+            label=all_files_label,
+            style=discord.ButtonStyle.link,
+            url=download_all_url
+        )
+        self.add_item(self.download_all)
+        
+        await interaction.response.edit_message(view=self)
 
     async def download_selected_callback(self, interaction: discord.Interaction):
         """Handle downloading selected files"""
