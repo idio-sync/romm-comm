@@ -258,7 +258,10 @@ class ROM_View(discord.ui.View):
             if summary := rom_data.get('summary'):
                 trimmed_summary = self.trim_summary_to_lines(summary, max_lines=3)
                 if trimmed_summary:
-                    embed.add_field(name="Summary", value=trimmed_summary, inline=False)
+                # Enforce Discord's 1024 character limit
+                if len(trimmed_summary) > 1024:
+                    trimmed_summary = trimmed_summary[:1021] + "..."
+                embed.add_field(name="Summary", value=trimmed_summary, inline=False)
             
             if companies := metadatum.get('companies'):
                 if isinstance(companies, list):
