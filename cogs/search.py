@@ -16,13 +16,8 @@ from urllib.parse import quote
 from collections import defaultdict
 
 # Set up logging
+import logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(formatter)
-logger.addHandler(console_handler)
 
 class ROM_View(discord.ui.View):
     def __init__(self, bot, search_results: List[Dict], author_id: int, platform_name: Optional[str] = None, initial_message: Optional[discord.Message] = None):
@@ -1227,6 +1222,7 @@ class Search(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.platform_emoji_names = {}  # Will be populated from API data
+        self._emojis_initialized = False
         # Map of common platform name variations
         self.platform_variants = {
             '3DO Interactive Multiplayer': ['3do'],
@@ -1322,6 +1318,9 @@ class Search(commands.Cog):
     
     async def initialize_platform_emoji_mappings(self):
         """Initialize platform -> emoji mappings using API data"""
+        if self._emojis_initialized:
+            return
+        
         await self.bot.wait_until_ready()
         
         # Wait for emojis to be loaded
@@ -1373,7 +1372,7 @@ class Search(commands.Cog):
                                 self.platform_emoji_names[display_name] = simple_name
                             mapped_count += 1
             
-            print(f"Successfully mapped {mapped_count} platform(s) to custom emoji(s)")
+            logger.info(f"Successfully mapped {mapped_count} platform(s) to custom server emoji(s)")
             
             # Print unmapped platforms
             unmapped = [p['name'] for p in raw_platforms if p['name'] not in self.platform_emoji_names]
@@ -1381,6 +1380,8 @@ class Search(commands.Cog):
                 print("\nUnmapped platforms:")
                 for name in sorted(unmapped):
                     print(f"- {name}")
+            
+            self._emojis_initialized = True
             
         except Exception as e:
             print(f"Error initializing platform emoji mappings: {e}")
