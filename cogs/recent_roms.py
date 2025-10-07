@@ -271,7 +271,7 @@ class RecentRomsMonitor(commands.Cog):
             # Start cleanup task
             self.cleanup_task.start()
             
-            logger.info("Recent ROMs monitor setup complete")
+            logger.debug("Recent ROMs monitor setup complete")
             
         except Exception as e:
             logger.error(f"Error setting up Recent ROMs monitor: {e}", exc_info=True)
