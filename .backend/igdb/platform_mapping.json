@@ -222,6 +222,12 @@
     "moby_slug": "vic-20"
   },
   {
+    "display_name": "Casio Loopy",
+    "folder_name": "casio-loopy",
+    "igdb_slug": "casio-loopy",
+    "moby_slug": "casio-loopy"
+  },
+  {
     "display_name": "DOS",
     "folder_name": "dos",
     "igdb_slug": "dos",
@@ -978,3 +984,4 @@
     "moby_slug": null
   }
 ]
+
