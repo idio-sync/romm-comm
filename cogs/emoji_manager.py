@@ -284,7 +284,7 @@ class EmojiManager(commands.Cog):
             missing_emojis = [(name, url) for name, url in emoji_list if name not in existing_names]
             
             if not missing_emojis:
-                logger.info("All application emojis already synced!")
+                logger.debug("All application emojis already synced!")
                 return 0
             
             slots_available = 2000 - len(existing_names)
