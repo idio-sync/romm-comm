@@ -22,7 +22,20 @@ logger.setLevel(logging.INFO)
 def is_admin():
     """Check if the user is the admin"""
     async def predicate(ctx: discord.ApplicationContext):
-        return ctx.bot.is_admin(ctx.author)
+        logger.debug(f"Admin check predicate called for command: {ctx.command.name}")
+        logger.debug(f"User attempting command: {ctx.author} (ID: {ctx.author.id})")
+        
+        is_admin_result = ctx.bot.is_admin(ctx.author)
+        
+        if not is_admin_result:
+            logger.warning(f"Admin check FAILED for user {ctx.author} (ID: {ctx.author.id}) on command {ctx.command.name}")
+            # Log additional context
+            logger.debug(f"Guild: {ctx.guild.name if ctx.guild else 'DM'}")
+            logger.debug(f"Channel: {ctx.channel}")
+        else:
+            logger.info(f"Admin check PASSED for user {ctx.author} on command {ctx.command.name}")
+        
+        return is_admin_result
     return commands.check(predicate)
 
 class RequestAdminView(discord.ui.View):
@@ -36,6 +49,9 @@ class RequestAdminView(discord.ui.View):
         self.admin_id = admin_id
         self.current_index = 0
         self.message = None
+        
+        # Cache platform status for all requests
+        self.platform_status = {}  # mapping_id -> in_romm status
         
         # Create buttons
         self.back_button = discord.ui.Button(
@@ -162,15 +178,34 @@ class RequestAdminView(discord.ui.View):
             inline=True
         )
         
-        # Platform field
+        # Platform field with existence check - USE CACHED DATA
         search_cog = self.bot.get_cog('Search')
         platform_display = req[3]
-        if search_cog:
-            platform_display = search_cog.get_platform_with_emoji(req[3])
-
+        platform_exists_in_romm = False
+        
+        # Check cached platform status
+        platform_mapping_id = req[14] if len(req) > 14 else None
+        
+        if platform_mapping_id and platform_mapping_id in self.platform_status:
+            platform_exists_in_romm = self.platform_status[platform_mapping_id]
+            logger.debug(f"Platform check (cached by ID): {platform_exists_in_romm}")
+        elif f"name:{req[3]}" in self.platform_status:
+            platform_exists_in_romm = self.platform_status[f"name:{req[3]}"]
+            logger.debug(f"Platform check (cached by name): {platform_exists_in_romm}")
+        else:
+            # No cached data - assume platform doesn't exist
+            logger.debug(f"No cached platform status for {req[3]}")
+            platform_exists_in_romm = False
+        
+        # Format platform display with emoji and status
+        if search_cog and platform_exists_in_romm:
+            platform_display = search_cog.get_platform_with_emoji(platform_display)
+        
+        platform_status_icon = " ✅" if platform_exists_in_romm else "🆕"
+        
         embed.add_field(
             name="Platform",
-            value=platform_display,
+            value=f"{platform_display} {platform_status_icon}",
             inline=True
         )
         
@@ -180,6 +215,14 @@ class RequestAdminView(discord.ui.View):
             value=f"#{req[0]}",
             inline=True
         )
+        
+        # If platform doesn't exist, add warning
+        if not platform_exists_in_romm:
+            embed.add_field(
+                name="⚠️ Platform Status",
+                value="This platform needs to be added to Romm before fulfillment",
+                inline=False
+            )
         
         # If there's a version request, add it prominently
         if version_request:
@@ -707,6 +750,9 @@ class UserRequestsView(discord.ui.View):
         self.message = None
         self.db = db
         
+        # Cache platform status for all requests
+        self.platform_status = {}  # mapping_id -> in_romm status
+        
         # Create buttons
         self.back_button = discord.ui.Button(
             label="← Back",
@@ -842,67 +888,30 @@ class UserRequestsView(discord.ui.View):
             inline=True
         )
         
-        # Platform field with existence check
+        # Platform field with existence check - USE CACHED DATA
         search_cog = self.bot.get_cog('Search')
         platform_display = req[3]
         platform_exists_in_romm = False
         
-        # Check if platform exists in Romm
-        try:
-            # First check the platform_mapping_id if it exists (assuming column 13)
-            # Adjust index based on your actual database schema
-            platform_mapping_id = req[13] if len(req) > 13 else None
-            
-            if platform_mapping_id:
-                # Check platform status from mapping
-                import asyncio
-                loop = asyncio.get_event_loop()
-                
-                async def check_platform():
-                    from pathlib import Path
-                    import aiosqlite
-                    async with self.db.get_connection() as db:
-                        cursor = await db.execute(
-                            "SELECT in_romm FROM platform_mappings WHERE id = ?",
-                            (platform_mapping_id,)
-                        )
-                        result = await cursor.fetchone()
-                        return result[0] if result else False
-                
-                # Run async check in sync context
-                future = asyncio.run_coroutine_threadsafe(check_platform(), loop)
-                try:
-                    platform_exists_in_romm = future.result(timeout=1)
-                except:
-                    # Fallback to checking via API
-                    pass
-            
-            # Fallback: check via API if no mapping info
-            if not platform_mapping_id:
-                raw_platforms = asyncio.run_coroutine_threadsafe(
-                    self.bot.fetch_api_endpoint('platforms'), 
-                    loop
-                ).result(timeout=2)
-                
-                if raw_platforms:
-                    platform_lower = req[3].lower()
-                    for p in raw_platforms:
-                        custom_name = p.get('custom_name')
-                        regular_name = p.get('name', '')
-                        
-                        if (custom_name and custom_name.lower() == platform_lower) or \
-                           (regular_name.lower() == platform_lower):
-                            platform_exists_in_romm = True
-                            platform_display = self.bot.get_platform_display_name(p)
-                            break
-        except Exception as e:
-            logger.debug(f"Could not check platform existence: {e}")
+        # Check cached platform status
+        platform_mapping_id = req[14] if len(req) > 14 else None
+        
+        if platform_mapping_id and platform_mapping_id in self.platform_status:
+            platform_exists_in_romm = self.platform_status[platform_mapping_id]
+            logger.debug(f"Platform check (cached by ID): {platform_exists_in_romm}")
+        elif f"name:{req[3]}" in self.platform_status:
+            platform_exists_in_romm = self.platform_status[f"name:{req[3]}"]
+            logger.debug(f"Platform check (cached by name): {platform_exists_in_romm}")
+        else:
+            # No cached data - assume platform doesn't exist
+            logger.debug(f"No cached platform status for {req[3]}")
+            platform_exists_in_romm = False
         
         # Format platform display with emoji and status
         if search_cog and platform_exists_in_romm:
             platform_display = search_cog.get_platform_with_emoji(platform_display)
         
-        platform_status_icon = "✅" if platform_exists_in_romm else "🆕"
+        platform_status_icon = " ✅" if platform_exists_in_romm else "🆕"
         
         embed.add_field(
             name="Platform",
@@ -1046,6 +1055,9 @@ class UserRequestsView(discord.ui.View):
         embed.set_footer(
             text=f"Request {self.current_index + 1}/{total} • Requested by {req[2]} • Use buttons to navigate"
         )
+        
+        logger.debug(f"DEBUG: Looking up platform - name='{req[3]}', mapping_id={platform_mapping_id}")
+        logger.debug(f"DEBUG: Available keys in cache: {list(self.platform_status.keys())}")
         
         return embed
     
@@ -2123,36 +2135,70 @@ class Request(commands.Cog):
         try:
             raw_platforms = await self.bot.fetch_api_endpoint('platforms')
             if not raw_platforms:
+                logger.warning("No platforms returned from Romm API")
                 return
+            
+            logger.info(f"Syncing {len(raw_platforms)} platforms from Romm")
             
             async with self.db.get_connection() as db:
                 for platform in raw_platforms:
-                    display_name = self.bot.get_platform_display_name(platform)
-                    platform_name = platform.get('name', '').lower()
+                    custom_name = platform.get('custom_name', '').strip() if platform.get('custom_name') else None
+                    platform_name = platform.get('name', '')
+                    platform_id = platform.get('id')
                     
-                    # Try to match by name or folder patterns
-                    cursor = await db.execute('''
-                        SELECT id FROM platform_mappings 
-                        WHERE LOWER(display_name) = LOWER(?)
-                        OR LOWER(folder_name) = LOWER(?)
-                        OR LOWER(folder_name) = LOWER(?)
+                    # Log what we're trying to match
+                    logger.debug(f"Syncing platform - Name: '{platform_name}', Custom: '{custom_name}', ID: {platform_id}")
+                    
+                    # Build query to match by various name combinations
+                    query_params = []
+                    conditions = []
+                    
+                    # Match by regular name
+                    if platform_name:
+                        conditions.append("LOWER(display_name) = LOWER(?)")
+                        query_params.append(platform_name)
+                        conditions.append("LOWER(folder_name) = LOWER(?)")
+                        query_params.append(platform_name)
+                        conditions.append("LOWER(folder_name) = LOWER(?)")
+                        query_params.append(platform_name.replace(' ', '-'))
+                    
+                    # Also match by custom name if it exists
+                    if custom_name:
+                        conditions.append("LOWER(display_name) = LOWER(?)")
+                        query_params.append(custom_name)
+                        conditions.append("LOWER(folder_name) = LOWER(?)")
+                        query_params.append(custom_name)
+                    
+                    if not conditions:
+                        logger.warning(f"Platform has no valid name: {platform}")
+                        continue
+                    
+                    query = f'''
+                        SELECT id, display_name FROM platform_mappings 
+                        WHERE {' OR '.join(conditions)}
                         LIMIT 1
-                    ''', (display_name, platform_name, platform_name.replace(' ', '-')))
+                    '''
                     
+                    cursor = await db.execute(query, query_params)
                     result = await cursor.fetchone()
                     
                     if result:
+                        mapping_id, mapping_name = result
                         # Update the mapping to show it exists in Romm
                         await db.execute('''
                             UPDATE platform_mappings 
                             SET in_romm = 1, romm_id = ?
                             WHERE id = ?
-                        ''', (platform['id'], result[0]))
+                        ''', (platform_id, mapping_id))
+                        logger.debug(f"✓ Matched Romm platform '{custom_name or platform_name}' to mapping '{mapping_name}'")
+                    else:
+                        logger.warning(f"✗ No mapping found for Romm platform '{custom_name or platform_name}'")
                 
                 await db.commit()
+                logger.info("Platform sync completed")
                 
         except Exception as e:
-            logger.error(f"Error syncing Romm platforms: {e}")
+            logger.error(f"Error syncing Romm platforms: {e}", exc_info=True)
     
     async def platform_autocomplete_all(self, ctx: discord.AutocompleteContext):
         """Autocomplete for all platforms, not just those in Romm"""
@@ -3234,7 +3280,7 @@ class Request(commands.Cog):
                         # Get IGDB slug from mapping to use for platform filtering
                         igdb_platform_slug = None
                         if platform_mapping:
-                            igdb_platform_slug = platform_mapping[3]  # igdb_slug from mapping
+                            igdb_platform_slug = platform_mapping[4]  # igdb_slug from mapping
                         
                         # Pass platform slug for filtering if available
                         igdb_matches = await self.igdb.search_game(game, igdb_platform_slug)
@@ -3353,6 +3399,32 @@ class Request(commands.Cog):
                         await ctx.respond(embed=embed, ephemeral=True)
                     return
 
+                # PRE-FETCH platform status for all requests
+                platform_status = {}
+                for req in requests:
+                    platform_mapping_id = req[14] if len(req) > 14 else None
+                    if platform_mapping_id and platform_mapping_id not in platform_status:
+                        cursor = await db.execute(
+                            "SELECT in_romm FROM platform_mappings WHERE id = ?",
+                            (platform_mapping_id,)
+                        )
+                        result = await cursor.fetchone()
+                        platform_status[platform_mapping_id] = bool(result[0]) if result else False
+                        
+                    # Also check by name for fallback
+                    if not platform_mapping_id or platform_mapping_id not in platform_status:
+                        platform_name = req[3]
+                        if f"name:{platform_name}" not in platform_status:
+                            cursor = await db.execute(
+                                "SELECT in_romm FROM platform_mappings WHERE LOWER(display_name) = LOWER(?)",
+                                (platform_name,)
+                            )
+                            result = await cursor.fetchone()
+                            platform_status[f"name:{platform_name}"] = bool(result[0]) if result else False
+                
+                logger.info(f"DEBUG: Cached platform statuses: {platform_status}")
+                logger.info(f"DEBUG: First request platform: req[3]='{requests[0][3]}', mapping_id={requests[0][14] if len(requests[0]) > 14 else None}")
+                
                 # Count statuses for summary
                 status_counts = {
                     'pending': 0,
@@ -3367,6 +3439,7 @@ class Request(commands.Cog):
 
                 # Create paginated view
                 view = UserRequestsView(self.bot, requests, ctx.author.id, self.bot.db)
+                view.platform_status = platform_status
                 embed = view.create_request_embed(requests[0])
                 
                 # Build status summary
@@ -3450,8 +3523,35 @@ class Request(commands.Cog):
                         await ctx.respond(embed=embed)
                     return
 
+                # PRE-FETCH platform status for all requests
+                platform_status = {}
+                for req in requests:
+                    platform_mapping_id = req[14] if len(req) > 14 else None
+                    if platform_mapping_id and platform_mapping_id not in platform_status:
+                        cursor = await db.execute(
+                            "SELECT in_romm FROM platform_mappings WHERE id = ?",
+                            (platform_mapping_id,)
+                        )
+                        result = await cursor.fetchone()
+                        platform_status[platform_mapping_id] = bool(result[0]) if result else False
+                        
+                    # Also check by name for fallback
+                    if not platform_mapping_id or platform_mapping_id not in platform_status:
+                        platform_name = req[3]
+                        if f"name:{platform_name}" not in platform_status:
+                            cursor = await db.execute(
+                                "SELECT in_romm FROM platform_mappings WHERE LOWER(display_name) = LOWER(?)",
+                                (platform_name,)
+                            )
+                            result = await cursor.fetchone()
+                            platform_status[f"name:{platform_name}"] = bool(result[0]) if result else False
+                
+                logger.info(f"DEBUG: Cached platform statuses: {platform_status}")
+                logger.info(f"DEBUG: First request platform: req[3]='{requests[0][3]}', mapping_id={requests[0][14] if len(requests[0]) > 14 else None}")
+                
                 # Create paginated view
                 view = RequestAdminView(self.bot, requests, ctx.author.id, self.bot.db)
+                view.platform_status = platform_status
                 
                 # Fetch user avatar for the first request
                 user_avatar_url = None
