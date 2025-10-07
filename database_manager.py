@@ -314,12 +314,15 @@ class MasterDatabase:
                                 platform_count = 0
                                 for platform in platforms:
                                     try:
-                                        await new_db.execute(
-                                            """INSERT OR REPLACE INTO platform_mappings 
-                                            (display_name, folder_name, igdb_slug, moby_slug, in_romm, romm_id)
-                                            VALUES (?, ?, ?, ?, ?, ?)""",
-                                            platform
-                                        )
+                                        await db.execute('''
+                                            INSERT INTO platform_mappings 
+                                            (display_name, folder_name, igdb_slug, moby_slug)
+                                            VALUES (?, ?, ?, ?)
+                                            ON CONFLICT(display_name) DO UPDATE SET
+                                                folder_name = excluded.folder_name,
+                                                igdb_slug = excluded.igdb_slug,
+                                                moby_slug = excluded.moby_slug
+                                        ''', (...))
                                         platform_count += 1
                                     except Exception as e:
                                         logger.warning(f"Failed to migrate platform: {e}")
@@ -760,14 +763,18 @@ class MasterDatabase:
                     await db.execute("PRAGMA busy_timeout=10000")
                     
                     # Reset all platforms to not in romm
-                    await db.execute("UPDATE platform_mappings SET in_romm = 0")
+                    # await db.execute("UPDATE platform_mappings SET in_romm = 0")
                     
                     # Insert/update platforms
                     for platform in master_platforms:
                         await db.execute('''
-                            INSERT OR REPLACE INTO platform_mappings 
+                            INSERT INTO platform_mappings 
                             (display_name, folder_name, igdb_slug, moby_slug)
                             VALUES (?, ?, ?, ?)
+                            ON CONFLICT(display_name) DO UPDATE SET
+                                folder_name = excluded.folder_name,
+                                igdb_slug = excluded.igdb_slug,
+                                moby_slug = excluded.moby_slug
                         ''', (
                             platform['display_name'],
                             platform['folder_name'],
