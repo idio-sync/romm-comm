@@ -100,7 +100,7 @@ class SocketIOManager:
             
             for attempt in range(max_retries):
                 try:
-                    logger.info(f"SocketIO Manager connecting (attempt {attempt + 1}/{max_retries})...")
+                    logger.debug(f"SocketIO Manager connecting (attempt {attempt + 1}/{max_retries})...")
                     
                     base_url = self.config.API_BASE_URL.rstrip('/')
                     auth_string = f"{self.config.USER}:{self.config.PASS}"
@@ -536,20 +536,39 @@ class RommBot(discord.Bot):
             )
 
     def is_admin(self, user):
-        """Check if user is admin - auto-detects if ADMIN_ID is user or role"""
+        """Check if user is admin"""
+        logger.debug(f"Checking admin for user: {user} (ID: {user.id})")
+        logger.debug(f"Config ADMIN_ID: '{self.config.ADMIN_ID}' (type: {type(self.config.ADMIN_ID)})")
+        
         if not self.config.ADMIN_ID:
+            logger.debug("ADMIN_ID is not set or empty")
             return False
         
-        # First check if it's the user's ID
-        if str(user.id) == self.config.ADMIN_ID:
+        # Check user ID
+        user_id_str = str(user.id)
+        logger.debug(f"User ID as string: '{user_id_str}'")
+        logger.debug(f"Comparing: '{user_id_str}' == '{self.config.ADMIN_ID}'")
+        
+        if user_id_str == self.config.ADMIN_ID:
+            logger.debug(f"✓ User ID match! User {user} is admin")
             return True
+        else:
+            logger.debug(f"✗ User ID does not match")
         
-        # Then check if it's one of their role IDs (if in a guild)
+        # Check roles if user has them
         if hasattr(user, 'roles'):
+            logger.debug(f"User has {len(user.roles)} roles")
             for role in user.roles:
-                if str(role.id) == self.config.ADMIN_ID:
+                role_id_str = str(role.id)
+                logger.debug(f"Checking role: {role.name} (ID: {role_id_str})")
+                if role_id_str == self.config.ADMIN_ID:
+                    logger.debug(f"✓ Role match! User {user} has admin role {role.name}")
                     return True
+            logger.debug("✗ No matching admin role found")
+        else:
+            logger.debug("User has no roles attribute (might be in DMs)")
         
+        logger.debug(f"✗ User {user} is NOT admin")
         return False
     
     async def before_slash_command_invoke(self, ctx: discord.ApplicationContext):
@@ -615,7 +634,7 @@ class RommBot(discord.Bot):
                 logger.warning("Failed to obtain OAuth tokens, some features may not work")
             else:
                 logger.info("✅ OAuth tokens initialized successfully")
-                            
+                                       
         except Exception as e:
             logger.error("=" * 50)
             logger.error(f"SETUP HOOK FAILED: {e}")
@@ -1045,5 +1064,3 @@ if __name__ == "__main__":
         logger.info("Bot shutting down...")
     except Exception as e:
         logger.error("Error running bot:", exc_info=True)
-
-
