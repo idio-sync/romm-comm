@@ -249,9 +249,7 @@ Add the below variables to your .env to enable:
 GGREQUESTZ_ENABLED=true
 GGREQUESTZ_URL=http://ip:port
 GGREQUESTZ_API_KEY=ggr_api_key
-
 ```
-
 ---
 
 ## User Manager
@@ -301,6 +299,7 @@ GGREQUESTZ_API_KEY=ggr_api_key
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
