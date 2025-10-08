@@ -582,6 +582,18 @@
     "moby_slug": "windows"
   },
   {
+    "display_name": "PC - Win3X)",
+    "folder_name": "win3x",
+    "igdb_slug": "win",
+    "moby_slug": "windows"
+  },
+  {
+    "display_name": "PC - Windows)",
+    "folder_name": "win",
+    "igdb_slug": "win",
+    "moby_slug": "windows"
+  },
+  {
     "display_name": "PC Engine SuperGrafx",
     "folder_name": "supergrafx",
     "igdb_slug": "supergrafx",
@@ -592,6 +604,12 @@
     "folder_name": "pc-50x-family",
     "igdb_slug": "pc-50x-family",
     "moby_slug": null
+  },
+  {
+    "display_name": "PC-6001",
+    "folder_name": "pc-6001",
+    "igdb_slug": null,
+    "moby_slug": "pc-6001"
   },
   {
     "display_name": "PC-8800 Series",
@@ -900,6 +918,12 @@
     "moby_slug": "browser"
   },
   {
+    "display_name": "Browser (Flash/HTML5)",
+    "folder_name": "browser",
+    "igdb_slug": "browser",
+    "moby_slug": "browser"
+  },
+  {
     "display_name": "Wii",
     "folder_name": "wii",
     "igdb_slug": "wii",
@@ -984,4 +1008,5 @@
     "moby_slug": null
   }
 ]
+
 
