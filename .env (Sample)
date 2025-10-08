@@ -22,7 +22,12 @@ RECENT_ROMS_MAX_PER_POST=10               # How many ROM name rows should displa
 RECENT_ROMS_BULK_THRESHOLD=25             # How many ROM name rows are displayed before platform/Rom # summary shows (default: 25)
 SHOW_API_SUCCESS=FALSE                    # Bot will send a message to channel below with status of API updates (mainly for debugging connection issues to Romm)
 CHANNEL_ID=YOURCHANNELID                  # Where the bot will post API and user manager role assignment updates (if enabled above)
+GGREQUESTZ_ENABLED=FALSE                  # Weather or not GGR is enabled (default: false)
+GGREQUESTZ_URL=http://ip:port             # Your GGR URL (IP and port)
+GGREQUESTZ_API_KEY=ggr_your_ggr_key       # Your properly scoped GGR API key
+LOG_LEVEL=INFO                            # Log Level for debugging
 SYNC_RATE=3600                            # How often to sync with API in seconds (default: 3600)
 CACHE_TTL=3900                            # Cache time-to-live in seconds, set over an hour in case there is a delay in the automatic refresh (default: 3900)
 API_TIMEOUT=10                            # API request timeout in seconds (default: 10)
+
 
