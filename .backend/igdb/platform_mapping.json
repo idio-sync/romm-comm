@@ -582,13 +582,13 @@
     "moby_slug": "windows"
   },
   {
-    "display_name": "PC - Win3X)",
+    "display_name": "PC - Win3X",
     "folder_name": "win3x",
     "igdb_slug": "win",
     "moby_slug": "windows"
   },
   {
-    "display_name": "PC - Windows)",
+    "display_name": "PC - Windows",
     "folder_name": "win",
     "igdb_slug": "win",
     "moby_slug": "windows"
@@ -1008,5 +1008,6 @@
     "moby_slug": null
   }
 ]
+
 
 
