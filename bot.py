@@ -646,6 +646,7 @@ class RommBot(discord.Bot):
         """Load all cogs."""
         core_cogs = [
             'cogs.emoji_manager', 
+            'cogs.igdb_client',
             'cogs.info', 
             'cogs.search', 
             'cogs.scan', 
@@ -657,6 +658,7 @@ class RommBot(discord.Bot):
         # Dependencies for each cog
         cog_dependencies = {
             'cogs.emoji_manager': ['aiohttp'],
+            'cogs.igdb_client': [],
             'cogs.info': [],
             'cogs.search': ['aiohttp','qrcode'],
             'cogs.scan': ['socketio'],
@@ -1064,3 +1066,5 @@ if __name__ == "__main__":
         logger.info("Bot shutting down...")
     except Exception as e:
         logger.error("Error running bot:", exc_info=True)
+
+
