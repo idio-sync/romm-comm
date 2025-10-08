@@ -2794,7 +2794,7 @@ class Request(commands.Cog):
     
     async def process_request_with_platform(self, ctx_or_interaction, platform_display_name, 
                                        game, details, selected_game, message, 
-                                       mapping_id, platform_exists):
+                                       mapping_id, platform_exists, send_response: bool = True):
         """Process and save the request with platform mapping"""
         try:
             # Handle both ctx and interaction objects
@@ -2855,8 +2855,126 @@ class Request(commands.Cog):
                     )
                     existing_requests = await cursor.fetchall()
                     
-                    # Check for existing/duplicate requests...
-                    # (existing duplicate checking code - keeping it as is)
+                    # Check if user already requested this game
+                    existing_request_id = None
+                    user_already_requested = False
+                    original_requester_id = None
+                    original_requester_name = None
+                    
+                    for req_id, req_user_id, req_username, req_game, req_igdb_id in existing_requests:
+                        # If IGDB IDs match, it's definitely the same game
+                        if igdb_id and req_igdb_id and igdb_id == req_igdb_id:
+                            existing_request_id = req_id
+                            original_requester_id = req_user_id
+                            original_requester_name = req_username
+                            
+                            if req_user_id == author.id:
+                                user_already_requested = True
+                                break
+                        # Otherwise use name similarity
+                        elif self.calculate_similarity(game.lower(), req_game.lower()) > 0.8:
+                            existing_request_id = req_id
+                            original_requester_id = req_user_id
+                            original_requester_name = req_username
+                            
+                            if req_user_id == author.id:
+                                user_already_requested = True
+                                break
+                        
+                        # Check if user is already a subscriber
+                        if existing_request_id:
+                            cursor = await db.execute(
+                                """
+                                SELECT COUNT(*) FROM request_subscribers 
+                                WHERE request_id = ? AND user_id = ?
+                                """,
+                                (req_id, author.id)
+                            )
+                            is_subscriber = (await cursor.fetchone())[0] > 0
+                            
+                            if is_subscriber:
+                                user_already_requested = True
+                            break
+                    
+                    # If user has already requested this game
+                    if user_already_requested:
+                        if send_response:
+                            embed = discord.Embed(
+                                title="📋 Already Requested",
+                                description="You have already requested this game.",
+                                color=discord.Color.orange()
+                            )
+                            
+                            search_cog = self.bot.get_cog('Search')
+                            platform_display = platform_display_name
+                            if search_cog:
+                                platform_display = search_cog.get_platform_with_emoji(platform_display_name)
+                            
+                            embed.add_field(name="Game", value=game, inline=True)
+                            embed.add_field(name="Platform", value=platform_display, inline=True)
+                            embed.add_field(name="Request ID", value=f"#{existing_request_id}", inline=True)
+                            embed.add_field(name="Status", value="⏳ Still Pending", inline=True)
+                            
+                            embed.set_footer(text="You'll receive a DM when this game is added to the collection")
+                            
+                            if selected_game and selected_game.get('cover_url'):
+                                embed.set_thumbnail(url=selected_game['cover_url'])
+                            else:
+                                embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
+                            
+                            await respond(embed=embed)
+                        return
+                    
+                    # If someone else has requested this game
+                    if existing_request_id and author.id != original_requester_id:
+                        # Add user as a subscriber to existing request
+                        await db.execute(
+                            """
+                            INSERT INTO request_subscribers (request_id, user_id, username)
+                            VALUES (?, ?, ?)
+                            """,
+                            (existing_request_id, author.id, author_name)
+                        )
+                        await db.commit()
+                        
+                        # Count total subscribers
+                        cursor = await db.execute(
+                            "SELECT COUNT(*) FROM request_subscribers WHERE request_id = ?",
+                            (existing_request_id,)
+                        )
+                        subscriber_count = (await cursor.fetchone())[0]
+                        
+                        if send_response:
+                            embed = discord.Embed(
+                                title="📋 Request Already Exists",
+                                description=f"This game has already been requested by **{original_requester_name}**",
+                                color=discord.Color.blue()
+                            )
+                            
+                            search_cog = self.bot.get_cog('Search')
+                            platform_display = platform_display_name
+                            if search_cog:
+                                platform_display = search_cog.get_platform_with_emoji(platform_display_name)
+                            
+                            embed.add_field(name="Game", value=game, inline=True)
+                            embed.add_field(name="Platform", value=platform_display, inline=True)
+                            embed.add_field(name="Request ID", value=f"#{existing_request_id}", inline=True)
+                            
+                            embed.add_field(
+                                name="✅ You've been added to the notification list",
+                                value=f"You and {subscriber_count} other user(s) will be notified when this request is fulfilled.",
+                                inline=False
+                            )
+                            
+                            if selected_game and selected_game.get('cover_url'):
+                                embed.set_thumbnail(url=selected_game['cover_url'])
+                            else:
+                                embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
+                            
+                            embed.set_footer(text="You'll receive a DM when this game is added to the collection")
+                            
+                            await respond(embed=embed)
+                        return
                 
                 # Check user's pending request limit
                 cursor = await db.execute(
@@ -2866,7 +2984,8 @@ class Request(commands.Cog):
                 pending_count = (await cursor.fetchone())[0]
 
                 if pending_count >= 25:
-                    await respond(content="❌ You already have 25 pending requests. Please wait for them to be fulfilled or cancel some.")
+                    if send_response:
+                        await respond(content="❌ You already have 25 pending requests. Please wait for them to be fulfilled or cancel some.")
                     return
 
                 # Store user's additional details separately (for local DB)
@@ -2959,52 +3078,57 @@ class Request(commands.Cog):
                     
                     await message.edit(embed=embed)
                 else:
-                    # Create basic embed for manual submissions
-                    embed = discord.Embed(
-                        title=f"✅ Request Submitted",
-                        description=f"Your request for **{game}** has been submitted!",
-                        color=discord.Color.green()
-                    )
-                    
-                    search_cog = self.bot.get_cog('Search')
-                    platform_display = platform_display_name
-                    if search_cog and platform_exists:
-                        platform_display = search_cog.get_platform_with_emoji(platform_display_name)
-                    
-                    platform_status = "✅ Available" if platform_exists else "🆕 Not Yet Added"
-                    
-                    embed.add_field(name="Game", value=game, inline=True)
-                    embed.add_field(name="Platform", value=f"{platform_display}\n{platform_status}", inline=True)
-                    embed.add_field(name="Status", value="⏳ Pending", inline=True)
-                    embed.add_field(name="Request ID", value=f"#{request_id}", inline=True)
-                    
-                    if not platform_exists:
-                        embed.add_field(
-                            name="📝 Note",
-                            value="This platform needs to be added to the collection before this request can be fulfilled.",
-                            inline=False
+                    if send_response:
+                        # Create basic embed for manual submissions
+                        embed = discord.Embed(
+                            title=f"✅ Request Submitted",
+                            description=f"Your request for **{game}** has been submitted!",
+                            color=discord.Color.green()
                         )
-                    
-                    if user_details and "IGDB Metadata:" not in user_details:
-                        embed.add_field(name="Details", value=user_details[:1024], inline=False)
-                    
-                    embed.set_footer(text=f"Request submitted by {author_name}")
-                    embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
-                    
-                    await respond(embed=embed)
+                        
+                        search_cog = self.bot.get_cog('Search')
+                        platform_display = platform_display_name
+                        if search_cog and platform_exists:
+                            platform_display = search_cog.get_platform_with_emoji(platform_display_name)
+                        
+                        platform_status = "✅ Available" if platform_exists else "🆕 Not Yet Added"
+                        
+                        embed.add_field(name="Game", value=game, inline=True)
+                        embed.add_field(name="Platform", value=f"{platform_display}\n{platform_status}", inline=True)
+                        embed.add_field(name="Status", value="⏳ Pending", inline=True)
+                        embed.add_field(name="Request ID", value=f"#{request_id}", inline=True)
+                        
+                        if not platform_exists:
+                            embed.add_field(
+                                name="📝 Note",
+                                value="This platform needs to be added to the collection before this request can be fulfilled.",
+                                inline=False
+                            )
+                        
+                        if user_details and "IGDB Metadata:" not in user_details:
+                            embed.add_field(name="Details", value=user_details[:1024], inline=False)
+                        
+                        embed.set_footer(text=f"Request submitted by {author_name}")
+                        embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
+                        
+                        await respond(embed=embed)
+                
+                return request_id
 
         except Exception as e:
             logger.error(f"Error processing request: {e}")
-            try:
-                if 'respond' in locals():
-                    await respond(content="❌ An error occurred while processing the request.")
-                else:
-                    if hasattr(ctx_or_interaction, 'user'):
-                        await ctx_or_interaction.followup.send("❌ An error occurred while processing the request.")
+            if send_response:
+                try:
+                    if 'respond' in locals():
+                        await respond(content="❌ An error occurred while processing the request.")
                     else:
-                        await ctx_or_interaction.respond("❌ An error occurred while processing the request.")
-            except Exception as error_e:
-                logger.error(f"Could not send error message to user: {error_e}")
+                        if hasattr(ctx_or_interaction, 'user'):
+                            await ctx_or_interaction.followup.send("❌ An error occurred while processing the request.")
+                        else:
+                            await ctx_or_interaction.respond("❌ An error occurred while processing the request.")
+                except Exception as error_e:
+                    logger.error(f"Could not send error message to user: {error_e}")
+            return None
         
     async def get_request_igdb_data(self, request_id: int) -> Optional[Dict]:
         """Retrieve IGDB data for a request if IGDB ID was stored"""
