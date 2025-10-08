@@ -133,8 +133,7 @@ RECENT_ROMS_MAX_PER_POST=10
 RECENT_ROMS_BULK_THRESHOLD=25
 GGREQUESTZ_ENABLED=false
 GGREQUESTZ_URL=http://ip:port
-GGREQUESTZ_USERNAME=your_username
-GGREQUESTZ_PASSWORD=your_password
+GGREQUESTZ_API_KEY=ggr_api_key
 
 ```
 
@@ -158,7 +157,7 @@ GGREQUESTZ_PASSWORD=your_password
 - `RECENT_ROMS_*` — Controls for recent-ROM posting (enabled, channel id, thresholds).
 - `GGREQUESTZ_ENABLED` — Enable GGrrequestz for request managmenet (default: false).
 - `GGREQUESTZ_URL` — Base URL for your GGRequestz instance (use `http://ip:port` or a domain).
-- `GGREQUESTZ_USERNAME` / `GGREQUESTZ_PASSWORD`  — Your GGRequestz credentials.
+- `GGREQUESTZ_API_KEY`  — Your GGRequestz API key (properly scoped).
 
 ---
 
@@ -249,8 +248,8 @@ Add the below variables to your .env to enable:
 ```
 GGREQUESTZ_ENABLED=true
 GGREQUESTZ_URL=http://ip:port
-GGREQUESTZ_USERNAME=your_username
-GGREQUESTZ_PASSWORD=your_password
+GGREQUESTZ_API_KEY=ggr_api_key
+
 ```
 
 ---
@@ -302,6 +301,7 @@ GGREQUESTZ_PASSWORD=your_password
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
