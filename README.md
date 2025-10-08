@@ -169,6 +169,7 @@ GGREQUESTZ_API_KEY=ggr_api_key
 - `/firmware [platform]` — List firmware files with hash details and download links.
 - `/scan [option]` — Run or check scans (admin only): `full`, `platform`, `stop`, `status`, `unidentified`, `hashes`, `new_platforms`, `partial`, `summary`.
 - `/platforms` — Display all available platforms with their ROM counts.
+- `/igdb [option]` — View list of games from IGDB: `upcoming`, `recent`, `popular`, or `exclusive`, generally or by platform with option to request.
 - `/user_manager` — Manage Romm and Discord users (linking, new account prompting, etc.) (admin only).
 - `/refresh_recent_metadata` — Refresh recently added game notifiction metadata/covers (admin only).
 
@@ -299,6 +300,7 @@ GGREQUESTZ_API_KEY=ggr_api_key
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
