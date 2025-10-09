@@ -116,6 +116,7 @@ gog|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backe
 hash|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/link-hasheous.png
 igdb|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/link-igdb.png
 lauchbox|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/link-launchbox.png
+pcgw|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/pcgw.png
 retroachievements|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/link-RA.png
 romm|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/link-romm.png
 steam|https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/steam.png
