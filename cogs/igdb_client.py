@@ -209,6 +209,37 @@ class IGDBClient:
             logger.error(f"Error searching IGDB: {e}")
             return []
 
+    async def get_game_by_id(self, igdb_id: int) -> Dict | None:
+        """Fetch a single game by IGDB ID with external_games data"""
+        if not await self.get_access_token():
+            return None
+        
+        session = await self.ensure_session()
+        headers = {
+            "Client-ID": self.client_id,
+            "Authorization": f"Bearer {self.access_token}"
+        }
+        
+        url = "https://api.igdb.com/v4/games"
+        
+        # Query for this specific game with external_games
+        query = (
+            f'fields name,platforms.name,external_games.*; '
+            f'where id = {igdb_id}; '
+            f'limit 1;'
+        )
+        
+        try:
+            async with session.post(url, headers=headers, data=query) as response:
+                if response.status == 200:
+                    games = await response.json()
+                    if games:
+                        return self._process_games_response(games)[0]
+                return None
+        except Exception as e:
+            logger.error(f"Error fetching game by ID {igdb_id}: {e}")
+            return None
+    
     async def _perform_igdb_search(self, session: aiohttp.ClientSession, headers: dict, 
                                   search_term: str, platform_id: Optional[int] = None) -> List[Dict]:
         """Perform a single IGDB search"""
@@ -220,7 +251,7 @@ class IGDBClient:
                 f'search "{search_term}"; '
                 'fields name,alternative_names.name,platforms.name,first_release_date,'
                 'summary,cover.url,game_modes.name,genres.name,involved_companies.company.name,'
-                'involved_companies.developer,involved_companies.publisher;'
+                'involved_companies.developer,involved_companies.publisher,external_games.*;'
             )
             
             # Add platform filter if we have a valid platform ID
@@ -384,6 +415,18 @@ class IGDBClient:
                 else:
                     logger.debug(f"No websites field for {game.get('name')}")
 
+                # Extract Steam and GOG IDs from external_games
+                steam_id = None
+                gog_id = None
+                if "external_games" in game:
+                    for external in game["external_games"]:
+                        category = external.get("category")
+                        # Category 1 = Steam, Category 5 = GOG
+                        if category == 1:  # Steam
+                            steam_id = external.get("uid")
+                        elif category == 5:  # GOG
+                            gog_id = external.get("uid")
+                
                 processed_game = {
                     "id": game.get("id"),
                     "name": game.get("name", "Unknown"),
@@ -399,7 +442,9 @@ class IGDBClient:
                     "websites": websites,
                     "rating": game.get("rating"),
                     "rating_count": game.get("rating_count"),
-                    "hypes": game.get("hypes")
+                    "hypes": game.get("hypes"),
+                    "steam_id": steam_id,
+                    "gog_id": gog_id       
                 }
                 processed_games.append(processed_game)
 
@@ -1463,7 +1508,7 @@ class IGDBHandler(commands.Cog):
             
             # Build query for upcoming games - USE hypes field for anticipation
             query = (
-                f'fields name,first_release_date,cover.url,platforms.name,genres.name,summary,websites.*,rating,rating_count,hypes; '  # <-- CHANGED to hypes
+                f'fields name,first_release_date,cover.url,platforms.name,genres.name,summary,websites.*,external_games.*,rating,rating_count,hypes; '
                 f'where first_release_date > {now} & first_release_date < {one_year_later}'
             )
             
@@ -1515,7 +1560,7 @@ class IGDBHandler(commands.Cog):
             
             # Build query for recent games - ADD RATING FILTER LIKE POPULAR
             query = (
-                f'fields name,first_release_date,cover.url,platforms.name,genres.name,summary,websites.*,rating,rating_count; '
+                f'fields name,first_release_date,cover.url,platforms.name,genres.name,summary,websites.*,external_games.*,rating,rating_count; '
                 f'where first_release_date > {three_months_ago} & first_release_date < {now}'
                 f' & rating != null & rating_count > 2'
             )
@@ -1561,7 +1606,7 @@ class IGDBHandler(commands.Cog):
             # Build query for popular games (using rating and rating_count)
             # websites.* expands the websites relationship
             query = (
-                'fields name,first_release_date,cover.url,platforms.name,rating,rating_count,genres.name,summary,websites.*; '
+                'fields name,first_release_date,cover.url,platforms.name,rating,rating_count,genres.name,summary,websites.*,external_games.*; '
                 'where rating != null & rating_count > 50'
             )
             
@@ -1618,7 +1663,7 @@ class IGDBHandler(commands.Cog):
             # Query for games on this platform with ratings
             # We'll fetch more than needed and filter for exclusives in Python
             query = (
-                f'fields name,first_release_date,cover.url,platforms.name,genres.name,summary,websites.*,rating,rating_count; '
+                f'fields name,first_release_date,cover.url,platforms.name,genres.name,summary,websites.*,external_games.*,rating,rating_count; '
                 f'where platforms = [{platform_id}]'
               # f' & rating != null & rating_count > 1'
             )
