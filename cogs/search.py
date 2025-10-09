@@ -74,7 +74,7 @@ class ROM_View(discord.ui.View):
                 value=str(rom['id']),
                 description=description
             )
-        
+
         self.select.callback = self.select_callback
         self.add_item(self.select)
 
@@ -271,10 +271,19 @@ class ROM_View(discord.ui.View):
                 
                 embed.add_field(name="Companies", value=companies_str, inline=True)
             
+            # Check if this is a PC platform and get PCGamingWiki link
+            pcgw_url = None
+            if platform_name and self.is_pc_platform(platform_name):
+                # Get IGDB ID directly from ROM data
+                igdb_id = rom_data.get('igdb_id')
+                
+                if igdb_id:
+                    game_name = rom_data.get('name', '')
+                    pcgw_url = await self.get_pcgamingwiki_url(igdb_id, game_name)
+            
             # Build the links section with two rows
             romm_emoji = self.bot.get_formatted_emoji('romm')
             igdb_emoji = self.bot.get_formatted_emoji('igdb')
-            ra_emoji = self.bot.get_formatted_emoji('retroachievements')
             launchbox_emoji = self.bot.get_formatted_emoji('launchbox')
             hash_emoji = self.bot.get_formatted_emoji('hash')
 
@@ -291,12 +300,23 @@ class ROM_View(discord.ui.View):
                 top_row_links.append(f"[**{youtube_emoji} Trailer**]({youtube_url})")
 
             # Build the final links value
-            links_value = " ".join(top_row_links)
+            links_value = " ".join(top_row_links)
 
-            # Add achievements on second row if available
+            # Second row - add achievements and/or PCGamingWiki if available
+            second_row_links = []
+
             if ra_id := rom_data.get('ra_id'):
+                ra_emoji = self.bot.get_formatted_emoji('retroachievements')
                 ra_url = f"https://retroachievements.org/game/{ra_id}"
-                links_value += f"\n[**{ra_emoji} Achievements**]({ra_url})"
+                second_row_links.append(f"[**{ra_emoji} Achievements**]({ra_url})")
+
+            if pcgw_url:
+                pcgw_emoji = self.bot.get_formatted_emoji('pcgw')
+                second_row_links.append(f"[**{pcgw_emoji} PCGWiki**]({pcgw_url})")
+
+            # Add second row if there's anything to show
+            if second_row_links:
+                links_value += "\n" + " ".join(second_row_links)
 
             # Add the field to embed
             embed.add_field(name="Links", value=links_value, inline=True)
@@ -996,6 +1016,59 @@ class ROM_View(discord.ui.View):
         )    
     
     
+    def is_pc_platform(self, platform_name: str) -> bool:
+        """Check if the platform is a PC platform"""
+        pc_platforms = [
+            "PC (Microsoft Windows)",
+            "PC - Windows", 
+            "PC - Win3X",
+            "PC - DOS",
+            "Windows",
+            "DOS",
+            "Win"
+        ]
+        return any(pc_plat.lower() in platform_name.lower() for pc_plat in pc_platforms)
+
+    async def get_pcgamingwiki_url(self, igdb_id: int, game_name: str) -> str | None:
+        """Get PCGamingWiki URL using Steam/GOG ID or fallback to name"""
+        # Try to get IGDB data with external_games
+        igdb_handler = self.bot.get_cog('IGDBHandler')
+        if not igdb_handler or not igdb_handler.igdb:
+            return self._build_pcgw_fallback_url(game_name)
+        
+        try:
+            # Fetch game data with external_games
+            game_data = await igdb_handler.igdb.get_game_by_id(igdb_id)
+            
+            if game_data:
+                steam_id = game_data.get('steam_id')
+                gog_id = game_data.get('gog_id')
+                
+                # Primary: Use Steam ID redirect
+                if steam_id:
+                    return f"https://www.pcgamingwiki.com/api/appid.php?appid={steam_id}"
+                
+                # Secondary: Use GOG ID redirect
+                if gog_id:
+                    return f"https://www.pcgamingwiki.com/api/gog.php?id={gog_id}"
+            
+            # Fallback to name-based URL
+            return self._build_pcgw_fallback_url(game_name)
+            
+        except Exception as e:
+            logger.error(f"Error getting PCGamingWiki URL: {e}")
+            return self._build_pcgw_fallback_url(game_name)
+
+    def _build_pcgw_fallback_url(self, game_name: str) -> str:
+        """Build PCGamingWiki URL from game name"""
+        import re
+        # Sanitize game name for URL
+        sanitized_name = game_name.strip()
+        # Remove special characters, replace spaces with underscores
+        sanitized_name = re.sub(r'[^\w\s-]', '', sanitized_name)
+        sanitized_name = re.sub(r'\s+', '_', sanitized_name)
+        return f"https://www.pcgamingwiki.com/wiki/{sanitized_name}"
+    
     async def select_callback(self, interaction: discord.Interaction):
         """Handle ROM selection"""
         if interaction.user.id != self.author_id:
@@ -1223,6 +1296,7 @@ class Search(commands.Cog):
         self.bot = bot
         self.platform_emoji_names = {}  # Will be populated from API data
         self._emojis_initialized = False
+        
         # Map of common platform name variations
         self.platform_variants = {
             '3DO Interactive Multiplayer': ['3do'],
@@ -1895,6 +1969,6 @@ class Search(commands.Cog):
         except Exception as e:
             logger.error(f"Error in search command: {e}", exc_info=True)
             await ctx.respond("❌ An error occurred while searching for ROMs")
-
+            
 def setup(bot):
     bot.add_cog(Search(bot))
