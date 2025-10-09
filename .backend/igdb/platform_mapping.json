@@ -936,6 +936,12 @@
     "moby_slug": "wii-u"
   },
   {
+    "display_name": "Windows",
+    "folder_name": "win",
+    "igdb_slug": "win",
+    "moby_slug": "windows"
+  },
+  {
     "display_name": "Windows Mobile",
     "folder_name": "windows-mobile",
     "igdb_slug": "windows-mobile",
@@ -1008,6 +1014,7 @@
     "moby_slug": null
   }
 ]
+
 
 
 
