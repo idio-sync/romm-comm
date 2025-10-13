@@ -1,5 +1,5 @@
 # Build stage
-FROM python:3.11-slim AS builder
+FROM python:3.12-slim AS builder
 
 # Set working directory
 WORKDIR /app
@@ -19,7 +19,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Final stage
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 # Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv
