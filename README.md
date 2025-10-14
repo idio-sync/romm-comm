@@ -58,7 +58,7 @@ A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) A
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.12+
 - Python dependancies (see non-Docker installation below)
 
 ---
@@ -300,6 +300,7 @@ GGREQUESTZ_API_KEY=ggr_api_key
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
