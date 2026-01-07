@@ -971,8 +971,19 @@ class UserManagementView(discord.ui.View):
         )
         
         embed.set_footer(text="Changes are applied immediately")
-        
+
         return embed
+
+    async def on_timeout(self):
+        """Disable all components when the view times out"""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass  # Message was deleted or can't be edited
+
 
 class ConfirmView(discord.ui.View):
     """Simple confirmation view"""
@@ -991,6 +1002,11 @@ class ConfirmView(discord.ui.View):
         self.value = False
         await interaction.response.defer()
         self.stop()
+
+    async def on_timeout(self):
+        """Handle timeout - value remains None to indicate no selection"""
+        pass  # value is already None, view stops automatically
+
 
 class UnlinkConfirmView(discord.ui.View):
     """Confirmation view for unlinking with options to keep, disable, or delete RomM account"""
@@ -1025,7 +1041,12 @@ class UnlinkConfirmView(discord.ui.View):
         self.action = None
         await interaction.response.defer()
         self.stop()
-        
+
+    async def on_timeout(self):
+        """Handle timeout - action remains None to indicate no selection"""
+        pass  # action is already None, view stops automatically
+
+
 class UserManager(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
