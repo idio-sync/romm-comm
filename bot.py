@@ -372,7 +372,11 @@ class RommBot(discord.Bot):
             
             async with session.post(token_url, data=data) as response:
                 if response.status == 200:
-                    token_data = await response.json()
+                    try:
+                        token_data = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response when refreshing token: {e}")
+                        return await self.get_oauth_token()
                     self.access_token = token_data.get('access_token')
                     # Refresh token may or may not be returned
                     if 'refresh_token' in token_data:
@@ -876,9 +880,13 @@ class RommBot(discord.Bot):
                 async with session.get(url, headers=headers) as response:
                     logger.debug(f"Response status: {response.status}")
                     logger.debug(f"Response content-type: {response.headers.get('content-type', 'unknown')}")
-                    
+
                     if response.status == 200:
-                        data = await response.json()
+                        try:
+                            data = await response.json()
+                        except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                            logger.error(f"Invalid JSON response from {endpoint}: {e}")
+                            return None
                         logger.debug(f"Fetched fresh data for {endpoint}")
                         self.cache.set(endpoint, data)
                         return data

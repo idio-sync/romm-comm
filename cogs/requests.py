@@ -130,8 +130,8 @@ class RequestAdminView(discord.ui.View):
                 version_request = version_parts[0]
                 if len(version_parts) > 1 and "Additional Notes:" in version_parts[1]:
                     additional_notes = version_parts[1].replace("Additional Notes: ", "").split("\n")[0]
-            except:
-                pass
+            except (IndexError, ValueError):
+                pass  # Parsing failed, use defaults
 
         if "IGDB Metadata:" in details:
             try:
@@ -263,7 +263,7 @@ class RequestAdminView(discord.ui.View):
             try:
                 date_obj = datetime.strptime(game_data["Release Date"], "%Y-%m-%d")
                 formatted_date = date_obj.strftime("%B %d, %Y")
-            except:
+            except ValueError:
                 formatted_date = game_data["Release Date"]
             embed.add_field(
                 name="Release Date",
@@ -367,9 +367,9 @@ class RequestAdminView(discord.ui.View):
                     user_avatar_url = user.avatar.url
                 elif user:
                     user_avatar_url = user.default_avatar.url
-            except:
-                pass
-            
+            except (discord.NotFound, discord.HTTPException):
+                pass  # User not found or API error
+
             embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
             await interaction.response.edit_message(embed=embed, view=self)
     
@@ -393,9 +393,9 @@ class RequestAdminView(discord.ui.View):
                     user_avatar_url = user.avatar.url
                 elif user:
                     user_avatar_url = user.default_avatar.url
-            except:
-                pass
-            
+            except (discord.NotFound, discord.HTTPException):
+                pass  # User not found or API error
+
             embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
             await interaction.response.edit_message(embed=embed, view=self)
     
@@ -467,8 +467,8 @@ class RequestAdminView(discord.ui.View):
 
                     user = await self.bot.fetch_user(current_request[1])
                     await user.send(f"✅ Your request for '{display_game_name}' has been fulfilled!")
-                except:
-                    logger.warning(f"Could not DM user {current_request[1]}")
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
+                    logger.warning(f"Could not DM user {current_request[1]}: {e}")
             
             # Update the request in our list
             updated_request = list(current_request)
@@ -490,9 +490,9 @@ class RequestAdminView(discord.ui.View):
                     user_avatar_url = user.avatar.url
                 elif user:
                     user_avatar_url = user.default_avatar.url
-            except:
-                pass
-            
+            except (discord.NotFound, discord.HTTPException):
+                pass  # User not found or API error
+
             embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
             await interaction.followup.edit_message(message_id=self.message.id, embed=embed, view=self)
             
@@ -582,8 +582,8 @@ class RequestAdminView(discord.ui.View):
                             if reason:
                                 message += f"\nReason: {reason}"
                             await user.send(message)
-                        except:
-                            logger.warning(f"Could not DM user {self.request_data[1]}")
+                        except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
+                            logger.warning(f"Could not DM user {self.request_data[1]}: {e}")
                     
                     # Update the request in our list
                     updated_request = list(self.request_data)
@@ -708,9 +708,9 @@ class RequestAdminView(discord.ui.View):
                         user_avatar_url = user.avatar.url
                     elif user:
                         user_avatar_url = user.default_avatar.url
-                except:
-                    pass
-                
+                except (discord.NotFound, discord.HTTPException):
+                    pass  # User not found or API error
+
                 embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
                 await interaction.followup.edit_message(
                     message_id=self.message.id,
@@ -840,8 +840,8 @@ class UserRequestsView(discord.ui.View):
                 version_request = version_parts[0]
                 if len(version_parts) > 1 and "Additional Notes:" in version_parts[1]:
                     additional_notes = version_parts[1].replace("Additional Notes: ", "").split("\n")[0]
-            except:
-                pass
+            except (IndexError, ValueError):
+                pass  # Parsing failed, use defaults
 
         if "IGDB Metadata:" in details:
             try:
@@ -973,7 +973,7 @@ class UserRequestsView(discord.ui.View):
             try:
                 date_obj = datetime.strptime(game_data["Release Date"], "%Y-%m-%d")
                 formatted_date = date_obj.strftime("%B %d, %Y")
-            except:
+            except ValueError:
                 formatted_date = game_data["Release Date"]
             embed.add_field(
                 name="Release Date",
@@ -1081,9 +1081,9 @@ class UserRequestsView(discord.ui.View):
                     user_avatar_url = user.avatar.url
                 elif user:
                     user_avatar_url = user.default_avatar.url
-            except:
-                pass
-            
+            except (discord.NotFound, discord.HTTPException):
+                pass  # User not found or API error
+
             embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
             await interaction.response.edit_message(embed=embed, view=self)
     
@@ -1107,9 +1107,9 @@ class UserRequestsView(discord.ui.View):
                     user_avatar_url = user.avatar.url
                 elif user:
                     user_avatar_url = user.default_avatar.url
-            except:
-                pass
-            
+            except (discord.NotFound, discord.HTTPException):
+                pass  # User not found or API error
+
             embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
             await interaction.response.edit_message(embed=embed, view=self)
     
@@ -1180,9 +1180,9 @@ class UserRequestsView(discord.ui.View):
                             user_avatar_url = user.avatar.url
                         elif user:
                             user_avatar_url = user.default_avatar.url
-                    except:
-                        pass
-                    
+                    except (discord.NotFound, discord.HTTPException):
+                        pass  # User not found or API error
+
                     # Update view with cancelled status
                     embed = self.view.create_request_embed(self.view.requests[self.view.current_index], user_avatar_url)
                     await modal_interaction.followup.edit_message(
@@ -1262,9 +1262,9 @@ class UserRequestsView(discord.ui.View):
                             user_avatar_url = user.avatar.url
                         elif user:
                             user_avatar_url = user.default_avatar.url
-                    except:
-                        pass
-                    
+                    except (discord.NotFound, discord.HTTPException):
+                        pass  # User not found or API error
+
                     # Update view
                     embed = self.view.create_request_embed(self.view.requests[self.view.current_index], user_avatar_url)
                     await modal_interaction.followup.edit_message(
@@ -1272,7 +1272,7 @@ class UserRequestsView(discord.ui.View):
                         embed=embed,
                         view=self.view
                     )
-                    
+
                     # Send confirmation
                     await modal_interaction.followup.send(
                         "✅ Note updated successfully.",
@@ -1504,7 +1504,7 @@ class GameSelectView(discord.ui.View):
             try:
                 date_obj = datetime.strptime(game['release_date'], "%Y-%m-%d")
                 formatted_date = date_obj.strftime("%B %d, %Y")
-            except:
+            except ValueError:
                 formatted_date = game['release_date']
         else:
             formatted_date = "Unknown"
@@ -3687,8 +3687,8 @@ class Request(commands.Cog):
                         user_avatar_url = user.avatar.url
                     elif user:
                         user_avatar_url = user.default_avatar.url
-                except:
-                    pass
+                except (discord.NotFound, discord.HTTPException):
+                    pass  # User not found or API error
 
                 embed = view.create_request_embed(requests[0], user_avatar_url)  # Pass avatar URL
                 

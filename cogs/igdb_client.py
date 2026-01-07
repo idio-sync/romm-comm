@@ -671,7 +671,7 @@ class IGDBGameView(discord.ui.View):
                 try:
                     date_obj = datetime.strptime(release_date, "%Y-%m-%d")
                     year = date_obj.strftime("%Y")
-                except:
+                except ValueError:
                     year = "Unknown"
             else:
                 year = "TBA"
@@ -748,7 +748,7 @@ class IGDBGameView(discord.ui.View):
                     else:
                         # For popular: just year (2024)
                         formatted_date = date_obj.strftime("%Y")
-                except:
+                except ValueError:
                     formatted_date = "TBA"
             else:
                 formatted_date = "TBA"
@@ -923,11 +923,11 @@ class IGDBGameView(discord.ui.View):
             try:
                 date_obj = datetime.strptime(release_date, "%Y-%m-%d")
                 formatted_date = date_obj.strftime("%B %d, %Y")
-            except:
+            except ValueError:
                 formatted_date = release_date
         else:
             formatted_date = release_date
-        
+
         embed.add_field(
             name="Release Date",
             value=formatted_date,
@@ -1369,7 +1369,7 @@ class IGDBGameView(discord.ui.View):
                     try:
                         date_obj = datetime.strptime(release_date, "%Y-%m-%d")
                         formatted_date = date_obj.strftime("%B %d, %Y")
-                    except:
+                    except ValueError:
                         formatted_date = release_date
                     success_embed.add_field(
                         name="Release Date",
@@ -1771,9 +1771,9 @@ class IGDBHandler(commands.Cog):
                 try:
                     date_obj = datetime.strptime(release_date, "%Y-%m-%d")
                     release_date = date_obj.strftime("%b %d, %Y")
-                except:
-                    pass
-            
+                except ValueError:
+                    pass  # Keep original release_date value
+
             # Create IGDB link
             game_name = game.get('name', 'Unknown')
             igdb_link_name = game_name.lower().replace(' ', '-')

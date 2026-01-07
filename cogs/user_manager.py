@@ -861,7 +861,7 @@ class UserManagementView(discord.ui.View):
                     await interaction.edit_original_response(
                         content=f"Progress: {sent + failed}/{len(members_to_invite)} processed..."
                     )
-                except:
+                except (discord.NotFound, discord.HTTPException):
                     pass  # Ignore if message edit fails
         
         # Final summary
@@ -869,7 +869,7 @@ class UserManagementView(discord.ui.View):
             await interaction.edit_original_response(
                 content=f"✅ Sent: {sent} invites\n❌ Failed: {failed} invites"
             )
-        except:
+        except (discord.NotFound, discord.HTTPException):
             await interaction.followup.send(
                 f"✅ Sent: {sent} invites\n❌ Failed: {failed} invites",
                 ephemeral=True
