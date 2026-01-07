@@ -1084,37 +1084,59 @@ class RecentRomsMonitor(commands.Cog):
                         roms[i].update(result)
             
             # Download all covers in parallel - load as PIL Images immediately
+            # Maximum image dimensions to prevent DoS via oversized images
+            MAX_IMAGE_DIMENSION = 4096  # Max width or height
+            MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10MB max file size
+
             async def download_and_load_cover(rom: Dict) -> Optional[Image.Image]:
                 """Download cover and return loaded PIL Image"""
                 platform_id = rom.get('platform_id')
                 rom_id = rom.get('id')
-                
+
                 if not platform_id or not rom_id:
                     return None
-                
+
                 cover_url = f"{self.bot.config.API_BASE_URL}/assets/romm/resources/roms/{platform_id}/{rom_id}/cover/big.png"
-                
+
                 try:
                     session = await self._ensure_http_session()
 
                     async with session.get(cover_url) as response:
                         if response.status == 200:
+                            # Check content-length header first if available
+                            content_length = response.headers.get('content-length')
+                            if content_length and int(content_length) > MAX_IMAGE_BYTES:
+                                logger.warning(f"Cover image for ROM {rom_id} too large ({content_length} bytes), skipping")
+                                return None
+
                             # Read all data first
                             image_bytes = await response.read()
-                            
+
+                            # Validate downloaded size
+                            if len(image_bytes) > MAX_IMAGE_BYTES:
+                                logger.warning(f"Cover image for ROM {rom_id} too large ({len(image_bytes)} bytes), skipping")
+                                return None
+
                             # Immediately load and decode the complete image
                             # This forces PIL to read ALL image data
                             img = Image.open(BytesIO(image_bytes))
+
+                            # Validate dimensions before loading full image data
+                            if img.width > MAX_IMAGE_DIMENSION or img.height > MAX_IMAGE_DIMENSION:
+                                logger.warning(f"Cover image for ROM {rom_id} dimensions too large ({img.width}x{img.height}), skipping")
+                                img.close()
+                                return None
+
                             img.load()  # Force loading all pixel data into memory
-                            
+
                             # Convert to RGBA for consistency
                             if img.mode != 'RGBA':
                                 img = img.convert('RGBA')
-                            
+
                             return img
                         else:
                             return None
-                            
+
                 except Exception as e:
                     logger.error(f"Error downloading/loading cover for ROM {rom_id}: {e}")
                     return None

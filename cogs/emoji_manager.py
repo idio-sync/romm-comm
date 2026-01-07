@@ -11,23 +11,36 @@ logger = logging.getLogger('romm_bot')
 class EmojiManager(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        
+
         # Different URLs for different emoji sets
         self.emoji_url_list = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/emoji_urls.txt"
         self.emoji_url_list_extended = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/emoji_urls_extended.txt"
         self.emoji_url_list_application = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/emoji/emoji_urls_application.txt"
-        
+
         # Store different emoji types
         self.bot.emoji_dict = {}  # Application emojis (work everywhere)
         self.server_emojis = {}   # Server-specific emojis (per guild)
-        
+
         # Track sync status
         self.app_emoji_synced = False
         self.sync_in_progress = False
         self.db = bot.db  # Database for tracking server sync state
-        
+
+        # Shared HTTP session for emoji downloads (reuse instead of creating per-request)
+        self._http_session: aiohttp.ClientSession = None
+        self._session_lock = asyncio.Lock()
+
         # Start initialization on boot
         bot.loop.create_task(self.initialize_all_emojis())
+
+    async def _ensure_http_session(self) -> aiohttp.ClientSession:
+        """Ensure HTTP session exists and is open"""
+        async with self._session_lock:
+            if self._http_session is None or self._http_session.closed:
+                self._http_session = aiohttp.ClientSession(
+                    timeout=aiohttp.ClientTimeout(total=30)
+                )
+        return self._http_session
 
     async def get_application_emojis(self):
         """Get application emojis using direct HTTP request"""
@@ -180,27 +193,27 @@ class EmojiManager(commands.Cog):
                 
                 logger.info(f"Server {guild.name}: {len(missing_emojis)} missing emojis, {slots_available} slots available")
                 
-                # Upload missing emojis
+                # Upload missing emojis using shared session
                 uploaded = 0
+                session = await self._ensure_http_session()
                 for name, url in missing_emojis[:slots_available]:
                     try:
-                        async with aiohttp.ClientSession() as session:
-                            async with session.get(url) as response:
-                                if response.status == 200:
-                                    image_data = await response.read()
-                                    await guild.create_custom_emoji(
-                                        name=name,
-                                        image=image_data,
-                                        reason="Auto-sync server emojis on boot"
-                                    )
-                                    uploaded += 1
-                                    
-                                    # Update server emoji cache
-                                    if guild.id not in self.server_emojis:
-                                        self.server_emojis[guild.id] = {}
-                                    
-                                    # Rate limiting
-                                    await asyncio.sleep(1.5)
+                        async with session.get(url) as response:
+                            if response.status == 200:
+                                image_data = await response.read()
+                                await guild.create_custom_emoji(
+                                    name=name,
+                                    image=image_data,
+                                    reason="Auto-sync server emojis on boot"
+                                )
+                                uploaded += 1
+
+                                # Update server emoji cache
+                                if guild.id not in self.server_emojis:
+                                    self.server_emojis[guild.id] = {}
+
+                                # Rate limiting
+                                await asyncio.sleep(1.5)
                     except Exception as e:
                         logger.error(f"Error uploading {name} to {guild.name}: {e}")
                 
@@ -242,12 +255,12 @@ class EmojiManager(commands.Cog):
                 url = self.emoji_url_list_extended
             else:  # standard
                 url = self.emoji_url_list
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
-                    if response.status != 200:
-                        return []
-                    content = await response.text()
+
+            session = await self._ensure_http_session()
+            async with session.get(url) as response:
+                if response.status != 200:
+                    return []
+                content = await response.text()
             
             emoji_list = []
             for line in content.splitlines():
@@ -292,16 +305,16 @@ class EmojiManager(commands.Cog):
                 missing_emojis = missing_emojis[:slots_available]
             
             logger.info(f"Uploading {len(missing_emojis)} missing application emojis...")
-            
+
             uploaded = 0
+            session = await self._ensure_http_session()
             for name, url in missing_emojis:
                 try:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(url) as response:
-                            if response.status != 200:
-                                continue
-                            image_data = await response.read()
-                    
+                    async with session.get(url) as response:
+                        if response.status != 200:
+                            continue
+                        image_data = await response.read()
+
                     emoji_data = await self.create_application_emoji(name, image_data)
                     
                     emoji = discord.PartialEmoji(
@@ -400,6 +413,11 @@ class EmojiManager(commands.Cog):
         """When bot joins a new server, sync emojis"""
         logger.info(f"Joined {guild.name}")
         await self.sync_server_emojis(guild)
+
+    def cog_unload(self):
+        """Cleanup when cog is unloaded"""
+        if self._http_session and not self._http_session.closed:
+            asyncio.create_task(self._http_session.close())
 
 def setup(bot):
     bot.add_cog(EmojiManager(bot))

@@ -395,9 +395,12 @@ class RommBot(discord.Bot):
             # Check if token is expired or missing
             if not self.access_token or time.time() >= self.token_expiry:
                 logger.debug("Token expired or missing, refreshing...")
-                if self.refresh_token and time.time() < self.token_expiry + 604800:  # 7 days
+                # Only try refresh token if we have one and access token expired recently (within 1 hour)
+                # This prevents using stale refresh tokens and aligns with typical OAuth best practices
+                if self.refresh_token and time.time() < self.token_expiry + 3600:  # 1 hour grace period
                     return await self.refresh_oauth_token()
                 else:
+                    # Token expired too long ago or no refresh token - get fresh credentials
                     return await self.get_oauth_token()
             return True
     

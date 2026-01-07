@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timedelta
 import os
 import re
+import json
 import discord
 from discord.ext import commands
 
@@ -234,7 +235,11 @@ class IGDBClient:
         try:
             async with session.post(url, headers=headers, data=query) as response:
                 if response.status == 200:
-                    games = await response.json()
+                    try:
+                        games = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response from IGDB for game ID {igdb_id}: {e}")
+                        return None
                     if games:
                         return self._process_games_response(games)[0]
                 return None
@@ -263,16 +268,20 @@ class IGDBClient:
             query += " limit 20;"
             
             logger.debug(f"IGDB query: {query}")
-            
+
             async with session.post(url, headers=headers, data=query) as response:
                 if response.status == 200:
-                    games = await response.json()
+                    try:
+                        games = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response from IGDB for search '{search_term}': {e}")
+                        return []
                     processed_games = self._process_games_response(games)
-                    
+
                     # Get alternative names for better matching
                     if processed_games:
                         await self._fetch_alternative_names(session, headers, processed_games)
-                    
+
                     return processed_games
                 else:
                     logger.debug(f"IGDB search returned status {response.status} for term: {search_term}")

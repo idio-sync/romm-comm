@@ -730,9 +730,12 @@ class MasterDatabase:
             # Fallback to local file
             if not master_platforms:
                 if platforms_file.exists():
-                    with open(platforms_file, 'r') as f:
-                        master_platforms = json.load(f)
-                        logger.info(f"Loaded {len(master_platforms)} platforms from local file")
+                    # Use asyncio to avoid blocking the event loop
+                    def read_platforms_file():
+                        with open(platforms_file, 'r') as f:
+                            return json.load(f)
+                    master_platforms = await asyncio.to_thread(read_platforms_file)
+                    logger.info(f"Loaded {len(master_platforms)} platforms from local file")
                 else:
                     logger.warning("No remote or local platforms found, using defaults")
                     # Create default platforms
@@ -757,10 +760,12 @@ class MasterDatabase:
                         {"display_name": "Arcade", "folder_name": "arcade", "igdb_slug": "arcade", "moby_slug": "arcade"}
                     ]
                     
-                    # Save defaults to file for next time
-                    platforms_file.parent.mkdir(exist_ok=True)
-                    with open(platforms_file, 'w') as f:
-                        json.dump(master_platforms, f, indent=2)
+                    # Save defaults to file for next time (use asyncio to avoid blocking)
+                    def write_platforms_file():
+                        platforms_file.parent.mkdir(exist_ok=True)
+                        with open(platforms_file, 'w') as f:
+                            json.dump(master_platforms, f, indent=2)
+                    await asyncio.to_thread(write_platforms_file)
             
             # Populate database - use direct connection since we're in initialization
             if master_platforms:
