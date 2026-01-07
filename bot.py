@@ -285,11 +285,8 @@ class RommBot(discord.Bot):
         # Add a commands sync flag
         self.synced = False
         
-        # Global cooldown
+        # Global cooldown for slash commands
         self._cd_bucket = commands.CooldownMapping.from_cooldown(1, 60, commands.BucketType.user)
-        
-        # Register error handler
-        self.application_command_error = self.on_application_command_error
         
         # Shared scan state across cogs
         self.scan_state = {
@@ -577,14 +574,16 @@ class RommBot(discord.Bot):
         logger.debug(f"✗ User {user} is NOT admin")
         return False
     
-    async def before_slash_command_invoke(self, ctx: discord.ApplicationContext):
-        """Add cooldown check before any slash command is invoked."""
-        if not await self.is_owner(ctx.author):  # Skip cooldown for bot owner
-            # Use ctx directly for ApplicationContext (slash commands don't have .message)
-            bucket = self._cd_bucket.get_bucket(ctx)
-            retry_after = bucket.update_rate_limit()
-            if retry_after:
-                raise commands.CommandOnCooldown(bucket, retry_after, self._cd_bucket.type)
+    async def slash_cooldown_check(self, ctx: discord.ApplicationContext) -> bool:
+        """Global cooldown check for all slash commands."""
+        if await self.is_owner(ctx.author):  # Skip cooldown for bot owner
+            return True
+        # Use ctx directly for ApplicationContext (slash commands don't have .message)
+        bucket = self._cd_bucket.get_bucket(ctx)
+        retry_after = bucket.update_rate_limit()
+        if retry_after:
+            raise commands.CommandOnCooldown(bucket, retry_after, self._cd_bucket.type)
+        return True
 
     def get_platform_display_name(self, platform_data: Dict) -> str:
         """Get the display name for a platform, preferring custom_name over name."""
@@ -598,7 +597,11 @@ class RommBot(discord.Bot):
     
     async def setup_hook(self):
         """Initialize database and other async resources before bot starts"""
-        try:    
+        try:
+            # Register global error handler and cooldown check for slash commands
+            self.add_listener(self.on_application_command_error)
+            self.add_application_command_check(self.slash_cooldown_check)
+
             # Initialize database FIRST before anything else
             logger.debug("Initializing database...")
             self.db = MasterDatabase()

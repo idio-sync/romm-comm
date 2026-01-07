@@ -426,7 +426,7 @@ class GGRequestzIntegration(commands.Cog):
                             return {"success": True}
                         else:
                             return {"success": False, "error": data.get('error', 'Unknown error')}
-                    except:
+                    except (json.JSONDecodeError, ValueError):
                         return {"success": False, "error": f"Invalid response: {response_text[:100]}"}
                 else:
                     logger.error(f"Rescind failed: {response.status} - {response_text[:200]}")

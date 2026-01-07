@@ -64,6 +64,7 @@ class RecentRomsMonitor(commands.Cog):
         
         # Reusable HTTP session for downloads
         self.http_session: Optional[aiohttp.ClientSession] = None
+        self._session_lock = asyncio.Lock()  # Lock for session creation
         
         # Platform data cache
         self.platform_cache: Optional[Dict] = None
@@ -261,9 +262,7 @@ class RecentRomsMonitor(commands.Cog):
             await self.initialize_igdb()
             
             # Initialize HTTP session for downloads
-            self.http_session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30)
-            )
+            await self._ensure_http_session()
             
             # Setup socket handlers
             self.setup_socket_handlers()
@@ -275,7 +274,16 @@ class RecentRomsMonitor(commands.Cog):
             
         except Exception as e:
             logger.error(f"Error setting up Recent ROMs monitor: {e}", exc_info=True)
-    
+
+    async def _ensure_http_session(self) -> aiohttp.ClientSession:
+        """Ensure HTTP session exists and is open, with proper locking to prevent race conditions"""
+        async with self._session_lock:
+            if not self.http_session or self.http_session.closed:
+                self.http_session = aiohttp.ClientSession(
+                    timeout=aiohttp.ClientTimeout(total=30)
+                )
+        return self.http_session
+
     @tasks.loop(hours=1)
     async def cleanup_task(self):
         """Periodic cleanup of memory"""
@@ -644,10 +652,9 @@ class RecentRomsMonitor(commands.Cog):
         
         for attempt in range(max_retries):
             try:
-                if not self.http_session or self.http_session.closed:
-                    self.http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
-                
-                async with self.http_session.get(cover_url) as response:
+                session = await self._ensure_http_session()
+
+                async with session.get(cover_url) as response:
                     if response.status == 200:
                         image_data = await response.read()
                         byte_arr = BytesIO(image_data)
@@ -1088,10 +1095,9 @@ class RecentRomsMonitor(commands.Cog):
                 cover_url = f"{self.bot.config.API_BASE_URL}/assets/romm/resources/roms/{platform_id}/{rom_id}/cover/big.png"
                 
                 try:
-                    if not self.http_session or self.http_session.closed:
-                        self.http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
-                    
-                    async with self.http_session.get(cover_url) as response:
+                    session = await self._ensure_http_session()
+
+                    async with session.get(cover_url) as response:
                         if response.status == 200:
                             # Read all data first
                             image_bytes = await response.read()

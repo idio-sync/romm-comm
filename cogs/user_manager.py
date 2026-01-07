@@ -1505,12 +1505,14 @@ class UserManager(commands.Cog):
             
             # Return the result
             result = self.temp_storage.get(member.id)
-            self.temp_storage.pop(member.id, None)
             return result
-                
+
         except Exception as e:
             logger.error(f"Error in link_existing_account for {member.display_name}: {e}", exc_info=True)
-            return None    
+            return None
+        finally:
+            # Always clean up temp_storage to prevent memory leak
+            self.temp_storage.pop(member.id, None)    
 
     async def create_user_account(self, member: discord.Member, interactive: bool = True, use_invite: bool = True) -> bool:
         """
