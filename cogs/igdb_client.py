@@ -291,22 +291,26 @@ class IGDBClient:
             logger.error(f"Error in IGDB search for '{search_term}': {e}")
             return []
 
-    async def _fetch_alternative_names(self, session: aiohttp.ClientSession, headers: dict, 
+    async def _fetch_alternative_names(self, session: aiohttp.ClientSession, headers: dict,
                                       processed_games: List[Dict]):
         """Fetch and add alternative names to games"""
         try:
             game_ids = [g["id"] for g in processed_games if "id" in g]
             if not game_ids:
                 return
-                
+
             alt_names_url = "https://api.igdb.com/v4/alternative_names"
             alt_names_query = f"fields name,comment,game; where game = ({','.join(map(str, game_ids))});"
-            
+
             async with session.post(alt_names_url, headers=headers, data=alt_names_query) as response:
                 if response.status == 200:
-                    alt_names_data = await response.json()
+                    try:
+                        alt_names_data = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.debug(f"Invalid JSON response from IGDB for alternative names: {e}")
+                        return
                     self._add_alternative_names(processed_games, alt_names_data)
-                    
+
         except Exception as e:
             logger.debug(f"Error fetching alternative names: {e}")
 

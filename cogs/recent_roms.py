@@ -641,22 +641,50 @@ class RecentRomsMonitor(commands.Cog):
             logger.error(f"Error unmarking ROMs: {e}")
     
     async def download_cover_image_with_retry(self, rom: Dict, max_retries: int = 3) -> Optional[discord.File]:
-        """Download cover image with retry logic"""
+        """Download cover image with retry logic and validation"""
+        # Maximum image constraints to prevent DoS via oversized images
+        MAX_IMAGE_DIMENSION = 4096  # Max width or height
+        MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10MB max file size
+
         platform_id = rom.get('platform_id')
         rom_id = rom.get('id')
-        
+
         if not platform_id or not rom_id:
             return None
-        
+
         cover_url = f"{self.bot.config.API_BASE_URL}/assets/romm/resources/roms/{platform_id}/{rom_id}/cover/big.png"
-        
+
         for attempt in range(max_retries):
             try:
                 session = await self._ensure_http_session()
 
                 async with session.get(cover_url) as response:
                     if response.status == 200:
+                        # Check content-length header first if available
+                        content_length = response.headers.get('content-length')
+                        if content_length and int(content_length) > MAX_IMAGE_BYTES:
+                            logger.warning(f"Cover image for ROM {rom_id} too large ({content_length} bytes), skipping")
+                            return None
+
                         image_data = await response.read()
+
+                        # Validate downloaded size
+                        if len(image_data) > MAX_IMAGE_BYTES:
+                            logger.warning(f"Cover image for ROM {rom_id} too large ({len(image_data)} bytes), skipping")
+                            return None
+
+                        # Validate image dimensions before returning
+                        try:
+                            img = Image.open(BytesIO(image_data))
+                            if img.width > MAX_IMAGE_DIMENSION or img.height > MAX_IMAGE_DIMENSION:
+                                logger.warning(f"Cover image for ROM {rom_id} dimensions too large ({img.width}x{img.height}), skipping")
+                                img.close()
+                                return None
+                            img.close()
+                        except Exception as e:
+                            logger.warning(f"Could not validate image dimensions for ROM {rom_id}: {e}")
+                            # Continue anyway - PIL will fail later if image is truly invalid
+
                         byte_arr = BytesIO(image_data)
                         byte_arr.seek(0)
                         return discord.File(byte_arr, filename="cover.png")
@@ -666,16 +694,16 @@ class RecentRomsMonitor(commands.Cog):
                         return None
                     else:
                         logger.warning(f"Failed to download cover: HTTP {response.status} (attempt {attempt + 1}/{max_retries})")
-                        
+
             except asyncio.TimeoutError:
                 logger.warning(f"Cover download timeout (attempt {attempt + 1}/{max_retries})")
             except Exception as e:
                 logger.error(f"Error downloading cover (attempt {attempt + 1}/{max_retries}): {e}")
-            
+
             # Wait before retry (except on last attempt)
             if attempt < max_retries - 1:
                 await asyncio.sleep(1 * (attempt + 1))  # Exponential backoff
-        
+
         return None
     
     async def download_cover_image(self, rom: Dict) -> Optional[discord.File]:

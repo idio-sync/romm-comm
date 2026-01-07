@@ -809,6 +809,19 @@ class MasterDatabase:
             logger.error(f"Error initializing platform mappings: {e}", exc_info=True)
             return False
     
+    async def close_all_connections(self):
+        """Close all database connections and cleanup resources.
+
+        This method is called during bot shutdown to ensure clean resource release.
+        Since we use a connection-per-request model with context managers,
+        there's no persistent pool to close, but we reset the initialization state.
+        """
+        try:
+            self._initialized = False
+            logger.info("Database connections closed and resources released")
+        except Exception as e:
+            logger.error(f"Error closing database connections: {e}")
+
     async def get_platform_mappings(self, search_term: str = None) -> List[Dict]:
         """Get platform mappings with optional search"""
         async with self.get_connection() as db:
