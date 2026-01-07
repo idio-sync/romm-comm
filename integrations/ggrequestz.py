@@ -114,7 +114,12 @@ class GGRequestzIntegration(commands.Cog):
             url = self.get_endpoint_url('version')
             async with self.session.get(url, headers=self.get_auth_headers('version')) as response:
                 if response.status == 200:
-                    data = await response.json()
+                    try:
+                        data = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"❌ Invalid JSON response from version endpoint: {e}")
+                        self.enabled = False
+                        return
                     version = data.get('version', 'unknown')
                     logger.info(f"✅ GGRequestz API key validated successfully (v{version})")
                 else:
@@ -141,17 +146,21 @@ class GGRequestzIntegration(commands.Cog):
 
         try:
             url = self.get_endpoint_url('games', igdb_id)
-            
+
             async with self.session.get(
                 url,
                 headers=self.get_auth_headers('games')
             ) as response:
                 if response.status == 200:
-                    data = await response.json()
+                    try:
+                        data = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response for game details {igdb_id}: {e}")
+                        return None
                     if data.get('success'):
                         return data.get('game')
                 return None
-                
+
         except Exception as e:
             logger.error(f"Error getting game details for IGDB ID {igdb_id}: {e}")
             return None
@@ -175,7 +184,11 @@ class GGRequestzIntegration(commands.Cog):
                 headers=self.get_auth_headers('search')
             ) as response:
                 if response.status == 200:
-                    data = await response.json()
+                    try:
+                        data = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response for game search '{game_name}': {e}")
+                        return None
                     if data.get('success') and data.get('hits'):
                         hits = data['hits']
                         if hits:
@@ -188,10 +201,10 @@ class GGRequestzIntegration(commands.Cog):
                                         return game
                                 else:
                                     return game
-                            
+
                             # Return first result if no platform match
                             return hits[0].get('document', {})
-                
+
                 logger.warning(f"Game search returned no results for: {game_name}")
                 return None
                 
@@ -390,7 +403,11 @@ class GGRequestzIntegration(commands.Cog):
                 headers=self.get_auth_headers('request_list')
             ) as response:
                 if response.status == 200:
-                    data = await response.json()
+                    try:
+                        data = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response for user requests: {e}")
+                        return None
                     if data.get('success'):
                         return data
                 return None
@@ -443,18 +460,22 @@ class GGRequestzIntegration(commands.Cog):
 
         try:
             url = self.get_endpoint_url('watchlist_add')
-            
+
             async with self.session.post(
                 url,
                 json={"igdb_id": igdb_id},  # Correct field name
                 headers=self.get_auth_headers('watchlist_add')
             ) as response:
                 if response.status == 200:
-                    data = await response.json()
+                    try:
+                        data = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response for add_to_watchlist: {e}")
+                        return {"success": False, "error": "Invalid JSON response"}
                     return data
                 else:
                     return {"success": False, "error": f"HTTP {response.status}"}
-                    
+
         except Exception as e:
             logger.error(f"Error adding to watchlist: {e}")
             return {"success": False, "error": str(e)}
@@ -466,18 +487,22 @@ class GGRequestzIntegration(commands.Cog):
 
         try:
             url = self.get_endpoint_url('watchlist_remove')
-            
+
             async with self.session.post(
                 url,
                 json={"igdb_id": igdb_id},
                 headers=self.get_auth_headers('watchlist_remove')
             ) as response:
                 if response.status == 200:
-                    data = await response.json()
+                    try:
+                        data = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response for remove_from_watchlist: {e}")
+                        return {"success": False, "error": "Invalid JSON response"}
                     return data
                 else:
                     return {"success": False, "error": f"HTTP {response.status}"}
-                    
+
         except Exception as e:
             logger.error(f"Error removing from watchlist: {e}")
             return {"success": False, "error": str(e)}
@@ -490,16 +515,20 @@ class GGRequestzIntegration(commands.Cog):
         try:
             # Include the ID in the path
             url = f"{self.ggr_base_url}/api/watchlist/status/{igdb_id}"
-            
+
             async with self.session.get(
                 url,
                 headers=self.get_auth_headers('watchlist_status')
             ) as response:
                 if response.status == 200:
-                    data = await response.json()
+                    try:
+                        data = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response for check_watchlist_status: {e}")
+                        return False
                     return data.get('isInWatchlist', False)  # Changed from inWatchlist
                 return False
-                
+
         except Exception as e:
             logger.error(f"Error checking watchlist: {e}")
             return False

@@ -1067,10 +1067,13 @@ async def main():
             except Exception as diag_error:
                 logger.error(f"Diagnostic failed: {diag_error}")
     finally:
-        if bot.session and not bot.session.closed:
-            await bot.session.close()
-        if bot.db:
-            await bot.db.close_all_connections()
+        # Use getattr for safer attribute access in case bot wasn't fully initialized
+        session = getattr(bot, 'session', None)
+        if session and not session.closed:
+            await session.close()
+        db = getattr(bot, 'db', None)
+        if db:
+            await db.close_all_connections()
 
 if __name__ == "__main__":
     try:

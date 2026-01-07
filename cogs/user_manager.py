@@ -234,7 +234,7 @@ class UserManagementView(discord.ui.View):
         discord_to_romm = {}
         
         try:
-            async with aiosqlite.connect(self.cog.db_manager.db_path) as db:
+            async with self.cog.db_manager.get_connection() as db:
                 cursor = await db.execute("SELECT discord_id, romm_username, romm_id FROM user_links")
                 rows = await cursor.fetchall()
                 for row in rows:
@@ -264,8 +264,9 @@ class UserManagementView(discord.ui.View):
                         if member:
                             linked_to = member.display_name
                             break
-                    except:
-                        pass
+                    except (ValueError, TypeError) as e:
+                        # ValueError: invalid int conversion, TypeError: None value
+                        logger.debug(f"Could not get member for discord_id {d_id}: {e}")
             
             self.full_romm_list.append({
                 'user': user,
@@ -1111,21 +1112,21 @@ class UserManager(commands.Cog):
     async def store_discord_info_for_existing_links(self):
         """Update existing links with Discord username and avatar info"""
         try:
-            async with aiosqlite.connect(self.db_manager.db_path) as db:
+            async with self.db_manager.get_connection() as db:
                 # Get all links without Discord info
                 cursor = await db.execute("""
-                    SELECT discord_id FROM user_links 
+                    SELECT discord_id FROM user_links
                     WHERE discord_username IS NULL OR discord_username = ''
                 """)
                 rows = await cursor.fetchall()
-                
+
                 for row in rows:
                     discord_id = row[0]
                     try:
                         # Get Discord user info
                         guild = self.bot.get_guild(self.bot.config.GUILD_ID)
                         member = guild.get_member(discord_id) if guild else None
-                        
+
                         if member:
                             discord_username = member.display_name
                             discord_avatar = member.avatar.key if member.avatar else None
@@ -1134,20 +1135,20 @@ class UserManager(commands.Cog):
                             discord_user = await self.bot.fetch_user(discord_id)
                             discord_username = discord_user.display_name
                             discord_avatar = discord_user.avatar.key if discord_user.avatar else None
-                        
+
                         # Update database
                         await db.execute("""
-                            UPDATE user_links 
+                            UPDATE user_links
                             SET discord_username = ?, discord_avatar = ?
                             WHERE discord_id = ?
                         """, (discord_username, discord_avatar, discord_id))
-                        
+
                     except Exception as e:
                         logger.warning(f"Could not update Discord info for {discord_id}: {e}")
-                
-                await db.commit()
+
+                # Note: get_connection() context manager handles commit automatically
                 logger.info(f"Updated Discord info for {len(rows)} existing user links")
-                
+
         except Exception as e:
             logger.error(f"Error updating existing links: {e}")
     
