@@ -218,10 +218,9 @@ class Info(commands.Cog):
                     value="\n".join(commands_list),
                     inline=False
                 )
-                 
+
         await ctx.respond(embed=embed)
-        pass
-   
+
     # Platforms
     @discord.slash_command(
         name="platforms", 

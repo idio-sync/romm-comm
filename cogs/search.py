@@ -1466,7 +1466,7 @@ class Search(commands.Cog):
             # Get platforms from API
             raw_platforms = await self.bot.fetch_api_endpoint('platforms')
             if not raw_platforms:
-                print("Warning: Could not fetch platforms for emoji mapping")
+                logger.warning("Could not fetch platforms for emoji mapping")
                 return
                 
             # Don't sanitize here, we need the full platform data including custom_name
@@ -1503,17 +1503,15 @@ class Search(commands.Cog):
             
             logger.info(f"Successfully mapped {mapped_count} platform(s) to custom server emoji(s)")
             
-            # Print unmapped platforms
+            # Log unmapped platforms for debugging
             unmapped = [p['name'] for p in raw_platforms if p['name'] not in self.platform_emoji_names]
             if unmapped:
-                print("\nUnmapped platforms:")
-                for name in sorted(unmapped):
-                    print(f"- {name}")
-            
+                logger.debug(f"Unmapped platforms: {', '.join(sorted(unmapped))}")
+
             self._emojis_initialized = True
-            
+
         except Exception as e:
-            print(f"Error initializing platform emoji mappings: {e}")
+            logger.error(f"Error initializing platform emoji mappings: {e}")
     
     def get_platform_with_emoji(self, platform_name: str) -> str:
         """Returns platform name with its emoji if available."""
