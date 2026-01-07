@@ -145,8 +145,9 @@ class MasterDatabase:
         if not self._initialized:
             logger.error("Database has not been initialized!")
             raise RuntimeError("Database is not available.")
-        
+
         conn = None
+        exception_occurred = False
         try:
             # This creates a new connection for each request.
             # It's safe and prevents concurrency issues.
@@ -154,11 +155,18 @@ class MasterDatabase:
             await conn.execute("PRAGMA busy_timeout=10000") # Set timeout
             yield conn
         except aiosqlite.Error as e:
+            exception_occurred = True
             logger.error(f"Database connection error: {e}")
+            raise
+        except Exception:
+            exception_occurred = True
             raise
         finally:
             if conn:
-                await conn.commit()
+                if exception_occurred:
+                    await conn.rollback()
+                else:
+                    await conn.commit()
                 await conn.close()
     
     def _check_for_old_databases(self) -> bool:
@@ -314,15 +322,15 @@ class MasterDatabase:
                                 platform_count = 0
                                 for platform in platforms:
                                     try:
-                                        await db.execute('''
-                                            INSERT INTO platform_mappings 
+                                        await new_db.execute('''
+                                            INSERT INTO platform_mappings
                                             (display_name, folder_name, igdb_slug, moby_slug)
                                             VALUES (?, ?, ?, ?)
                                             ON CONFLICT(display_name) DO UPDATE SET
                                                 folder_name = excluded.folder_name,
                                                 igdb_slug = excluded.igdb_slug,
                                                 moby_slug = excluded.moby_slug
-                                        ''', (...))
+                                        ''', (platform[0], platform[1], platform[2], platform[3]))
                                         platform_count += 1
                                     except Exception as e:
                                         logger.warning(f"Failed to migrate platform: {e}")

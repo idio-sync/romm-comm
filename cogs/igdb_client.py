@@ -77,10 +77,12 @@ class IGDBClient:
                 "Client-ID": self.client_id,
                 "Authorization": f"Bearer {self.access_token}"
             }
-            
+
             # Query IGDB platforms endpoint
             url = "https://api.igdb.com/v4/platforms"
-            query = f'fields id,name,slug; where slug = "{platform_slug}"; limit 1;'
+            # Sanitize platform_slug to prevent query injection - only allow alphanumeric and hyphens
+            safe_slug = re.sub(r'[^a-zA-Z0-9_-]', '', platform_slug)
+            query = f'fields id,name,slug; where slug = "{safe_slug}"; limit 1;'
             
             async with session.post(url, headers=headers, data=query) as response:
                 if response.status == 200:

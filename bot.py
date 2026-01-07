@@ -338,6 +338,12 @@ class RommBot(discord.Bot):
                         self.refresh_token = token_data.get('refresh_token')
                         # Store expiry time (subtract 60 seconds for safety margin)
                         self.token_expiry = time.time() + token_data.get('expires', 900) - 60
+
+                        # Validate that we actually got an access token
+                        if not self.access_token:
+                            logger.error("OAuth response missing access_token")
+                            return False
+
                         logger.debug("Successfully obtained OAuth tokens")
                         return True
                     except Exception as e:
@@ -574,7 +580,8 @@ class RommBot(discord.Bot):
     async def before_slash_command_invoke(self, ctx: discord.ApplicationContext):
         """Add cooldown check before any slash command is invoked."""
         if not await self.is_owner(ctx.author):  # Skip cooldown for bot owner
-            bucket = self._cd_bucket.get_bucket(ctx.message)
+            # Use ctx directly for ApplicationContext (slash commands don't have .message)
+            bucket = self._cd_bucket.get_bucket(ctx)
             retry_after = bucket.update_rate_limit()
             if retry_after:
                 raise commands.CommandOnCooldown(bucket, retry_after, self._cd_bucket.type)
@@ -945,8 +952,8 @@ class RommBot(discord.Bot):
             
     async def close(self):
         """Cleanup resources on shutdown."""
-        # Add database cleanup
-        if hasattr(self, 'db'):
+        # Add database cleanup - check if db is not None, not just if attribute exists
+        if self.db is not None:
             await self.db.close_all_connections()
         
         if self.session and not self.session.closed:

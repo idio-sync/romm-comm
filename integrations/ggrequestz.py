@@ -31,7 +31,8 @@ class GGRequestzIntegration(commands.Cog):
         
         # Session
         self.session: Optional[aiohttp.ClientSession] = None
-        
+        self._setup_complete = asyncio.Event()  # Track when setup is done
+
         # Map endpoints to their paths and auth methods
         self.endpoints = {
             'version': {'path': '/api/version', 'auth': 'bearer'},
@@ -71,11 +72,24 @@ class GGRequestzIntegration(commands.Cog):
         
         return f"{self.ggr_base_url}{endpoint_path}"
     
+    async def ensure_session(self) -> bool:
+        """Ensure session is initialized before making API calls"""
+        if not self.enabled:
+            return False
+        # Wait for setup to complete (with timeout)
+        try:
+            await asyncio.wait_for(self._setup_complete.wait(), timeout=30.0)
+        except asyncio.TimeoutError:
+            logger.error("Timeout waiting for GGRequestz session initialization")
+            return False
+        return self.session is not None and not self.session.closed
+
     async def setup(self):
         """Initialize connection and validate API key"""
         if not self.enabled:
+            self._setup_complete.set()  # Signal completion even if disabled
             return
-        
+
         await self.bot.wait_until_ready()
         
         # Create session with SSL handling for self-signed certs
@@ -109,6 +123,9 @@ class GGRequestzIntegration(commands.Cog):
         except Exception as e:
             logger.error(f"❌ API key validation error: {e}")
             self.enabled = False
+        finally:
+            # Signal that setup is complete (whether successful or not)
+            self._setup_complete.set()
     
     def get_auth_headers(self, endpoint_name: Optional[str] = None) -> Dict[str, str]:
         """Get authenticated headers - Bearer auth for all endpoints"""
@@ -119,9 +136,9 @@ class GGRequestzIntegration(commands.Cog):
     
     async def get_game_details(self, igdb_id: str) -> Optional[Dict[str, Any]]:
         """Get detailed game information by IGDB ID"""
-        if not self.enabled:
+        if not await self.ensure_session():
             return None
-        
+
         try:
             url = self.get_endpoint_url('games', igdb_id)
             
@@ -141,7 +158,7 @@ class GGRequestzIntegration(commands.Cog):
     
     async def search_game(self, game_name: str, platform: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Search for a game and return game info including IGDB ID"""
-        if not self.enabled:
+        if not await self.ensure_session():
             return None
         
         try:
@@ -228,12 +245,12 @@ class GGRequestzIntegration(commands.Cog):
             request_type: Type of request ("game", "update", or "fix")
             priority: Priority level ("low", "medium", "high", "urgent")
         """
-        if not self.enabled:
-            return {"success": False, "error": "Integration not enabled"}
-        
+        if not await self.ensure_session():
+            return {"success": False, "error": "Integration not enabled or session not ready"}
+
         try:
             url = self.get_endpoint_url('request')
-            
+
             logger.debug(f"Attempting to create request at: {url}")
             
             # Build description
@@ -345,19 +362,19 @@ class GGRequestzIntegration(commands.Cog):
             logger.error(f"Error creating request: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
     
-    async def get_user_requests(self, limit: int = 20, offset: int = 0, 
+    async def get_user_requests(self, limit: int = 20, offset: int = 0,
                                status: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Get current user's requests
-        
+
         Args:
             limit: Number of requests to return
             offset: Offset for pagination
             status: Filter by status (pending, approved, fulfilled, rejected, cancelled)
         """
-        if not self.enabled:
+        if not await self.ensure_session():
             return None
-        
+
         try:
             url = self.get_endpoint_url('request_list')
             params = {
@@ -384,9 +401,9 @@ class GGRequestzIntegration(commands.Cog):
     
     async def rescind_request(self, request_id: str) -> Dict[str, Any]:
         """Rescind/cancel a request"""
-        if not self.enabled:
-            return {"success": False, "error": "Integration not enabled"}
-        
+        if not await self.ensure_session():
+            return {"success": False, "error": "Integration not enabled or session not ready"}
+
         try:
             url = self.get_endpoint_url('rescind')
             
@@ -421,9 +438,9 @@ class GGRequestzIntegration(commands.Cog):
     
     async def add_to_watchlist(self, igdb_id: str) -> Dict[str, Any]:
         """Add a game to the user's watchlist"""
-        if not self.enabled:
-            return {"success": False, "error": "Integration not enabled"}
-        
+        if not await self.ensure_session():
+            return {"success": False, "error": "Integration not enabled or session not ready"}
+
         try:
             url = self.get_endpoint_url('watchlist_add')
             
@@ -444,9 +461,9 @@ class GGRequestzIntegration(commands.Cog):
     
     async def remove_from_watchlist(self, igdb_id: str) -> Dict[str, Any]:
         """Remove a game from the user's watchlist"""
-        if not self.enabled:
-            return {"success": False, "error": "Integration not enabled"}
-        
+        if not await self.ensure_session():
+            return {"success": False, "error": "Integration not enabled or session not ready"}
+
         try:
             url = self.get_endpoint_url('watchlist_remove')
             
@@ -467,9 +484,9 @@ class GGRequestzIntegration(commands.Cog):
     
     async def check_watchlist_status(self, igdb_id: str) -> bool:
         """Check if a game is in the user's watchlist"""
-        if not self.enabled:
+        if not await self.ensure_session():
             return False
-        
+
         try:
             # Include the ID in the path
             url = f"{self.ggr_base_url}/api/watchlist/status/{igdb_id}"
