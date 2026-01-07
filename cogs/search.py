@@ -129,36 +129,73 @@ class ROM_View(discord.ui.View):
 
     async def download_cover_image(self, rom_data: Dict) -> Optional[discord.File]:
         """Download cover image from Romm API and return as Discord File"""
+        # Maximum image constraints to prevent DoS via oversized images
+        MAX_IMAGE_DIMENSION = 4096  # Max width or height
+        MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10MB max file size
+
         try:
             # Check if we have url_cover at all
             if not rom_data.get('url_cover'):
                 return None
-                
+
             # Build the direct cover URL from Romm API
             platform_id = rom_data.get('platform_id')
             rom_id = rom_data.get('id')
-            
+
             if not platform_id or not rom_id:
                 logger.warning("Missing platform_id or rom_id for cover download")
                 return None
-            
+
             # Construct the direct cover URL
             cover_url = f"{self.bot.config.API_BASE_URL}/assets/romm/resources/roms/{platform_id}/{rom_id}/cover/big.png"
-            
+
             logger.debug(f"Downloading cover from: {cover_url}")
-            
-            # Download the image
-            async with aiohttp.ClientSession() as session:
+
+            # Use bot's shared session if available, otherwise create one
+            session = getattr(self.bot, 'session', None)
+            close_session = False
+            if not session or session.closed:
+                session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
+                close_session = True
+
+            try:
                 async with session.get(cover_url) as response:
                     if response.status == 200:
+                        # Check content-length header first if available
+                        content_length = response.headers.get('content-length')
+                        if content_length and int(content_length) > MAX_IMAGE_BYTES:
+                            logger.warning(f"Cover image for ROM {rom_id} too large ({content_length} bytes), skipping")
+                            return None
+
                         image_data = await response.read()
+
+                        # Validate downloaded size
+                        if len(image_data) > MAX_IMAGE_BYTES:
+                            logger.warning(f"Cover image for ROM {rom_id} too large ({len(image_data)} bytes), skipping")
+                            return None
+
+                        # Validate image dimensions before returning
+                        try:
+                            img = Image.open(BytesIO(image_data))
+                            if img.width > MAX_IMAGE_DIMENSION or img.height > MAX_IMAGE_DIMENSION:
+                                logger.warning(f"Cover image for ROM {rom_id} dimensions too large ({img.width}x{img.height}), skipping")
+                                img.close()
+                                return None
+                            img.close()
+                        except Exception as e:
+                            logger.warning(f"Could not validate image dimensions for ROM {rom_id}: {e}")
+                            # Continue anyway - PIL will fail later if image is truly invalid
+
                         byte_arr = BytesIO(image_data)
                         byte_arr.seek(0)
                         return discord.File(byte_arr, filename="cover.png")
                     else:
                         logger.warning(f"Failed to download cover: HTTP {response.status}")
                         return None
-                        
+            finally:
+                if close_session:
+                    await session.close()
+
         except Exception as e:
             logger.error(f"Error downloading cover image: {e}")
             return None
@@ -1250,8 +1287,8 @@ class NoResultsView(discord.ui.View):
             
             try:
                 await interaction.message.edit(view=self)
-            except:
-                pass  # Message might have been deleted
+            except (discord.NotFound, discord.HTTPException):
+                pass  # Message might have been deleted or not accessible
                 
         except Exception as e:
             logger.error(f"Error processing request from search: {e}")

@@ -48,7 +48,11 @@ class IGDBClient:
 
             async with session.post(url, params=params) as response:
                 if response.status == 200:
-                    data = await response.json()
+                    try:
+                        data = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response from Twitch OAuth: {e}")
+                        return False
                     self.access_token = data["access_token"]
                     self.token_expires = datetime.now() + timedelta(seconds=data["expires_in"] - 100)
                     return True
@@ -87,7 +91,11 @@ class IGDBClient:
             
             async with session.post(url, headers=headers, data=query) as response:
                 if response.status == 200:
-                    platforms = await response.json()
+                    try:
+                        platforms = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response from IGDB platforms endpoint: {e}")
+                        return None
                     if platforms and len(platforms) > 0:
                         platform_id = platforms[0].get("id")
                         # Cache the result
@@ -1539,7 +1547,11 @@ class IGDBHandler(commands.Cog):
             
             async with session.post(url, headers=headers, data=query) as response:
                 if response.status == 200:
-                    games = await response.json()
+                    try:
+                        games = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response from IGDB for upcoming games: {e}")
+                        return []
                     logger.debug(f"Fetched {len(games)} upcoming games from IGDB")
                     if games:
                         logger.debug(f"Sample game data: {games[0].keys()}")
@@ -1592,7 +1604,11 @@ class IGDBHandler(commands.Cog):
             
             async with session.post(url, headers=headers, data=query) as response:
                 if response.status == 200:
-                    games = await response.json()
+                    try:
+                        games = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response from IGDB for recent games: {e}")
+                        return []
                     logger.debug(f"Fetched {len(games)} recent games from IGDB")
                     return self.igdb._process_games_response(games)
                 else:
@@ -1637,7 +1653,11 @@ class IGDBHandler(commands.Cog):
             
             async with session.post(url, headers=headers, data=query) as response:
                 if response.status == 200:
-                    games = await response.json()
+                    try:
+                        games = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response from IGDB for popular games: {e}")
+                        return []
                     logger.debug(f"Fetched {len(games)} popular games from IGDB")
                     if games:
                         logger.debug(f"Sample game data: {games[0].keys()}")
@@ -1689,9 +1709,13 @@ class IGDBHandler(commands.Cog):
             
             async with session.post(url, headers=headers, data=query) as response:
                 if response.status == 200:
-                    games = await response.json()
+                    try:
+                        games = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response from IGDB for platform exclusives: {e}")
+                        return []
                     processed_games = self.igdb._process_games_response(games)
-                    
+
                     # Filter for exclusives - games with only 1 platform
                     exclusive_games = [
                         game for game in processed_games 
