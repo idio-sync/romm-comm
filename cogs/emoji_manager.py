@@ -414,10 +414,11 @@ class EmojiManager(commands.Cog):
         logger.info(f"Joined {guild.name}")
         await self.sync_server_emojis(guild)
 
-    def cog_unload(self):
+    async def cog_unload(self):
         """Cleanup when cog is unloaded"""
         if self._http_session and not self._http_session.closed:
-            asyncio.create_task(self._http_session.close())
+            await self._http_session.close()
+            logger.debug("EmojiManager HTTP session closed")
 
 def setup(bot):
     bot.add_cog(EmojiManager(bot))

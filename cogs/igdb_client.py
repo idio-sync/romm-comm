@@ -1444,6 +1444,17 @@ class IGDBGameView(discord.ui.View):
             logger.error(f"Error processing request from IGDB: {e}")
             await interaction.followup.send("❌ An error occurred while processing your request", ephemeral=True)
 
+    async def on_timeout(self):
+        """Disable all components when the view times out"""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass  # Message was deleted or can't be edited
+
+
 class IGDBHandler(commands.Cog):
     """IGDB integration commands for game discovery"""
     

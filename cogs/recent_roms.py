@@ -1425,19 +1425,24 @@ class RecentRomsMonitor(commands.Cog):
             logger.error(f"Error migrating database: {e}")
     
     
-    def cog_unload(self):
+    async def cog_unload(self):
         """Cleanup when cog is unloaded"""
         # Stop tasks
         if hasattr(self, 'cleanup_task'):
             self.cleanup_task.cancel()
-        
+
         # Disconnect socket
         if self.sio.connected:
-            asyncio.create_task(self.sio.disconnect())
-        
+            try:
+                await self.sio.disconnect()
+                logger.debug("SocketIO disconnected")
+            except Exception as e:
+                logger.warning(f"Error disconnecting SocketIO: {e}")
+
         # Close HTTP session
         if self.http_session and not self.http_session.closed:
-            asyncio.create_task(self.http_session.close())
+            await self.http_session.close()
+            logger.debug("HTTP session closed")
 
 def setup(bot):
     """Setup function for the cog"""

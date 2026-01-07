@@ -738,6 +738,17 @@ class RequestAdminView(discord.ui.View):
                 ephemeral=True
             )
 
+    async def on_timeout(self):
+        """Disable all components when the view times out"""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass  # Message was deleted or can't be edited
+
+
 class UserRequestsView(discord.ui.View):
     """Paginated view for users to manage their own requests"""
     
@@ -1336,6 +1347,17 @@ class UserRequestsView(discord.ui.View):
                 "❌ An error occurred while refreshing your requests.",
                 ephemeral=True
             )
+
+    async def on_timeout(self):
+        """Disable all components when the view times out"""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass  # Message was deleted or can't be edited
+
 
 class VariantRequestModal(discord.ui.Modal):
     def __init__(self, bot, platform_name, game_name, original_details, igdb_matches, ctx_or_interaction, author_id=None):
