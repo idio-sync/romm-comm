@@ -533,10 +533,11 @@ class GGRequestzIntegration(commands.Cog):
             logger.error(f"Error checking watchlist: {e}")
             return False
     
-    def cog_unload(self):
-        """Cleanup"""
-        if self.session:
-            asyncio.create_task(self.session.close())
+    async def cog_unload(self):
+        """Cleanup session on cog unload"""
+        if self.session and not self.session.closed:
+            await self.session.close()
+            logger.debug("GGRequestz session closed")
 
 
 def setup(bot):

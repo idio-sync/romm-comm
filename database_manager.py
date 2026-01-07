@@ -708,22 +708,35 @@ class MasterDatabase:
             logger.error(f"Error getting all user links: {e}")
             return []
     
-    async def initialize_platform_mappings(self):
-        """Initialize the master platform list from remote JSON file with local fallback"""
+    async def initialize_platform_mappings(self, session: Optional[aiohttp.ClientSession] = None):
+        """Initialize the master platform list from remote JSON file with local fallback
+
+        Args:
+            session: Optional aiohttp session to reuse. If not provided, creates a temporary one.
+        """
         url = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/igdb/platform_mapping.json"
         platforms_file = Path('igdb') / 'platform_mapping.json'
-        
+
         try:
             master_platforms = None
-            
+
             # Try fetching from GitHub
             try:
-                async with aiohttp.ClientSession() as session:
+                # Use provided session or create a temporary one
+                close_session = False
+                if session is None or session.closed:
+                    session = aiohttp.ClientSession()
+                    close_session = True
+
+                try:
                     async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                         if resp.status == 200:
                             text = await resp.text()
                             master_platforms = json.loads(text)
                             logger.debug(f"Loaded {len(master_platforms)} platforms from GitHub")
+                finally:
+                    if close_session:
+                        await session.close()
             except Exception as e:
                 logger.warning(f"Could not fetch platforms from GitHub: {e}")
             

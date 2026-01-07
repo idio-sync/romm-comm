@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 class ROM_View(discord.ui.View):
     def __init__(self, bot, search_results: List[Dict], author_id: int, platform_name: Optional[str] = None, initial_message: Optional[discord.Message] = None):
-        super().__init__()
+        super().__init__(timeout=300)  # 5 minute timeout
         self.bot = bot
         self.search_results = search_results
         self.author_id = author_id
@@ -77,6 +77,16 @@ class ROM_View(discord.ui.View):
 
         self.select.callback = self.select_callback
         self.add_item(self.select)
+
+    async def on_timeout(self):
+        """Disable all components when the view times out"""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass  # Message was deleted or can't be edited
 
     @staticmethod
     def format_file_size(size_bytes: Union[int, float]) -> str:
@@ -1327,6 +1337,14 @@ class NoResultsView(discord.ui.View):
         )
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def on_timeout(self):
+        """Disable all components when the view times out"""
+        for item in self.children:
+            item.disabled = True
+        # NoResultsView doesn't store message reference, so we can't update it
+        # The view will simply stop accepting interactions
+
 
 class Search(commands.Cog):
     def __init__(self, bot):

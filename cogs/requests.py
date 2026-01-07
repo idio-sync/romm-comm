@@ -1432,7 +1432,7 @@ class GameSelect(discord.ui.Select):
 
 class GameSelectView(discord.ui.View):
     def __init__(self, bot, matches, platform_name=None):
-        super().__init__()
+        super().__init__(timeout=180)  # 3 minute timeout
         self.bot = bot
         self.matches = matches
         self.selected_game = None
@@ -1591,8 +1591,18 @@ class GameSelectView(discord.ui.View):
             self.stop()
         
         self.submit_button.callback = submit_callback
-        
+
         await self.message.edit(embed=embed, view=self)
+
+    async def on_timeout(self):
+        """Disable all components when the view times out"""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass  # Message was deleted or can't be edited
 
 class ExistingGameWithIGDBView(discord.ui.View):
     """View that combines existing game selection with IGDB matching"""
@@ -1866,11 +1876,22 @@ class ExistingGameWithIGDBView(discord.ui.View):
         await interaction.response.edit_message(view=self)
         self.stop()
 
+    async def on_timeout(self):
+        """Disable all components when the view times out"""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass  # Message was deleted or can't be edited
+
+
 class ExistingGameView(discord.ui.View):
     """View for when requested games already exist in the collection"""
-    
+
     def __init__(self, bot, matches, platform_name, game_name, author_id):
-        super().__init__()
+        super().__init__(timeout=180)  # 3 minute timeout
         self.bot = bot
         self.matches = matches
         self.platform_name = platform_name
@@ -2060,6 +2081,16 @@ class ExistingGameView(discord.ui.View):
         await interaction.response.edit_message(view=self)
         self.stop()
 
+    async def on_timeout(self):
+        """Disable all components when the view times out"""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass  # Message was deleted or can't be edited
+
 
 class Request(commands.Cog):
     def __init__(self, bot):
@@ -2079,8 +2110,14 @@ class Request(commands.Cog):
         if not self.requests_enabled and not ctx.author.guild_permissions.administrator:
             await ctx.respond("❌ The request system is currently disabled.")
             return False
-        return True    
-    
+        return True
+
+    async def cog_unload(self):
+        """Cleanup resources when cog is unloaded"""
+        if self.igdb:
+            await self.igdb.close()
+            logger.debug("IGDB client session closed")
+
     async def setup(self):
         """Set up database and initialize IGDB client"""
         try:
