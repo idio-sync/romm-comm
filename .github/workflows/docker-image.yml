@@ -3,7 +3,7 @@ name: Push Docker Image to Docker Hub
 on:
   push:
     branches:
-      - main
+      - '**'
 
 jobs:
   push_to_docker_hub:
@@ -21,18 +21,39 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USER }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       
-      - name: Echo Docker Hub Username
-        run: echo ${{ secrets.DOCKERHUB_USER }}
-
-      - name: Echo GitHub SHA
-        run: echo $GITHUB_SHA
+      - name: Extract branch name
+        shell: bash
+        run: |
+          echo "branch=$(echo ${GITHUB_REF#refs/heads/} | sed 's/\//-/g')" >> $GITHUB_OUTPUT
+        id: extract_branch
 
       - name: Build Docker image
         id: build_image
         run: |
-          docker build "$GITHUB_WORKSPACE" -t ${{ secrets.DOCKERHUB_USER }}/romm-comm:latest --label dockerfile-path="Dockerfile"
+          # Define variables for cleaner commands
+          IMAGE_NAME="${{ secrets.DOCKERHUB_USER }}/romm-comm"
+          BRANCH_TAG="${{ steps.extract_branch.outputs.branch }}"
+          
+          # Build the image with the specific branch tag
+          docker build "$GITHUB_WORKSPACE" -t $IMAGE_NAME:$BRANCH_TAG --label dockerfile-path="Dockerfile"
+          
+          # If the branch is 'main', add the 'latest' tag as well
+          if [ "$BRANCH_TAG" == "main" ]; then
+            docker tag $IMAGE_NAME:$BRANCH_TAG $IMAGE_NAME:latest
+          fi
+
       - name: Push Docker image
-        run: docker push ${{ secrets.DOCKERHUB_USER }}/romm-comm:latest
+        run: |
+          IMAGE_NAME="${{ secrets.DOCKERHUB_USER }}/romm-comm"
+          BRANCH_TAG="${{ steps.extract_branch.outputs.branch }}"
+
+          # Push the specific branch tag
+          docker push $IMAGE_NAME:$BRANCH_TAG
+
+          # If the branch is 'main', push the 'latest' tag
+          if [ "$BRANCH_TAG" == "main" ]; then
+            docker push $IMAGE_NAME:latest
+          fi
 
       - name: Logout from Docker Hub
         run: docker logout
