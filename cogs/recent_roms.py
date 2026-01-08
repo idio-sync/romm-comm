@@ -19,15 +19,9 @@ import aiohttp
 import time
 from dateutil.parser import parse as parse_datetime
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+from bot import is_admin
 
-def is_admin():
-    """Check if the user is the admin"""
-    async def predicate(ctx: discord.ApplicationContext):
-        # This check relies on the is_admin method in your main bot class
-        return ctx.bot.is_admin(ctx.author)
-    return commands.check(predicate)
+logger = logging.getLogger(__name__)
 
 class RecentRomsMonitor(commands.Cog):
     """Monitor ROMs via WebSocket connection to RomM scan events"""

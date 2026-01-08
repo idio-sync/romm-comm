@@ -30,6 +30,32 @@ logging.basicConfig(
 logger = logging.getLogger('romm_bot')
 
 # Filter out Discord's connection messages
+
+
+def is_admin():
+    """
+    Decorator to check if the user is an admin.
+
+    Use this decorator on slash commands that should be restricted to admins.
+    The actual admin check logic is delegated to bot.is_admin().
+
+    Example:
+        @bot.slash_command()
+        @is_admin()
+        async def admin_command(ctx):
+            ...
+    """
+    async def predicate(ctx: discord.ApplicationContext):
+        logger.debug(f"Admin check for command: {ctx.command.name} by user: {ctx.author} (ID: {ctx.author.id})")
+        is_admin_result = ctx.bot.is_admin(ctx.author)
+        if not is_admin_result:
+            logger.warning(f"Admin check FAILED for user {ctx.author} (ID: {ctx.author.id}) on command {ctx.command.name}")
+        else:
+            logger.debug(f"Admin check PASSED for user {ctx.author} on command {ctx.command.name}")
+        return is_admin_result
+    return commands.check(predicate)
+
+
 logging.getLogger('discord').setLevel(logging.WARNING)
 
 class APICache:
@@ -425,9 +451,10 @@ class RommBot(discord.Bot):
                     logger.debug("No Set-Cookie header in heartbeat response")
                     return None
                 
-                # Parse the CSRF token from cookie
-                if 'romm_csrftoken=' in set_cookie:
-                    csrf_token = set_cookie.split('romm_csrftoken=')[1].split(';')[0]
+                # Parse the CSRF token from cookie using regex for safety
+                csrf_match = re.search(r'romm_csrftoken=([^;]+)', set_cookie)
+                if csrf_match:
+                    csrf_token = csrf_match.group(1)
                     self.csrf_token = csrf_token
                     self.csrf_cookie = f"romm_csrftoken={csrf_token}"
                     # CSRF tokens typically last for the session

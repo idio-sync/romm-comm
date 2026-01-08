@@ -9,14 +9,9 @@ import json
 from typing import Optional, Dict, Any, List
 from enum import Enum
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.WARNING)
+from bot import is_admin
 
-def is_admin():
-    """Check if the user is the admin"""
-    async def predicate(ctx: discord.ApplicationContext):
-        return ctx.bot.is_admin(ctx.author)
-    return commands.check(predicate)
+logger = logging.getLogger(__name__)
 
 class ScanType(str, Enum):
     """Enum for scan types to prevent typos and provide better code completion"""

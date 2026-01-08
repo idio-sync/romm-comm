@@ -15,28 +15,9 @@ from collections import defaultdict
 from .search import ROM_View
 from urllib.parse import quote
 import aiohttp
+from bot import is_admin
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-def is_admin():
-    """Check if the user is the admin"""
-    async def predicate(ctx: discord.ApplicationContext):
-        logger.debug(f"Admin check predicate called for command: {ctx.command.name}")
-        logger.debug(f"User attempting command: {ctx.author} (ID: {ctx.author.id})")
-        
-        is_admin_result = ctx.bot.is_admin(ctx.author)
-        
-        if not is_admin_result:
-            logger.warning(f"Admin check FAILED for user {ctx.author} (ID: {ctx.author.id}) on command {ctx.command.name}")
-            # Log additional context
-            logger.debug(f"Guild: {ctx.guild.name if ctx.guild else 'DM'}")
-            logger.debug(f"Channel: {ctx.channel}")
-        else:
-            logger.info(f"Admin check PASSED for user {ctx.author} on command {ctx.command.name}")
-        
-        return is_admin_result
-    return commands.check(predicate)
 
 class RequestAdminView(discord.ui.View):
     """Paginated view for managing requests"""

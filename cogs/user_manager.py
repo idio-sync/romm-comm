@@ -14,13 +14,9 @@ import time
 # Load environment variables
 load_dotenv()
 
-logger = logging.getLogger('romm_bot.users')
+from bot import is_admin
 
-def is_admin():
-    """Check if the user is the admin"""
-    async def predicate(ctx: discord.ApplicationContext):
-        return ctx.bot.is_admin(ctx.author)
-    return commands.check(predicate)
+logger = logging.getLogger('romm_bot.users')
 
 class UserManagementView(discord.ui.View):
     """Comprehensive user management interface for admins"""
