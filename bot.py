@@ -233,6 +233,29 @@ class SocketIOManager:
 
 class Config:
     """Configuration manager with validation."""
+
+    @staticmethod
+    def parse_bool(value: str, default: bool = False) -> bool:
+        """Parse a string value as boolean consistently.
+
+        Args:
+            value: The string to parse (case-insensitive)
+            default: Default value if parsing fails
+
+        Returns:
+            True if value is 'true', '1', 'yes', 'on' (case-insensitive)
+            False if value is 'false', '0', 'no', 'off' (case-insensitive)
+            default otherwise
+        """
+        if value is None:
+            return default
+        normalized = value.strip().lower()
+        if normalized in ('true', '1', 'yes', 'on'):
+            return True
+        if normalized in ('false', '0', 'no', 'off'):
+            return False
+        return default
+
     def __init__(self):
         self.TOKEN = os.getenv('TOKEN')
         self.GUILD_ID = os.getenv('GUILD')
@@ -240,19 +263,28 @@ class Config:
         self.ADMIN_ID = os.getenv('ADMIN_ID')
         self.API_BASE_URL = os.getenv('API_URL', '').rstrip('/')
         self.DOMAIN = os.getenv('DOMAIN', 'No website configured')
-        self.SYNC_RATE = int(os.getenv('SYNC_RATE', 3600)) # 1 hour default
-        self.UPDATE_VOICE_NAMES = os.getenv('UPDATE_VOICE_NAMES', 'true').lower() == 'true'
-        self.SHOW_API_SUCCESS = os.getenv('SHOW_API_SUCCESS', 'false').lower() == 'true'
-        self.CACHE_TTL = int(os.getenv('CACHE_TTL', 3900))  # 65 minutes default
-        self.API_TIMEOUT = int(os.getenv('API_TIMEOUT', 30))  # 30 seconds default
+        self.SYNC_RATE = int(os.getenv('SYNC_RATE', '3600'))  # 1 hour default
+        self.UPDATE_VOICE_NAMES = self.parse_bool(os.getenv('UPDATE_VOICE_NAMES', 'true'), True)
+        self.SHOW_API_SUCCESS = self.parse_bool(os.getenv('SHOW_API_SUCCESS', 'false'), False)
+        self.CACHE_TTL = int(os.getenv('CACHE_TTL', '3900'))  # 65 minutes default
+        self.API_TIMEOUT = int(os.getenv('API_TIMEOUT', '30'))  # 30 seconds default
         self.USER = os.getenv('USER')
         self.PASS = os.getenv('PASS')
-        requests_env = os.getenv('REQUESTS_ENABLED', 'TRUE').upper()
-        self.REQUESTS_ENABLED = requests_env == 'TRUE'
-        
+        self.REQUESTS_ENABLED = self.parse_bool(os.getenv('REQUESTS_ENABLED', 'true'), True)
+
+        # Cog-specific config (centralized here to avoid scattered os.getenv calls)
+        self.RECENT_ROMS_CHANNEL_ID = os.getenv('RECENT_ROMS_CHANNEL_ID')
+        self.RECENT_ROMS_MAX_PER_POST = int(os.getenv('RECENT_ROMS_MAX_PER_POST', '10'))
+        self.RECENT_ROMS_BULK_THRESHOLD = int(os.getenv('RECENT_ROMS_BULK_THRESHOLD', '25'))
+        self.RECENT_ROMS_ENABLED = self.parse_bool(os.getenv('RECENT_ROMS_ENABLED', 'true'), True)
+        self.IGDB_CLIENT_ID = os.getenv('IGDB_CLIENT_ID')
+        self.IGDB_CLIENT_SECRET = os.getenv('IGDB_CLIENT_SECRET')
+        self.AUTO_REGISTER_ROLE_ID = os.getenv('AUTO_REGISTER_ROLE_ID')
+        self.ENABLE_USER_MANAGER = self.parse_bool(os.getenv('ENABLE_USER_MANAGER', 'true'), True)
+
         self.validate()
-        
-        logger.debug("RommBot.__init__() completed")
+
+        logger.debug("Config initialized")
 
     def validate(self):
         """Validate configuration values."""
@@ -993,13 +1025,45 @@ class RommBot(discord.Bot):
             return None
             
     async def close(self):
-        """Cleanup resources on shutdown."""
-        # Add database cleanup - check if db is not None, not just if attribute exists
+        """Graceful shutdown with proper cleanup of all resources and tasks."""
+        logger.info("Initiating graceful shutdown...")
+
+        # Cancel background task loops
+        if self.update_loop.is_running():
+            self.update_loop.cancel()
+            logger.debug("Cancelled update_loop")
+
+        if self.refresh_token_task.is_running():
+            self.refresh_token_task.cancel()
+            logger.debug("Cancelled refresh_token_task")
+
+        # Cancel any pending asyncio tasks created by this bot
+        pending_tasks = [
+            task for task in asyncio.all_tasks()
+            if task is not asyncio.current_task()
+            and not task.done()
+            and 'close' not in task.get_name()
+        ]
+
+        if pending_tasks:
+            logger.debug(f"Cancelling {len(pending_tasks)} pending tasks...")
+            for task in pending_tasks:
+                task.cancel()
+
+            # Wait for tasks to complete cancellation with timeout
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
+
+        # Close database connections
         if self.db is not None:
             await self.db.close_all_connections()
-        
+            logger.debug("Closed database connections")
+
+        # Close HTTP session
         if self.session and not self.session.closed:
             await self.session.close()
+            logger.debug("Closed HTTP session")
+
+        logger.info("Graceful shutdown complete")
         await super().close()
 
     async def update_api_data(self):

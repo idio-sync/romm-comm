@@ -7,12 +7,7 @@ import string
 import asyncio
 import aiohttp
 import aiosqlite
-import os
-from dotenv import load_dotenv
 import time
-
-# Load environment variables
-load_dotenv()
 
 from bot import is_admin
 
@@ -1046,7 +1041,7 @@ class UnlinkConfirmView(discord.ui.View):
 class UserManager(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        auto_register_role_id_env = os.getenv('AUTO_REGISTER_ROLE_ID')
+        auto_register_role_id_env = bot.config.AUTO_REGISTER_ROLE_ID
         if auto_register_role_id_env and auto_register_role_id_env.isdigit():
             self.auto_register_role_id = int(auto_register_role_id_env)
         else:
@@ -1700,9 +1695,9 @@ class UserManager(commands.Cog):
 
 def setup(bot):
     """Setup function with enable check"""
-    if os.getenv('ENABLE_USER_MANAGER', 'TRUE').upper() == 'FALSE':
+    if not bot.config.ENABLE_USER_MANAGER:
         logger.info("UserManager Cog is disabled via ENABLE_USER_MANAGER")
         return
-    
+
     bot.add_cog(UserManager(bot))
     #logger.info("UserManager Cog enabled and loaded")

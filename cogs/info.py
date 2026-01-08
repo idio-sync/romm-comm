@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Dict, Any
 import logging
 
-logger = logging.getLogger('romm_bot')
+logger = logging.getLogger(__name__)
 
 # Stat type to emoji mapping
 STAT_EMOJIS = {

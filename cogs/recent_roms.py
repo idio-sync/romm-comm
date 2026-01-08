@@ -30,11 +30,12 @@ class RecentRomsMonitor(commands.Cog):
         self.bot = bot
         self.config = bot.config
         
-        # Configuration
-        self.recent_roms_channel_id = int(os.getenv('RECENT_ROMS_CHANNEL_ID', str(bot.config.CHANNEL_ID)))
-        self.max_roms_per_post = int(os.getenv('RECENT_ROMS_MAX_PER_POST', '10'))
-        self.bulk_display_threshold = int(os.getenv('RECENT_ROMS_BULK_THRESHOLD', '25'))
-        self.enabled = os.getenv('RECENT_ROMS_ENABLED', 'TRUE').upper() == 'TRUE'
+        # Configuration (from centralized Config class)
+        channel_id = bot.config.RECENT_ROMS_CHANNEL_ID
+        self.recent_roms_channel_id = int(channel_id) if channel_id else bot.config.CHANNEL_ID
+        self.max_roms_per_post = bot.config.RECENT_ROMS_MAX_PER_POST
+        self.bulk_display_threshold = bot.config.RECENT_ROMS_BULK_THRESHOLD
+        self.enabled = bot.config.RECENT_ROMS_ENABLED
 
         # Use shared master database
         self.db = bot.db
