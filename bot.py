@@ -605,9 +605,10 @@ class RommBot(discord.Bot):
     async def setup_hook(self):
         """Initialize database and other async resources before bot starts"""
         try:
-            # Register global error handler and cooldown check for slash commands
+            # Register global error handler for slash commands
             self.add_listener(self.on_application_command_error)
-            self.add_application_command_check(self.slash_cooldown_check)
+            # Register cooldown check as before_invoke hook for application commands
+            self.before_invoke(self.slash_cooldown_check)
 
             # Initialize database FIRST before anything else
             logger.debug("Initializing database...")
