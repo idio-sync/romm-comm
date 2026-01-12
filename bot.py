@@ -30,6 +30,32 @@ logging.basicConfig(
 logger = logging.getLogger('romm_bot')
 
 # Filter out Discord's connection messages
+
+
+def is_admin():
+    """
+    Decorator to check if the user is an admin.
+
+    Use this decorator on slash commands that should be restricted to admins.
+    The actual admin check logic is delegated to bot.is_admin().
+
+    Example:
+        @bot.slash_command()
+        @is_admin()
+        async def admin_command(ctx):
+            ...
+    """
+    async def predicate(ctx: discord.ApplicationContext):
+        logger.debug(f"Admin check for command: {ctx.command.name} by user: {ctx.author} (ID: {ctx.author.id})")
+        is_admin_result = ctx.bot.is_admin(ctx.author)
+        if not is_admin_result:
+            logger.warning(f"Admin check FAILED for user {ctx.author} (ID: {ctx.author.id}) on command {ctx.command.name}")
+        else:
+            logger.debug(f"Admin check PASSED for user {ctx.author} on command {ctx.command.name}")
+        return is_admin_result
+    return commands.check(predicate)
+
+
 logging.getLogger('discord').setLevel(logging.WARNING)
 
 class APICache:
@@ -207,6 +233,29 @@ class SocketIOManager:
 
 class Config:
     """Configuration manager with validation."""
+
+    @staticmethod
+    def parse_bool(value: str, default: bool = False) -> bool:
+        """Parse a string value as boolean consistently.
+
+        Args:
+            value: The string to parse (case-insensitive)
+            default: Default value if parsing fails
+
+        Returns:
+            True if value is 'true', '1', 'yes', 'on' (case-insensitive)
+            False if value is 'false', '0', 'no', 'off' (case-insensitive)
+            default otherwise
+        """
+        if value is None:
+            return default
+        normalized = value.strip().lower()
+        if normalized in ('true', '1', 'yes', 'on'):
+            return True
+        if normalized in ('false', '0', 'no', 'off'):
+            return False
+        return default
+
     def __init__(self):
         self.TOKEN = os.getenv('TOKEN')
         self.GUILD_ID = os.getenv('GUILD')
@@ -214,19 +263,28 @@ class Config:
         self.ADMIN_ID = os.getenv('ADMIN_ID')
         self.API_BASE_URL = os.getenv('API_URL', '').rstrip('/')
         self.DOMAIN = os.getenv('DOMAIN', 'No website configured')
-        self.SYNC_RATE = int(os.getenv('SYNC_RATE', 3600)) # 1 hour default
-        self.UPDATE_VOICE_NAMES = os.getenv('UPDATE_VOICE_NAMES', 'true').lower() == 'true'
-        self.SHOW_API_SUCCESS = os.getenv('SHOW_API_SUCCESS', 'false').lower() == 'true'
-        self.CACHE_TTL = int(os.getenv('CACHE_TTL', 3900))  # 65 minutes default
-        self.API_TIMEOUT = int(os.getenv('API_TIMEOUT', 30))  # 30 seconds default
+        self.SYNC_RATE = int(os.getenv('SYNC_RATE', '3600'))  # 1 hour default
+        self.UPDATE_VOICE_NAMES = self.parse_bool(os.getenv('UPDATE_VOICE_NAMES', 'true'), True)
+        self.SHOW_API_SUCCESS = self.parse_bool(os.getenv('SHOW_API_SUCCESS', 'false'), False)
+        self.CACHE_TTL = int(os.getenv('CACHE_TTL', '3900'))  # 65 minutes default
+        self.API_TIMEOUT = int(os.getenv('API_TIMEOUT', '30'))  # 30 seconds default
         self.USER = os.getenv('USER')
         self.PASS = os.getenv('PASS')
-        requests_env = os.getenv('REQUESTS_ENABLED', 'TRUE').upper()
-        self.REQUESTS_ENABLED = requests_env == 'TRUE'
-        
+        self.REQUESTS_ENABLED = self.parse_bool(os.getenv('REQUESTS_ENABLED', 'true'), True)
+
+        # Cog-specific config (centralized here to avoid scattered os.getenv calls)
+        self.RECENT_ROMS_CHANNEL_ID = os.getenv('RECENT_ROMS_CHANNEL_ID')
+        self.RECENT_ROMS_MAX_PER_POST = int(os.getenv('RECENT_ROMS_MAX_PER_POST', '10'))
+        self.RECENT_ROMS_BULK_THRESHOLD = int(os.getenv('RECENT_ROMS_BULK_THRESHOLD', '25'))
+        self.RECENT_ROMS_ENABLED = self.parse_bool(os.getenv('RECENT_ROMS_ENABLED', 'true'), True)
+        self.IGDB_CLIENT_ID = os.getenv('IGDB_CLIENT_ID')
+        self.IGDB_CLIENT_SECRET = os.getenv('IGDB_CLIENT_SECRET')
+        self.AUTO_REGISTER_ROLE_ID = os.getenv('AUTO_REGISTER_ROLE_ID')
+        self.ENABLE_USER_MANAGER = self.parse_bool(os.getenv('ENABLE_USER_MANAGER', 'true'), True)
+
         self.validate()
-        
-        logger.debug("RommBot.__init__() completed")
+
+        logger.debug("Config initialized")
 
     def validate(self):
         """Validate configuration values."""
@@ -285,11 +343,8 @@ class RommBot(discord.Bot):
         # Add a commands sync flag
         self.synced = False
         
-        # Global cooldown
+        # Global cooldown for slash commands
         self._cd_bucket = commands.CooldownMapping.from_cooldown(1, 60, commands.BucketType.user)
-        
-        # Register error handler
-        self.application_command_error = self.on_application_command_error
         
         # Shared scan state across cogs
         self.scan_state = {
@@ -338,6 +393,12 @@ class RommBot(discord.Bot):
                         self.refresh_token = token_data.get('refresh_token')
                         # Store expiry time (subtract 60 seconds for safety margin)
                         self.token_expiry = time.time() + token_data.get('expires', 900) - 60
+
+                        # Validate that we actually got an access token
+                        if not self.access_token:
+                            logger.error("OAuth response missing access_token")
+                            return False
+
                         logger.debug("Successfully obtained OAuth tokens")
                         return True
                     except Exception as e:
@@ -369,7 +430,11 @@ class RommBot(discord.Bot):
             
             async with session.post(token_url, data=data) as response:
                 if response.status == 200:
-                    token_data = await response.json()
+                    try:
+                        token_data = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response when refreshing token: {e}")
+                        return await self.get_oauth_token()
                     self.access_token = token_data.get('access_token')
                     # Refresh token may or may not be returned
                     if 'refresh_token' in token_data:
@@ -392,9 +457,12 @@ class RommBot(discord.Bot):
             # Check if token is expired or missing
             if not self.access_token or time.time() >= self.token_expiry:
                 logger.debug("Token expired or missing, refreshing...")
-                if self.refresh_token and time.time() < self.token_expiry + 604800:  # 7 days
+                # Only try refresh token if we have one and access token expired recently (within 1 hour)
+                # This prevents using stale refresh tokens and aligns with typical OAuth best practices
+                if self.refresh_token and time.time() < self.token_expiry + 3600:  # 1 hour grace period
                     return await self.refresh_oauth_token()
                 else:
+                    # Token expired too long ago or no refresh token - get fresh credentials
                     return await self.get_oauth_token()
             return True
     
@@ -415,9 +483,10 @@ class RommBot(discord.Bot):
                     logger.debug("No Set-Cookie header in heartbeat response")
                     return None
                 
-                # Parse the CSRF token from cookie
-                if 'romm_csrftoken=' in set_cookie:
-                    csrf_token = set_cookie.split('romm_csrftoken=')[1].split(';')[0]
+                # Parse the CSRF token from cookie using regex for safety
+                csrf_match = re.search(r'romm_csrftoken=([^;]+)', set_cookie)
+                if csrf_match:
+                    csrf_token = csrf_match.group(1)
                     self.csrf_token = csrf_token
                     self.csrf_cookie = f"romm_csrftoken={csrf_token}"
                     # CSRF tokens typically last for the session
@@ -571,13 +640,16 @@ class RommBot(discord.Bot):
         logger.debug(f"✗ User {user} is NOT admin")
         return False
     
-    async def before_slash_command_invoke(self, ctx: discord.ApplicationContext):
-        """Add cooldown check before any slash command is invoked."""
-        if not await self.is_owner(ctx.author):  # Skip cooldown for bot owner
-            bucket = self._cd_bucket.get_bucket(ctx.message)
-            retry_after = bucket.update_rate_limit()
-            if retry_after:
-                raise commands.CommandOnCooldown(bucket, retry_after, self._cd_bucket.type)
+    async def slash_cooldown_check(self, ctx: discord.ApplicationContext) -> bool:
+        """Global cooldown check for all slash commands."""
+        if await self.is_owner(ctx.author):  # Skip cooldown for bot owner
+            return True
+        # Use ctx directly for ApplicationContext (slash commands don't have .message)
+        bucket = self._cd_bucket.get_bucket(ctx)
+        retry_after = bucket.update_rate_limit()
+        if retry_after:
+            raise commands.CommandOnCooldown(bucket, retry_after, self._cd_bucket.type)
+        return True
 
     def get_platform_display_name(self, platform_data: Dict) -> str:
         """Get the display name for a platform, preferring custom_name over name."""
@@ -591,7 +663,12 @@ class RommBot(discord.Bot):
     
     async def setup_hook(self):
         """Initialize database and other async resources before bot starts"""
-        try:    
+        try:
+            # Register global error handler for slash commands
+            self.add_listener(self.on_application_command_error)
+            # Register cooldown check as before_invoke hook for application commands
+            self.before_invoke(self.slash_cooldown_check)
+
             # Initialize database FIRST before anything else
             logger.debug("Initializing database...")
             self.db = MasterDatabase()
@@ -863,9 +940,13 @@ class RommBot(discord.Bot):
                 async with session.get(url, headers=headers) as response:
                     logger.debug(f"Response status: {response.status}")
                     logger.debug(f"Response content-type: {response.headers.get('content-type', 'unknown')}")
-                    
+
                     if response.status == 200:
-                        data = await response.json()
+                        try:
+                            data = await response.json()
+                        except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                            logger.error(f"Invalid JSON response from {endpoint}: {e}")
+                            return None
                         logger.debug(f"Fetched fresh data for {endpoint}")
                         self.cache.set(endpoint, data)
                         return data
@@ -944,13 +1025,45 @@ class RommBot(discord.Bot):
             return None
             
     async def close(self):
-        """Cleanup resources on shutdown."""
-        # Add database cleanup
-        if hasattr(self, 'db'):
+        """Graceful shutdown with proper cleanup of all resources and tasks."""
+        logger.info("Initiating graceful shutdown...")
+
+        # Cancel background task loops
+        if self.update_loop.is_running():
+            self.update_loop.cancel()
+            logger.debug("Cancelled update_loop")
+
+        if self.refresh_token_task.is_running():
+            self.refresh_token_task.cancel()
+            logger.debug("Cancelled refresh_token_task")
+
+        # Cancel any pending asyncio tasks created by this bot
+        pending_tasks = [
+            task for task in asyncio.all_tasks()
+            if task is not asyncio.current_task()
+            and not task.done()
+            and 'close' not in task.get_name()
+        ]
+
+        if pending_tasks:
+            logger.debug(f"Cancelling {len(pending_tasks)} pending tasks...")
+            for task in pending_tasks:
+                task.cancel()
+
+            # Wait for tasks to complete cancellation with timeout
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
+
+        # Close database connections
+        if self.db is not None:
             await self.db.close_all_connections()
-        
+            logger.debug("Closed database connections")
+
+        # Close HTTP session
         if self.session and not self.session.closed:
             await self.session.close()
+            logger.debug("Closed HTTP session")
+
+        logger.info("Graceful shutdown complete")
         await super().close()
 
     async def update_api_data(self):
@@ -1054,10 +1167,13 @@ async def main():
             except Exception as diag_error:
                 logger.error(f"Diagnostic failed: {diag_error}")
     finally:
-        if bot.session and not bot.session.closed:
-            await bot.session.close()
-        if bot.db:
-            await bot.db.close_all_connections()
+        # Use getattr for safer attribute access in case bot wasn't fully initialized
+        session = getattr(bot, 'session', None)
+        if session and not session.closed:
+            await session.close()
+        db = getattr(bot, 'db', None)
+        if db:
+            await db.close_all_connections()
 
 if __name__ == "__main__":
     try:

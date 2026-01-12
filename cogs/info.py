@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Dict, Any
 import logging
 
-logger = logging.getLogger('romm_bot')
+logger = logging.getLogger(__name__)
 
 # Stat type to emoji mapping
 STAT_EMOJIS = {
@@ -81,10 +81,11 @@ class Info(commands.Cog):
                 new_name = (f"{emoji} {stat}: {value:,} TB" if stat == "Storage Size" 
                            else f"{emoji} {stat}: {value:,}")
                 
-                # Find existing channel
-                existing_channel = discord.utils.get(
-                    category.voice_channels,
-                    name__startswith=f"{emoji} {stat}:"
+                # Find existing channel by checking if name starts with the expected prefix
+                stat_prefix = f"{emoji} {stat}:"
+                existing_channel = discord.utils.find(
+                    lambda c, prefix=stat_prefix: c.name.startswith(prefix),
+                    category.voice_channels
                 )
                 
                 if existing_channel:
@@ -217,10 +218,9 @@ class Info(commands.Cog):
                     value="\n".join(commands_list),
                     inline=False
                 )
-                 
+
         await ctx.respond(embed=embed)
-        pass
-   
+
     # Platforms
     @discord.slash_command(
         name="platforms", 

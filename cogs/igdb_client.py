@@ -4,11 +4,11 @@ import logging
 from datetime import datetime, timedelta
 import os
 import re
+import json
 import discord
 from discord.ext import commands
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 
 class IGDBClient:
@@ -47,7 +47,11 @@ class IGDBClient:
 
             async with session.post(url, params=params) as response:
                 if response.status == 200:
-                    data = await response.json()
+                    try:
+                        data = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response from Twitch OAuth: {e}")
+                        return False
                     self.access_token = data["access_token"]
                     self.token_expires = datetime.now() + timedelta(seconds=data["expires_in"] - 100)
                     return True
@@ -77,14 +81,20 @@ class IGDBClient:
                 "Client-ID": self.client_id,
                 "Authorization": f"Bearer {self.access_token}"
             }
-            
+
             # Query IGDB platforms endpoint
             url = "https://api.igdb.com/v4/platforms"
-            query = f'fields id,name,slug; where slug = "{platform_slug}"; limit 1;'
+            # Sanitize platform_slug to prevent query injection - only allow alphanumeric and hyphens
+            safe_slug = re.sub(r'[^a-zA-Z0-9_-]', '', platform_slug)
+            query = f'fields id,name,slug; where slug = "{safe_slug}"; limit 1;'
             
             async with session.post(url, headers=headers, data=query) as response:
                 if response.status == 200:
-                    platforms = await response.json()
+                    try:
+                        platforms = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response from IGDB platforms endpoint: {e}")
+                        return None
                     if platforms and len(platforms) > 0:
                         platform_id = platforms[0].get("id")
                         # Cache the result
@@ -232,7 +242,11 @@ class IGDBClient:
         try:
             async with session.post(url, headers=headers, data=query) as response:
                 if response.status == 200:
-                    games = await response.json()
+                    try:
+                        games = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response from IGDB for game ID {igdb_id}: {e}")
+                        return None
                     if games:
                         return self._process_games_response(games)[0]
                 return None
@@ -261,16 +275,20 @@ class IGDBClient:
             query += " limit 20;"
             
             logger.debug(f"IGDB query: {query}")
-            
+
             async with session.post(url, headers=headers, data=query) as response:
                 if response.status == 200:
-                    games = await response.json()
+                    try:
+                        games = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response from IGDB for search '{search_term}': {e}")
+                        return []
                     processed_games = self._process_games_response(games)
-                    
+
                     # Get alternative names for better matching
                     if processed_games:
                         await self._fetch_alternative_names(session, headers, processed_games)
-                    
+
                     return processed_games
                 else:
                     logger.debug(f"IGDB search returned status {response.status} for term: {search_term}")
@@ -280,22 +298,26 @@ class IGDBClient:
             logger.error(f"Error in IGDB search for '{search_term}': {e}")
             return []
 
-    async def _fetch_alternative_names(self, session: aiohttp.ClientSession, headers: dict, 
+    async def _fetch_alternative_names(self, session: aiohttp.ClientSession, headers: dict,
                                       processed_games: List[Dict]):
         """Fetch and add alternative names to games"""
         try:
             game_ids = [g["id"] for g in processed_games if "id" in g]
             if not game_ids:
                 return
-                
+
             alt_names_url = "https://api.igdb.com/v4/alternative_names"
             alt_names_query = f"fields name,comment,game; where game = ({','.join(map(str, game_ids))});"
-            
+
             async with session.post(alt_names_url, headers=headers, data=alt_names_query) as response:
                 if response.status == 200:
-                    alt_names_data = await response.json()
+                    try:
+                        alt_names_data = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.debug(f"Invalid JSON response from IGDB for alternative names: {e}")
+                        return
                     self._add_alternative_names(processed_games, alt_names_data)
-                    
+
         except Exception as e:
             logger.debug(f"Error fetching alternative names: {e}")
 
@@ -648,7 +670,7 @@ class IGDBGameView(discord.ui.View):
                 try:
                     date_obj = datetime.strptime(release_date, "%Y-%m-%d")
                     year = date_obj.strftime("%Y")
-                except:
+                except ValueError:
                     year = "Unknown"
             else:
                 year = "TBA"
@@ -725,7 +747,7 @@ class IGDBGameView(discord.ui.View):
                     else:
                         # For popular: just year (2024)
                         formatted_date = date_obj.strftime("%Y")
-                except:
+                except ValueError:
                     formatted_date = "TBA"
             else:
                 formatted_date = "TBA"
@@ -900,11 +922,11 @@ class IGDBGameView(discord.ui.View):
             try:
                 date_obj = datetime.strptime(release_date, "%Y-%m-%d")
                 formatted_date = date_obj.strftime("%B %d, %Y")
-            except:
+            except ValueError:
                 formatted_date = release_date
         else:
             formatted_date = release_date
-        
+
         embed.add_field(
             name="Release Date",
             value=formatted_date,
@@ -1346,7 +1368,7 @@ class IGDBGameView(discord.ui.View):
                     try:
                         date_obj = datetime.strptime(release_date, "%Y-%m-%d")
                         formatted_date = date_obj.strftime("%B %d, %Y")
-                    except:
+                    except ValueError:
                         formatted_date = release_date
                     success_embed.add_field(
                         name="Release Date",
@@ -1420,6 +1442,17 @@ class IGDBGameView(discord.ui.View):
         except Exception as e:
             logger.error(f"Error processing request from IGDB: {e}")
             await interaction.followup.send("❌ An error occurred while processing your request", ephemeral=True)
+
+    async def on_timeout(self):
+        """Disable all components when the view times out"""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass  # Message was deleted or can't be edited
+
 
 class IGDBHandler(commands.Cog):
     """IGDB integration commands for game discovery"""
@@ -1524,7 +1557,11 @@ class IGDBHandler(commands.Cog):
             
             async with session.post(url, headers=headers, data=query) as response:
                 if response.status == 200:
-                    games = await response.json()
+                    try:
+                        games = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response from IGDB for upcoming games: {e}")
+                        return []
                     logger.debug(f"Fetched {len(games)} upcoming games from IGDB")
                     if games:
                         logger.debug(f"Sample game data: {games[0].keys()}")
@@ -1577,7 +1614,11 @@ class IGDBHandler(commands.Cog):
             
             async with session.post(url, headers=headers, data=query) as response:
                 if response.status == 200:
-                    games = await response.json()
+                    try:
+                        games = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response from IGDB for recent games: {e}")
+                        return []
                     logger.debug(f"Fetched {len(games)} recent games from IGDB")
                     return self.igdb._process_games_response(games)
                 else:
@@ -1622,7 +1663,11 @@ class IGDBHandler(commands.Cog):
             
             async with session.post(url, headers=headers, data=query) as response:
                 if response.status == 200:
-                    games = await response.json()
+                    try:
+                        games = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response from IGDB for popular games: {e}")
+                        return []
                     logger.debug(f"Fetched {len(games)} popular games from IGDB")
                     if games:
                         logger.debug(f"Sample game data: {games[0].keys()}")
@@ -1674,9 +1719,13 @@ class IGDBHandler(commands.Cog):
             
             async with session.post(url, headers=headers, data=query) as response:
                 if response.status == 200:
-                    games = await response.json()
+                    try:
+                        games = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                        logger.error(f"Invalid JSON response from IGDB for platform exclusives: {e}")
+                        return []
                     processed_games = self.igdb._process_games_response(games)
-                    
+
                     # Filter for exclusives - games with only 1 platform
                     exclusive_games = [
                         game for game in processed_games 
@@ -1732,9 +1781,9 @@ class IGDBHandler(commands.Cog):
                 try:
                     date_obj = datetime.strptime(release_date, "%Y-%m-%d")
                     release_date = date_obj.strftime("%b %d, %Y")
-                except:
-                    pass
-            
+                except ValueError:
+                    pass  # Keep original release_date value
+
             # Create IGDB link
             game_name = game.get('name', 'Unknown')
             igdb_link_name = game_name.lower().replace(' ', '-')

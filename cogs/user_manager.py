@@ -7,20 +7,11 @@ import string
 import asyncio
 import aiohttp
 import aiosqlite
-import os
-from dotenv import load_dotenv
 import time
 
-# Load environment variables
-load_dotenv()
+from bot import is_admin
 
 logger = logging.getLogger('romm_bot.users')
-
-def is_admin():
-    """Check if the user is the admin"""
-    async def predicate(ctx: discord.ApplicationContext):
-        return ctx.bot.is_admin(ctx.author)
-    return commands.check(predicate)
 
 class UserManagementView(discord.ui.View):
     """Comprehensive user management interface for admins"""
@@ -234,7 +225,7 @@ class UserManagementView(discord.ui.View):
         discord_to_romm = {}
         
         try:
-            async with aiosqlite.connect(self.cog.db_manager.db_path) as db:
+            async with self.cog.db_manager.get_connection() as db:
                 cursor = await db.execute("SELECT discord_id, romm_username, romm_id FROM user_links")
                 rows = await cursor.fetchall()
                 for row in rows:
@@ -264,8 +255,9 @@ class UserManagementView(discord.ui.View):
                         if member:
                             linked_to = member.display_name
                             break
-                    except:
-                        pass
+                    except (ValueError, TypeError) as e:
+                        # ValueError: invalid int conversion, TypeError: None value
+                        logger.debug(f"Could not get member for discord_id {d_id}: {e}")
             
             self.full_romm_list.append({
                 'user': user,
@@ -860,7 +852,7 @@ class UserManagementView(discord.ui.View):
                     await interaction.edit_original_response(
                         content=f"Progress: {sent + failed}/{len(members_to_invite)} processed..."
                     )
-                except:
+                except (discord.NotFound, discord.HTTPException):
                     pass  # Ignore if message edit fails
         
         # Final summary
@@ -868,7 +860,7 @@ class UserManagementView(discord.ui.View):
             await interaction.edit_original_response(
                 content=f"✅ Sent: {sent} invites\n❌ Failed: {failed} invites"
             )
-        except:
+        except (discord.NotFound, discord.HTTPException):
             await interaction.followup.send(
                 f"✅ Sent: {sent} invites\n❌ Failed: {failed} invites",
                 ephemeral=True
@@ -970,8 +962,19 @@ class UserManagementView(discord.ui.View):
         )
         
         embed.set_footer(text="Changes are applied immediately")
-        
+
         return embed
+
+    async def on_timeout(self):
+        """Disable all components when the view times out"""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass  # Message was deleted or can't be edited
+
 
 class ConfirmView(discord.ui.View):
     """Simple confirmation view"""
@@ -990,6 +993,11 @@ class ConfirmView(discord.ui.View):
         self.value = False
         await interaction.response.defer()
         self.stop()
+
+    async def on_timeout(self):
+        """Handle timeout - value remains None to indicate no selection"""
+        pass  # value is already None, view stops automatically
+
 
 class UnlinkConfirmView(discord.ui.View):
     """Confirmation view for unlinking with options to keep, disable, or delete RomM account"""
@@ -1024,11 +1032,16 @@ class UnlinkConfirmView(discord.ui.View):
         self.action = None
         await interaction.response.defer()
         self.stop()
-        
+
+    async def on_timeout(self):
+        """Handle timeout - action remains None to indicate no selection"""
+        pass  # action is already None, view stops automatically
+
+
 class UserManager(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        auto_register_role_id_env = os.getenv('AUTO_REGISTER_ROLE_ID')
+        auto_register_role_id_env = bot.config.AUTO_REGISTER_ROLE_ID
         if auto_register_role_id_env and auto_register_role_id_env.isdigit():
             self.auto_register_role_id = int(auto_register_role_id_env)
         else:
@@ -1111,21 +1124,21 @@ class UserManager(commands.Cog):
     async def store_discord_info_for_existing_links(self):
         """Update existing links with Discord username and avatar info"""
         try:
-            async with aiosqlite.connect(self.db_manager.db_path) as db:
+            async with self.db_manager.get_connection() as db:
                 # Get all links without Discord info
                 cursor = await db.execute("""
-                    SELECT discord_id FROM user_links 
+                    SELECT discord_id FROM user_links
                     WHERE discord_username IS NULL OR discord_username = ''
                 """)
                 rows = await cursor.fetchall()
-                
+
                 for row in rows:
                     discord_id = row[0]
                     try:
                         # Get Discord user info
                         guild = self.bot.get_guild(self.bot.config.GUILD_ID)
                         member = guild.get_member(discord_id) if guild else None
-                        
+
                         if member:
                             discord_username = member.display_name
                             discord_avatar = member.avatar.key if member.avatar else None
@@ -1134,20 +1147,20 @@ class UserManager(commands.Cog):
                             discord_user = await self.bot.fetch_user(discord_id)
                             discord_username = discord_user.display_name
                             discord_avatar = discord_user.avatar.key if discord_user.avatar else None
-                        
+
                         # Update database
                         await db.execute("""
-                            UPDATE user_links 
+                            UPDATE user_links
                             SET discord_username = ?, discord_avatar = ?
                             WHERE discord_id = ?
                         """, (discord_username, discord_avatar, discord_id))
-                        
+
                     except Exception as e:
                         logger.warning(f"Could not update Discord info for {discord_id}: {e}")
-                
-                await db.commit()
+
+                # Note: get_connection() context manager handles commit automatically
                 logger.info(f"Updated Discord info for {len(rows)} existing user links")
-                
+
         except Exception as e:
             logger.error(f"Error updating existing links: {e}")
     
@@ -1505,12 +1518,14 @@ class UserManager(commands.Cog):
             
             # Return the result
             result = self.temp_storage.get(member.id)
-            self.temp_storage.pop(member.id, None)
             return result
-                
+
         except Exception as e:
             logger.error(f"Error in link_existing_account for {member.display_name}: {e}", exc_info=True)
-            return None    
+            return None
+        finally:
+            # Always clean up temp_storage to prevent memory leak
+            self.temp_storage.pop(member.id, None)    
 
     async def create_user_account(self, member: discord.Member, interactive: bool = True, use_invite: bool = True) -> bool:
         """
@@ -1680,9 +1695,9 @@ class UserManager(commands.Cog):
 
 def setup(bot):
     """Setup function with enable check"""
-    if os.getenv('ENABLE_USER_MANAGER', 'TRUE').upper() == 'FALSE':
+    if not bot.config.ENABLE_USER_MANAGER:
         logger.info("UserManager Cog is disabled via ENABLE_USER_MANAGER")
         return
-    
+
     bot.add_cog(UserManager(bot))
     #logger.info("UserManager Cog enabled and loaded")

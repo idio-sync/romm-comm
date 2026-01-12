@@ -19,15 +19,9 @@ import aiohttp
 import time
 from dateutil.parser import parse as parse_datetime
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+from bot import is_admin
 
-def is_admin():
-    """Check if the user is the admin"""
-    async def predicate(ctx: discord.ApplicationContext):
-        # This check relies on the is_admin method in your main bot class
-        return ctx.bot.is_admin(ctx.author)
-    return commands.check(predicate)
+logger = logging.getLogger(__name__)
 
 class RecentRomsMonitor(commands.Cog):
     """Monitor ROMs via WebSocket connection to RomM scan events"""
@@ -36,11 +30,12 @@ class RecentRomsMonitor(commands.Cog):
         self.bot = bot
         self.config = bot.config
         
-        # Configuration
-        self.recent_roms_channel_id = int(os.getenv('RECENT_ROMS_CHANNEL_ID', str(bot.config.CHANNEL_ID)))
-        self.max_roms_per_post = int(os.getenv('RECENT_ROMS_MAX_PER_POST', '10'))
-        self.bulk_display_threshold = int(os.getenv('RECENT_ROMS_BULK_THRESHOLD', '25'))
-        self.enabled = os.getenv('RECENT_ROMS_ENABLED', 'TRUE').upper() == 'TRUE'
+        # Configuration (from centralized Config class)
+        channel_id = bot.config.RECENT_ROMS_CHANNEL_ID
+        self.recent_roms_channel_id = int(channel_id) if channel_id else bot.config.CHANNEL_ID
+        self.max_roms_per_post = bot.config.RECENT_ROMS_MAX_PER_POST
+        self.bulk_display_threshold = bot.config.RECENT_ROMS_BULK_THRESHOLD
+        self.enabled = bot.config.RECENT_ROMS_ENABLED
 
         # Use shared master database
         self.db = bot.db
@@ -64,6 +59,7 @@ class RecentRomsMonitor(commands.Cog):
         
         # Reusable HTTP session for downloads
         self.http_session: Optional[aiohttp.ClientSession] = None
+        self._session_lock = asyncio.Lock()  # Lock for session creation
         
         # Platform data cache
         self.platform_cache: Optional[Dict] = None
@@ -261,9 +257,7 @@ class RecentRomsMonitor(commands.Cog):
             await self.initialize_igdb()
             
             # Initialize HTTP session for downloads
-            self.http_session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30)
-            )
+            await self._ensure_http_session()
             
             # Setup socket handlers
             self.setup_socket_handlers()
@@ -275,7 +269,16 @@ class RecentRomsMonitor(commands.Cog):
             
         except Exception as e:
             logger.error(f"Error setting up Recent ROMs monitor: {e}", exc_info=True)
-    
+
+    async def _ensure_http_session(self) -> aiohttp.ClientSession:
+        """Ensure HTTP session exists and is open, with proper locking to prevent race conditions"""
+        async with self._session_lock:
+            if not self.http_session or self.http_session.closed:
+                self.http_session = aiohttp.ClientSession(
+                    timeout=aiohttp.ClientTimeout(total=30)
+                )
+        return self.http_session
+
     @tasks.loop(hours=1)
     async def cleanup_task(self):
         """Periodic cleanup of memory"""
@@ -633,23 +636,50 @@ class RecentRomsMonitor(commands.Cog):
             logger.error(f"Error unmarking ROMs: {e}")
     
     async def download_cover_image_with_retry(self, rom: Dict, max_retries: int = 3) -> Optional[discord.File]:
-        """Download cover image with retry logic"""
+        """Download cover image with retry logic and validation"""
+        # Maximum image constraints to prevent DoS via oversized images
+        MAX_IMAGE_DIMENSION = 4096  # Max width or height
+        MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10MB max file size
+
         platform_id = rom.get('platform_id')
         rom_id = rom.get('id')
-        
+
         if not platform_id or not rom_id:
             return None
-        
+
         cover_url = f"{self.bot.config.API_BASE_URL}/assets/romm/resources/roms/{platform_id}/{rom_id}/cover/big.png"
-        
+
         for attempt in range(max_retries):
             try:
-                if not self.http_session or self.http_session.closed:
-                    self.http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
-                
-                async with self.http_session.get(cover_url) as response:
+                session = await self._ensure_http_session()
+
+                async with session.get(cover_url) as response:
                     if response.status == 200:
+                        # Check content-length header first if available
+                        content_length = response.headers.get('content-length')
+                        if content_length and int(content_length) > MAX_IMAGE_BYTES:
+                            logger.warning(f"Cover image for ROM {rom_id} too large ({content_length} bytes), skipping")
+                            return None
+
                         image_data = await response.read()
+
+                        # Validate downloaded size
+                        if len(image_data) > MAX_IMAGE_BYTES:
+                            logger.warning(f"Cover image for ROM {rom_id} too large ({len(image_data)} bytes), skipping")
+                            return None
+
+                        # Validate image dimensions before returning
+                        try:
+                            img = Image.open(BytesIO(image_data))
+                            if img.width > MAX_IMAGE_DIMENSION or img.height > MAX_IMAGE_DIMENSION:
+                                logger.warning(f"Cover image for ROM {rom_id} dimensions too large ({img.width}x{img.height}), skipping")
+                                img.close()
+                                return None
+                            img.close()
+                        except Exception as e:
+                            logger.warning(f"Could not validate image dimensions for ROM {rom_id}: {e}")
+                            # Continue anyway - PIL will fail later if image is truly invalid
+
                         byte_arr = BytesIO(image_data)
                         byte_arr.seek(0)
                         return discord.File(byte_arr, filename="cover.png")
@@ -659,16 +689,16 @@ class RecentRomsMonitor(commands.Cog):
                         return None
                     else:
                         logger.warning(f"Failed to download cover: HTTP {response.status} (attempt {attempt + 1}/{max_retries})")
-                        
+
             except asyncio.TimeoutError:
                 logger.warning(f"Cover download timeout (attempt {attempt + 1}/{max_retries})")
             except Exception as e:
                 logger.error(f"Error downloading cover (attempt {attempt + 1}/{max_retries}): {e}")
-            
+
             # Wait before retry (except on last attempt)
             if attempt < max_retries - 1:
                 await asyncio.sleep(1 * (attempt + 1))  # Exponential backoff
-        
+
         return None
     
     async def download_cover_image(self, rom: Dict) -> Optional[discord.File]:
@@ -1077,38 +1107,59 @@ class RecentRomsMonitor(commands.Cog):
                         roms[i].update(result)
             
             # Download all covers in parallel - load as PIL Images immediately
+            # Maximum image dimensions to prevent DoS via oversized images
+            MAX_IMAGE_DIMENSION = 4096  # Max width or height
+            MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10MB max file size
+
             async def download_and_load_cover(rom: Dict) -> Optional[Image.Image]:
                 """Download cover and return loaded PIL Image"""
                 platform_id = rom.get('platform_id')
                 rom_id = rom.get('id')
-                
+
                 if not platform_id or not rom_id:
                     return None
-                
+
                 cover_url = f"{self.bot.config.API_BASE_URL}/assets/romm/resources/roms/{platform_id}/{rom_id}/cover/big.png"
-                
+
                 try:
-                    if not self.http_session or self.http_session.closed:
-                        self.http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
-                    
-                    async with self.http_session.get(cover_url) as response:
+                    session = await self._ensure_http_session()
+
+                    async with session.get(cover_url) as response:
                         if response.status == 200:
+                            # Check content-length header first if available
+                            content_length = response.headers.get('content-length')
+                            if content_length and int(content_length) > MAX_IMAGE_BYTES:
+                                logger.warning(f"Cover image for ROM {rom_id} too large ({content_length} bytes), skipping")
+                                return None
+
                             # Read all data first
                             image_bytes = await response.read()
-                            
+
+                            # Validate downloaded size
+                            if len(image_bytes) > MAX_IMAGE_BYTES:
+                                logger.warning(f"Cover image for ROM {rom_id} too large ({len(image_bytes)} bytes), skipping")
+                                return None
+
                             # Immediately load and decode the complete image
                             # This forces PIL to read ALL image data
                             img = Image.open(BytesIO(image_bytes))
+
+                            # Validate dimensions before loading full image data
+                            if img.width > MAX_IMAGE_DIMENSION or img.height > MAX_IMAGE_DIMENSION:
+                                logger.warning(f"Cover image for ROM {rom_id} dimensions too large ({img.width}x{img.height}), skipping")
+                                img.close()
+                                return None
+
                             img.load()  # Force loading all pixel data into memory
-                            
+
                             # Convert to RGBA for consistency
                             if img.mode != 'RGBA':
                                 img = img.convert('RGBA')
-                            
+
                             return img
                         else:
                             return None
-                            
+
                 except Exception as e:
                     logger.error(f"Error downloading/loading cover for ROM {rom_id}: {e}")
                     return None
@@ -1369,19 +1420,24 @@ class RecentRomsMonitor(commands.Cog):
             logger.error(f"Error migrating database: {e}")
     
     
-    def cog_unload(self):
+    async def cog_unload(self):
         """Cleanup when cog is unloaded"""
         # Stop tasks
         if hasattr(self, 'cleanup_task'):
             self.cleanup_task.cancel()
-        
+
         # Disconnect socket
         if self.sio.connected:
-            asyncio.create_task(self.sio.disconnect())
-        
+            try:
+                await self.sio.disconnect()
+                logger.debug("SocketIO disconnected")
+            except Exception as e:
+                logger.warning(f"Error disconnecting SocketIO: {e}")
+
         # Close HTTP session
         if self.http_session and not self.http_session.closed:
-            asyncio.create_task(self.http_session.close())
+            await self.http_session.close()
+            logger.debug("HTTP session closed")
 
 def setup(bot):
     """Setup function for the cog"""

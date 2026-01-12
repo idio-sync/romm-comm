@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 class ROM_View(discord.ui.View):
     def __init__(self, bot, search_results: List[Dict], author_id: int, platform_name: Optional[str] = None, initial_message: Optional[discord.Message] = None):
-        super().__init__()
+        super().__init__(timeout=300)  # 5 minute timeout
         self.bot = bot
         self.search_results = search_results
         self.author_id = author_id
@@ -78,6 +78,16 @@ class ROM_View(discord.ui.View):
         self.select.callback = self.select_callback
         self.add_item(self.select)
 
+    async def on_timeout(self):
+        """Disable all components when the view times out"""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass  # Message was deleted or can't be edited
+
     @staticmethod
     def format_file_size(size_bytes: Union[int, float]) -> str:
         """Format size in bytes to human readable format"""
@@ -129,36 +139,73 @@ class ROM_View(discord.ui.View):
 
     async def download_cover_image(self, rom_data: Dict) -> Optional[discord.File]:
         """Download cover image from Romm API and return as Discord File"""
+        # Maximum image constraints to prevent DoS via oversized images
+        MAX_IMAGE_DIMENSION = 4096  # Max width or height
+        MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10MB max file size
+
         try:
             # Check if we have url_cover at all
             if not rom_data.get('url_cover'):
                 return None
-                
+
             # Build the direct cover URL from Romm API
             platform_id = rom_data.get('platform_id')
             rom_id = rom_data.get('id')
-            
+
             if not platform_id or not rom_id:
                 logger.warning("Missing platform_id or rom_id for cover download")
                 return None
-            
+
             # Construct the direct cover URL
             cover_url = f"{self.bot.config.API_BASE_URL}/assets/romm/resources/roms/{platform_id}/{rom_id}/cover/big.png"
-            
+
             logger.debug(f"Downloading cover from: {cover_url}")
-            
-            # Download the image
-            async with aiohttp.ClientSession() as session:
+
+            # Use bot's shared session if available, otherwise create one
+            session = getattr(self.bot, 'session', None)
+            close_session = False
+            if not session or session.closed:
+                session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
+                close_session = True
+
+            try:
                 async with session.get(cover_url) as response:
                     if response.status == 200:
+                        # Check content-length header first if available
+                        content_length = response.headers.get('content-length')
+                        if content_length and int(content_length) > MAX_IMAGE_BYTES:
+                            logger.warning(f"Cover image for ROM {rom_id} too large ({content_length} bytes), skipping")
+                            return None
+
                         image_data = await response.read()
+
+                        # Validate downloaded size
+                        if len(image_data) > MAX_IMAGE_BYTES:
+                            logger.warning(f"Cover image for ROM {rom_id} too large ({len(image_data)} bytes), skipping")
+                            return None
+
+                        # Validate image dimensions before returning
+                        try:
+                            img = Image.open(BytesIO(image_data))
+                            if img.width > MAX_IMAGE_DIMENSION or img.height > MAX_IMAGE_DIMENSION:
+                                logger.warning(f"Cover image for ROM {rom_id} dimensions too large ({img.width}x{img.height}), skipping")
+                                img.close()
+                                return None
+                            img.close()
+                        except Exception as e:
+                            logger.warning(f"Could not validate image dimensions for ROM {rom_id}: {e}")
+                            # Continue anyway - PIL will fail later if image is truly invalid
+
                         byte_arr = BytesIO(image_data)
                         byte_arr.seek(0)
                         return discord.File(byte_arr, filename="cover.png")
                     else:
                         logger.warning(f"Failed to download cover: HTTP {response.status}")
                         return None
-                        
+            finally:
+                if close_session:
+                    await session.close()
+
         except Exception as e:
             logger.error(f"Error downloading cover image: {e}")
             return None
@@ -1250,8 +1297,8 @@ class NoResultsView(discord.ui.View):
             
             try:
                 await interaction.message.edit(view=self)
-            except:
-                pass  # Message might have been deleted
+            except (discord.NotFound, discord.HTTPException):
+                pass  # Message might have been deleted or not accessible
                 
         except Exception as e:
             logger.error(f"Error processing request from search: {e}")
@@ -1290,6 +1337,14 @@ class NoResultsView(discord.ui.View):
         )
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def on_timeout(self):
+        """Disable all components when the view times out"""
+        for item in self.children:
+            item.disabled = True
+        # NoResultsView doesn't store message reference, so we can't update it
+        # The view will simply stop accepting interactions
+
 
 class Search(commands.Cog):
     def __init__(self, bot):
@@ -1411,7 +1466,7 @@ class Search(commands.Cog):
             # Get platforms from API
             raw_platforms = await self.bot.fetch_api_endpoint('platforms')
             if not raw_platforms:
-                print("Warning: Could not fetch platforms for emoji mapping")
+                logger.warning("Could not fetch platforms for emoji mapping")
                 return
                 
             # Don't sanitize here, we need the full platform data including custom_name
@@ -1448,17 +1503,15 @@ class Search(commands.Cog):
             
             logger.info(f"Successfully mapped {mapped_count} platform(s) to custom server emoji(s)")
             
-            # Print unmapped platforms
+            # Log unmapped platforms for debugging
             unmapped = [p['name'] for p in raw_platforms if p['name'] not in self.platform_emoji_names]
             if unmapped:
-                print("\nUnmapped platforms:")
-                for name in sorted(unmapped):
-                    print(f"- {name}")
-            
+                logger.debug(f"Unmapped platforms: {', '.join(sorted(unmapped))}")
+
             self._emojis_initialized = True
-            
+
         except Exception as e:
-            print(f"Error initializing platform emoji mappings: {e}")
+            logger.error(f"Error initializing platform emoji mappings: {e}")
     
     def get_platform_with_emoji(self, platform_name: str) -> str:
         """Returns platform name with its emoji if available."""

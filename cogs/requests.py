@@ -15,28 +15,9 @@ from collections import defaultdict
 from .search import ROM_View
 from urllib.parse import quote
 import aiohttp
+from bot import is_admin
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-def is_admin():
-    """Check if the user is the admin"""
-    async def predicate(ctx: discord.ApplicationContext):
-        logger.debug(f"Admin check predicate called for command: {ctx.command.name}")
-        logger.debug(f"User attempting command: {ctx.author} (ID: {ctx.author.id})")
-        
-        is_admin_result = ctx.bot.is_admin(ctx.author)
-        
-        if not is_admin_result:
-            logger.warning(f"Admin check FAILED for user {ctx.author} (ID: {ctx.author.id}) on command {ctx.command.name}")
-            # Log additional context
-            logger.debug(f"Guild: {ctx.guild.name if ctx.guild else 'DM'}")
-            logger.debug(f"Channel: {ctx.channel}")
-        else:
-            logger.info(f"Admin check PASSED for user {ctx.author} on command {ctx.command.name}")
-        
-        return is_admin_result
-    return commands.check(predicate)
 
 class RequestAdminView(discord.ui.View):
     """Paginated view for managing requests"""
@@ -130,8 +111,8 @@ class RequestAdminView(discord.ui.View):
                 version_request = version_parts[0]
                 if len(version_parts) > 1 and "Additional Notes:" in version_parts[1]:
                     additional_notes = version_parts[1].replace("Additional Notes: ", "").split("\n")[0]
-            except:
-                pass
+            except (IndexError, ValueError):
+                pass  # Parsing failed, use defaults
 
         if "IGDB Metadata:" in details:
             try:
@@ -263,7 +244,7 @@ class RequestAdminView(discord.ui.View):
             try:
                 date_obj = datetime.strptime(game_data["Release Date"], "%Y-%m-%d")
                 formatted_date = date_obj.strftime("%B %d, %Y")
-            except:
+            except ValueError:
                 formatted_date = game_data["Release Date"]
             embed.add_field(
                 name="Release Date",
@@ -367,9 +348,9 @@ class RequestAdminView(discord.ui.View):
                     user_avatar_url = user.avatar.url
                 elif user:
                     user_avatar_url = user.default_avatar.url
-            except:
-                pass
-            
+            except (discord.NotFound, discord.HTTPException):
+                pass  # User not found or API error
+
             embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
             await interaction.response.edit_message(embed=embed, view=self)
     
@@ -393,9 +374,9 @@ class RequestAdminView(discord.ui.View):
                     user_avatar_url = user.avatar.url
                 elif user:
                     user_avatar_url = user.default_avatar.url
-            except:
-                pass
-            
+            except (discord.NotFound, discord.HTTPException):
+                pass  # User not found or API error
+
             embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
             await interaction.response.edit_message(embed=embed, view=self)
     
@@ -467,8 +448,8 @@ class RequestAdminView(discord.ui.View):
 
                     user = await self.bot.fetch_user(current_request[1])
                     await user.send(f"✅ Your request for '{display_game_name}' has been fulfilled!")
-                except:
-                    logger.warning(f"Could not DM user {current_request[1]}")
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
+                    logger.warning(f"Could not DM user {current_request[1]}: {e}")
             
             # Update the request in our list
             updated_request = list(current_request)
@@ -490,9 +471,9 @@ class RequestAdminView(discord.ui.View):
                     user_avatar_url = user.avatar.url
                 elif user:
                     user_avatar_url = user.default_avatar.url
-            except:
-                pass
-            
+            except (discord.NotFound, discord.HTTPException):
+                pass  # User not found or API error
+
             embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
             await interaction.followup.edit_message(message_id=self.message.id, embed=embed, view=self)
             
@@ -582,8 +563,8 @@ class RequestAdminView(discord.ui.View):
                             if reason:
                                 message += f"\nReason: {reason}"
                             await user.send(message)
-                        except:
-                            logger.warning(f"Could not DM user {self.request_data[1]}")
+                        except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
+                            logger.warning(f"Could not DM user {self.request_data[1]}: {e}")
                     
                     # Update the request in our list
                     updated_request = list(self.request_data)
@@ -708,9 +689,9 @@ class RequestAdminView(discord.ui.View):
                         user_avatar_url = user.avatar.url
                     elif user:
                         user_avatar_url = user.default_avatar.url
-                except:
-                    pass
-                
+                except (discord.NotFound, discord.HTTPException):
+                    pass  # User not found or API error
+
                 embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
                 await interaction.followup.edit_message(
                     message_id=self.message.id,
@@ -737,6 +718,17 @@ class RequestAdminView(discord.ui.View):
                 "❌ An error occurred while refreshing the requests.",
                 ephemeral=True
             )
+
+    async def on_timeout(self):
+        """Disable all components when the view times out"""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass  # Message was deleted or can't be edited
+
 
 class UserRequestsView(discord.ui.View):
     """Paginated view for users to manage their own requests"""
@@ -840,8 +832,8 @@ class UserRequestsView(discord.ui.View):
                 version_request = version_parts[0]
                 if len(version_parts) > 1 and "Additional Notes:" in version_parts[1]:
                     additional_notes = version_parts[1].replace("Additional Notes: ", "").split("\n")[0]
-            except:
-                pass
+            except (IndexError, ValueError):
+                pass  # Parsing failed, use defaults
 
         if "IGDB Metadata:" in details:
             try:
@@ -973,7 +965,7 @@ class UserRequestsView(discord.ui.View):
             try:
                 date_obj = datetime.strptime(game_data["Release Date"], "%Y-%m-%d")
                 formatted_date = date_obj.strftime("%B %d, %Y")
-            except:
+            except ValueError:
                 formatted_date = game_data["Release Date"]
             embed.add_field(
                 name="Release Date",
@@ -1081,9 +1073,9 @@ class UserRequestsView(discord.ui.View):
                     user_avatar_url = user.avatar.url
                 elif user:
                     user_avatar_url = user.default_avatar.url
-            except:
-                pass
-            
+            except (discord.NotFound, discord.HTTPException):
+                pass  # User not found or API error
+
             embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
             await interaction.response.edit_message(embed=embed, view=self)
     
@@ -1107,9 +1099,9 @@ class UserRequestsView(discord.ui.View):
                     user_avatar_url = user.avatar.url
                 elif user:
                     user_avatar_url = user.default_avatar.url
-            except:
-                pass
-            
+            except (discord.NotFound, discord.HTTPException):
+                pass  # User not found or API error
+
             embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
             await interaction.response.edit_message(embed=embed, view=self)
     
@@ -1180,9 +1172,9 @@ class UserRequestsView(discord.ui.View):
                             user_avatar_url = user.avatar.url
                         elif user:
                             user_avatar_url = user.default_avatar.url
-                    except:
-                        pass
-                    
+                    except (discord.NotFound, discord.HTTPException):
+                        pass  # User not found or API error
+
                     # Update view with cancelled status
                     embed = self.view.create_request_embed(self.view.requests[self.view.current_index], user_avatar_url)
                     await modal_interaction.followup.edit_message(
@@ -1262,9 +1254,9 @@ class UserRequestsView(discord.ui.View):
                             user_avatar_url = user.avatar.url
                         elif user:
                             user_avatar_url = user.default_avatar.url
-                    except:
-                        pass
-                    
+                    except (discord.NotFound, discord.HTTPException):
+                        pass  # User not found or API error
+
                     # Update view
                     embed = self.view.create_request_embed(self.view.requests[self.view.current_index], user_avatar_url)
                     await modal_interaction.followup.edit_message(
@@ -1272,7 +1264,7 @@ class UserRequestsView(discord.ui.View):
                         embed=embed,
                         view=self.view
                     )
-                    
+
                     # Send confirmation
                     await modal_interaction.followup.send(
                         "✅ Note updated successfully.",
@@ -1336,6 +1328,17 @@ class UserRequestsView(discord.ui.View):
                 "❌ An error occurred while refreshing your requests.",
                 ephemeral=True
             )
+
+    async def on_timeout(self):
+        """Disable all components when the view times out"""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass  # Message was deleted or can't be edited
+
 
 class VariantRequestModal(discord.ui.Modal):
     def __init__(self, bot, platform_name, game_name, original_details, igdb_matches, ctx_or_interaction, author_id=None):
@@ -1432,7 +1435,7 @@ class GameSelect(discord.ui.Select):
 
 class GameSelectView(discord.ui.View):
     def __init__(self, bot, matches, platform_name=None):
-        super().__init__()
+        super().__init__(timeout=180)  # 3 minute timeout
         self.bot = bot
         self.matches = matches
         self.selected_game = None
@@ -1504,7 +1507,7 @@ class GameSelectView(discord.ui.View):
             try:
                 date_obj = datetime.strptime(game['release_date'], "%Y-%m-%d")
                 formatted_date = date_obj.strftime("%B %d, %Y")
-            except:
+            except ValueError:
                 formatted_date = game['release_date']
         else:
             formatted_date = "Unknown"
@@ -1591,8 +1594,18 @@ class GameSelectView(discord.ui.View):
             self.stop()
         
         self.submit_button.callback = submit_callback
-        
+
         await self.message.edit(embed=embed, view=self)
+
+    async def on_timeout(self):
+        """Disable all components when the view times out"""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass  # Message was deleted or can't be edited
 
 class ExistingGameWithIGDBView(discord.ui.View):
     """View that combines existing game selection with IGDB matching"""
@@ -1866,11 +1879,22 @@ class ExistingGameWithIGDBView(discord.ui.View):
         await interaction.response.edit_message(view=self)
         self.stop()
 
+    async def on_timeout(self):
+        """Disable all components when the view times out"""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass  # Message was deleted or can't be edited
+
+
 class ExistingGameView(discord.ui.View):
     """View for when requested games already exist in the collection"""
-    
+
     def __init__(self, bot, matches, platform_name, game_name, author_id):
-        super().__init__()
+        super().__init__(timeout=180)  # 3 minute timeout
         self.bot = bot
         self.matches = matches
         self.platform_name = platform_name
@@ -2060,6 +2084,16 @@ class ExistingGameView(discord.ui.View):
         await interaction.response.edit_message(view=self)
         self.stop()
 
+    async def on_timeout(self):
+        """Disable all components when the view times out"""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass  # Message was deleted or can't be edited
+
 
 class Request(commands.Cog):
     def __init__(self, bot):
@@ -2079,8 +2113,14 @@ class Request(commands.Cog):
         if not self.requests_enabled and not ctx.author.guild_permissions.administrator:
             await ctx.respond("❌ The request system is currently disabled.")
             return False
-        return True    
-    
+        return True
+
+    async def cog_unload(self):
+        """Cleanup resources when cog is unloaded"""
+        if self.igdb:
+            await self.igdb.close()
+            logger.debug("IGDB client session closed")
+
     async def setup(self):
         """Set up database and initialize IGDB client"""
         try:
@@ -3687,8 +3727,8 @@ class Request(commands.Cog):
                         user_avatar_url = user.avatar.url
                     elif user:
                         user_avatar_url = user.default_avatar.url
-                except:
-                    pass
+                except (discord.NotFound, discord.HTTPException):
+                    pass  # User not found or API error
 
                 embed = view.create_request_embed(requests[0], user_avatar_url)  # Pass avatar URL
                 

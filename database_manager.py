@@ -145,8 +145,9 @@ class MasterDatabase:
         if not self._initialized:
             logger.error("Database has not been initialized!")
             raise RuntimeError("Database is not available.")
-        
+
         conn = None
+        exception_occurred = False
         try:
             # This creates a new connection for each request.
             # It's safe and prevents concurrency issues.
@@ -154,11 +155,18 @@ class MasterDatabase:
             await conn.execute("PRAGMA busy_timeout=10000") # Set timeout
             yield conn
         except aiosqlite.Error as e:
+            exception_occurred = True
             logger.error(f"Database connection error: {e}")
+            raise
+        except Exception:
+            exception_occurred = True
             raise
         finally:
             if conn:
-                await conn.commit()
+                if exception_occurred:
+                    await conn.rollback()
+                else:
+                    await conn.commit()
                 await conn.close()
     
     def _check_for_old_databases(self) -> bool:
@@ -314,15 +322,15 @@ class MasterDatabase:
                                 platform_count = 0
                                 for platform in platforms:
                                     try:
-                                        await db.execute('''
-                                            INSERT INTO platform_mappings 
+                                        await new_db.execute('''
+                                            INSERT INTO platform_mappings
                                             (display_name, folder_name, igdb_slug, moby_slug)
                                             VALUES (?, ?, ?, ?)
                                             ON CONFLICT(display_name) DO UPDATE SET
                                                 folder_name = excluded.folder_name,
                                                 igdb_slug = excluded.igdb_slug,
                                                 moby_slug = excluded.moby_slug
-                                        ''', (...))
+                                        ''', (platform[0], platform[1], platform[2], platform[3]))
                                         platform_count += 1
                                     except Exception as e:
                                         logger.warning(f"Failed to migrate platform: {e}")
@@ -700,31 +708,47 @@ class MasterDatabase:
             logger.error(f"Error getting all user links: {e}")
             return []
     
-    async def initialize_platform_mappings(self):
-        """Initialize the master platform list from remote JSON file with local fallback"""
+    async def initialize_platform_mappings(self, session: Optional[aiohttp.ClientSession] = None):
+        """Initialize the master platform list from remote JSON file with local fallback
+
+        Args:
+            session: Optional aiohttp session to reuse. If not provided, creates a temporary one.
+        """
         url = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/igdb/platform_mapping.json"
         platforms_file = Path('igdb') / 'platform_mapping.json'
-        
+
         try:
             master_platforms = None
-            
+
             # Try fetching from GitHub
             try:
-                async with aiohttp.ClientSession() as session:
+                # Use provided session or create a temporary one
+                close_session = False
+                if session is None or session.closed:
+                    session = aiohttp.ClientSession()
+                    close_session = True
+
+                try:
                     async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                         if resp.status == 200:
                             text = await resp.text()
                             master_platforms = json.loads(text)
                             logger.debug(f"Loaded {len(master_platforms)} platforms from GitHub")
+                finally:
+                    if close_session:
+                        await session.close()
             except Exception as e:
                 logger.warning(f"Could not fetch platforms from GitHub: {e}")
             
             # Fallback to local file
             if not master_platforms:
                 if platforms_file.exists():
-                    with open(platforms_file, 'r') as f:
-                        master_platforms = json.load(f)
-                        logger.info(f"Loaded {len(master_platforms)} platforms from local file")
+                    # Use asyncio to avoid blocking the event loop
+                    def read_platforms_file():
+                        with open(platforms_file, 'r') as f:
+                            return json.load(f)
+                    master_platforms = await asyncio.to_thread(read_platforms_file)
+                    logger.info(f"Loaded {len(master_platforms)} platforms from local file")
                 else:
                     logger.warning("No remote or local platforms found, using defaults")
                     # Create default platforms
@@ -749,10 +773,12 @@ class MasterDatabase:
                         {"display_name": "Arcade", "folder_name": "arcade", "igdb_slug": "arcade", "moby_slug": "arcade"}
                     ]
                     
-                    # Save defaults to file for next time
-                    platforms_file.parent.mkdir(exist_ok=True)
-                    with open(platforms_file, 'w') as f:
-                        json.dump(master_platforms, f, indent=2)
+                    # Save defaults to file for next time (use asyncio to avoid blocking)
+                    def write_platforms_file():
+                        platforms_file.parent.mkdir(exist_ok=True)
+                        with open(platforms_file, 'w') as f:
+                            json.dump(master_platforms, f, indent=2)
+                    await asyncio.to_thread(write_platforms_file)
             
             # Populate database - use direct connection since we're in initialization
             if master_platforms:
@@ -796,6 +822,19 @@ class MasterDatabase:
             logger.error(f"Error initializing platform mappings: {e}", exc_info=True)
             return False
     
+    async def close_all_connections(self):
+        """Close all database connections and cleanup resources.
+
+        This method is called during bot shutdown to ensure clean resource release.
+        Since we use a connection-per-request model with context managers,
+        there's no persistent pool to close, but we reset the initialization state.
+        """
+        try:
+            self._initialized = False
+            logger.info("Database connections closed and resources released")
+        except Exception as e:
+            logger.error(f"Error closing database connections: {e}")
+
     async def get_platform_mappings(self, search_term: str = None) -> List[Dict]:
         """Get platform mappings with optional search"""
         async with self.get_connection() as db:

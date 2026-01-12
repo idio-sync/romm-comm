@@ -9,14 +9,9 @@ import json
 from typing import Optional, Dict, Any, List
 from enum import Enum
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.WARNING)
+from bot import is_admin
 
-def is_admin():
-    """Check if the user is the admin"""
-    async def predicate(ctx: discord.ApplicationContext):
-        return ctx.bot.is_admin(ctx.author)
-    return commands.check(predicate)
+logger = logging.getLogger(__name__)
 
 class ScanType(str, Enum):
     """Enum for scan types to prevent typos and provide better code completion"""
@@ -110,15 +105,16 @@ class Scan(commands.Cog):
         async def on_scanning_platform(data):
             try:
                 # First event detection - if this is the first event and we didn't initiate scan
-                if not self._first_event_received and not self.is_scanning:
-                    logger.info("🔍 External scan detected via platform event")
-                    self._scan_initiated_externally = True
-                    self.scan_start_time = datetime.now()
-                    self.is_scanning = True
-                    self.external_scan = True
-                    
-                    # Update bot-level shared state
-                    async with self.bot.scan_state_lock:
+                # Use lock to prevent race condition when checking and setting is_scanning
+                async with self.bot.scan_state_lock:
+                    if not self._first_event_received and not self.is_scanning:
+                        logger.info("🔍 External scan detected via platform event")
+                        self._scan_initiated_externally = True
+                        self.scan_start_time = datetime.now()
+                        self.is_scanning = True
+                        self.external_scan = True
+
+                        # Update bot-level shared state (already holding lock)
                         self.bot.scan_state.update({
                             'is_scanning': True,
                             'scan_start_time': self.scan_start_time,
@@ -126,21 +122,21 @@ class Scan(commands.Cog):
                             'scan_type': 'platform',
                             'channel_id': None
                         })
-                    
-                    self.scan_progress = {
-                        'current_platform': None,
-                        'current_platform_slug': None,
-                        'current_rom': None,
-                        'platform_roms': 0,
-                        'total_roms': 0,
-                        'scanned_roms': 0,
-                        'scanned_platforms': 0,
-                        'added_platforms': 0,
-                        'added_roms': 0,
-                        'metadata_roms': 0
-                    }
-                
-                self._first_event_received = True
+
+                        self.scan_progress = {
+                            'current_platform': None,
+                            'current_platform_slug': None,
+                            'current_rom': None,
+                            'platform_roms': 0,
+                            'total_roms': 0,
+                            'scanned_roms': 0,
+                            'scanned_platforms': 0,
+                            'added_platforms': 0,
+                            'added_roms': 0,
+                            'metadata_roms': 0
+                        }
+
+                    self._first_event_received = True
                 
                 # Handle platform data
                 if isinstance(data, dict):
@@ -166,15 +162,16 @@ class Scan(commands.Cog):
         async def on_scanning_rom(data):
             try:
                 # First event detection - same logic as platform
-                if not self._first_event_received and not self.is_scanning:
-                    logger.info("🔍 External scan detected via ROM event")
-                    self._scan_initiated_externally = True
-                    self.scan_start_time = datetime.now()
-                    self.is_scanning = True
-                    self.external_scan = True
-                    
-                    # Update bot-level shared state
-                    async with self.bot.scan_state_lock:
+                # Use lock to prevent race condition when checking and setting is_scanning
+                async with self.bot.scan_state_lock:
+                    if not self._first_event_received and not self.is_scanning:
+                        logger.info("🔍 External scan detected via ROM event")
+                        self._scan_initiated_externally = True
+                        self.scan_start_time = datetime.now()
+                        self.is_scanning = True
+                        self.external_scan = True
+
+                        # Update bot-level shared state (already holding lock)
                         self.bot.scan_state.update({
                             'is_scanning': True,
                             'scan_start_time': self.scan_start_time,
@@ -182,21 +179,21 @@ class Scan(commands.Cog):
                             'scan_type': 'rom',
                             'channel_id': None
                         })
-                    
-                    self.scan_progress = {
-                        'current_platform': 'Unknown',
-                        'current_platform_slug': None,
-                        'current_rom': None,
-                        'platform_roms': 0,
-                        'total_roms': 0,
-                        'scanned_roms': 0,
-                        'scanned_platforms': 0,
-                        'added_platforms': 0,
-                        'added_roms': 0,
-                        'metadata_roms': 0
-                    }
-                
-                self._first_event_received = True
+
+                        self.scan_progress = {
+                            'current_platform': 'Unknown',
+                            'current_platform_slug': None,
+                            'current_rom': None,
+                            'platform_roms': 0,
+                            'total_roms': 0,
+                            'scanned_roms': 0,
+                            'scanned_platforms': 0,
+                            'added_platforms': 0,
+                            'added_roms': 0,
+                            'metadata_roms': 0
+                        }
+
+                    self._first_event_received = True
                 
                 # Handle ROM data
                 if isinstance(data, dict):
