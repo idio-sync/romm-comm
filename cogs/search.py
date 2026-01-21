@@ -1730,7 +1730,7 @@ class Search(commands.Cog):
                     try:
                         # Get ROMs for platform
                         roms_response = await self.bot.fetch_api_endpoint(
-                            f'roms?platform_id={platform_id}&limit={rom_count}'
+                            f'roms?platform_ids={platform_id}&limit={rom_count}'
                         )
 
                         # Handle paginated response
@@ -1915,7 +1915,7 @@ class Search(commands.Cog):
             # Try each search strategy
             for attempt in search_attempts:
                 search_response = await self.bot.fetch_api_endpoint(
-                    f'roms?platform_id={platform_id}&search_term={attempt}&limit=100'
+                    f'roms?platform_ids={platform_id}&search_term={attempt}&limit=100'
                 )
                 
                 # Handle paginated response
