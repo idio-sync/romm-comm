@@ -455,35 +455,18 @@ class Scan(commands.Cog):
         try:
             # Use raw platform data to access custom_name field
             raw_platforms = await self.bot.fetch_api_endpoint('platforms')
-            
+
             if not raw_platforms:
                 await ctx.respond("❌ Error: Platform data not available")
                 return
-            
+
             # Find platform by name (including custom names)
-            platform_id = None
-            platform_display_name = None
-            platform_lower = platform.lower()
-            
-            for p in raw_platforms:
-                # Check custom name first
-                custom_name = p.get('custom_name')
-                if custom_name and custom_name.lower() == platform_lower:
-                    platform_id = p.get('id')
-                    platform_display_name = self.bot.get_platform_display_name(p)
-                    break
-                
-                # Check regular name
-                regular_name = p.get('name', '')
-                if regular_name.lower() == platform_lower:
-                    platform_id = p.get('id')
-                    platform_display_name = self.bot.get_platform_display_name(p)
-                    break
-            
+            platform_id, platform_display_name = await self.bot.find_platform_by_name(platform, raw_platforms)
+
             if not platform_id:
                 # Show available platforms with display names
                 platforms_list = "\n".join(
-                    f"• {self.bot.get_platform_display_name(p)}" 
+                    f"• {self.bot.get_platform_display_name(p)}"
                     for p in sorted(raw_platforms, key=lambda x: self.bot.get_platform_display_name(x))
                 )
                 await ctx.respond(f"❌ Platform '{platform}' not found. Available platforms:\n{platforms_list}")

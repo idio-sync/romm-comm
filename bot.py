@@ -657,10 +657,42 @@ class RommBot(discord.Bot):
         custom_name = platform_data.get('custom_name')
         if custom_name and custom_name.strip():
             return custom_name.strip()
-        
+
         # Fall back to regular name
         return platform_data.get('name', 'Unknown Platform')
-    
+
+    async def find_platform_by_name(self, platform_name: str, platforms_data: list = None) -> tuple:
+        """
+        Find platform data by name, checking both regular and custom names.
+
+        Args:
+            platform_name: The platform name to search for
+            platforms_data: Optional pre-fetched platforms list to avoid redundant API calls
+
+        Returns:
+            Tuple of (platform_id, platform_display_name) or (None, None) if not found
+        """
+        if platforms_data is None:
+            platforms_data = await self.fetch_api_endpoint('platforms')
+
+        if not platforms_data:
+            return None, None
+
+        platform_lower = platform_name.lower()
+
+        for p in platforms_data:
+            # Check custom name first
+            custom_name = p.get('custom_name')
+            if custom_name and custom_name.lower() == platform_lower:
+                return p['id'], self.get_platform_display_name(p)
+
+            # Check regular name
+            regular_name = p.get('name', '')
+            if regular_name.lower() == platform_lower:
+                return p['id'], self.get_platform_display_name(p)
+
+        return None, None
+
     async def setup_hook(self):
         """Initialize database and other async resources before bot starts"""
         try:
