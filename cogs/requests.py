@@ -2309,7 +2309,7 @@ class Request(commands.Cog):
 
             # Search for the game
             search_response = await self.bot.fetch_api_endpoint(
-                f'roms?platform_ids={platform_id}&search_term={game_name}&limit=25'
+                f'roms?platform_id={platform_id}&platform_ids={platform_id}&search_term={game_name}&limit=25'
             )
 
             # Handle paginated response
