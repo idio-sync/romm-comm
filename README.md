@@ -4,7 +4,6 @@
 
 A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) API to provide information about your ROM collection, handle user ROM requests, and control RomM from Discord.
 
-Disclaimer: This was primarily created using Claude Code after my project scope outpaced my programming ability.
 ---
 
 <p align="center">
@@ -33,6 +32,7 @@ Disclaimer: This was primarily created using Claude Code after my project scope 
 - [Contributing](#contributing)
 
 ---
+Disclaimer: This was primarily created using Claude Code after my project scope outpaced my programming ability.
 
 ## Features
 
@@ -301,6 +301,7 @@ GGREQUESTZ_API_KEY=ggr_api_key
 Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
 
 ---
+
 
 
 
