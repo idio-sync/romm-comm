@@ -1561,28 +1561,7 @@ class Search(commands.Cog):
         except Exception as e:
             logger.error(f"Error in platform autocomplete: {e}")
         return []
-        
-    async def find_platform_by_name(self, platform_name: str):
-        """Find platform data by name, checking both regular and custom names"""
-        raw_platforms = await self.bot.fetch_api_endpoint('platforms')
-        if not raw_platforms:
-            return None, None
-        
-        platform_lower = platform_name.lower()
-        
-        for p in raw_platforms:
-            # Check custom name first
-            custom_name = p.get('custom_name')
-            if custom_name and custom_name.lower() == platform_lower:
-                return p['id'], self.bot.get_platform_display_name(p)
-            
-            # Check regular name
-            regular_name = p.get('name', '')
-            if regular_name.lower() == platform_lower:
-                return p['id'], self.bot.get_platform_display_name(p)
-        
-        return None, None
-    
+
     @commands.Cog.listener()
     async def on_ready(self):
         """Re-initialize emoji mappings when bot reconnects"""
@@ -1601,19 +1580,15 @@ class Search(commands.Cog):
                 await ctx.respond("Failed to fetch platforms data")
                 return
 
-            platform_id, platform_display_name = await self.find_platform_by_name(platform)
+            platform_id, platform_display_name = await self.bot.find_platform_by_name(platform, raw_platforms)
 
             if not platform_id:
                 # Show available platforms with display names
-                raw_platforms = await self.bot.fetch_api_endpoint('platforms')
-                if raw_platforms:
-                    platforms_list = "\n".join(
-                        f"• {self.get_platform_with_emoji(self.bot.get_platform_display_name(p))}" 
-                        for p in raw_platforms
-                    )
-                    await ctx.respond(f"Platform '{platform}' not found. Available platforms:\n{platforms_list}")
-                else:
-                    await ctx.respond("Failed to fetch platforms data")
+                platforms_list = "\n".join(
+                    f"• {self.get_platform_with_emoji(self.bot.get_platform_display_name(p))}"
+                    for p in raw_platforms
+                )
+                await ctx.respond(f"Platform '{platform}' not found. Available platforms:\n{platforms_list}")
                 return
 
             firmware_data = await self.bot.fetch_api_endpoint(f'firmware?platform_id={platform_id}')
@@ -1694,25 +1669,21 @@ class Search(commands.Cog):
                 if not raw_platforms:
                     await ctx.respond("❌ Unable to fetch platforms data")
                     return
-            
+
                 # Find matching platform
-                platform_id, platform_display_name = await self.find_platform_by_name(platform)
+                platform_id, platform_display_name = await self.bot.find_platform_by_name(platform, raw_platforms)
 
                 if not platform_id:
                     # Show available platforms with display names
-                    raw_platforms = await self.bot.fetch_api_endpoint('platforms')
-                    if raw_platforms:
-                        platforms_list = "\n".join(
-                            f"• {self.get_platform_with_emoji(self.bot.get_platform_display_name(p))}" 
-                            for p in sorted(raw_platforms, key=lambda x: self.bot.get_platform_display_name(x))
-                        )
-                        await ctx.respond(f"❌ Platform '{platform}' not found. Available platforms:\n{platforms_list}")
-                    else:
-                        await ctx.respond("❌ Unable to fetch platforms data")
+                    platforms_list = "\n".join(
+                        f"• {self.get_platform_with_emoji(self.bot.get_platform_display_name(p))}"
+                        for p in sorted(raw_platforms, key=lambda x: self.bot.get_platform_display_name(x))
+                    )
+                    await ctx.respond(f"❌ Platform '{platform}' not found. Available platforms:\n{platforms_list}")
                     return
-                    
+
+                # Find platform_data from already-fetched platforms
                 platform_data = None
-                raw_platforms = await self.bot.fetch_api_endpoint('platforms')
                 for p in raw_platforms:
                     if p['id'] == platform_id:
                         platform_data = p
@@ -1876,21 +1847,17 @@ class Search(commands.Cog):
             if not raw_platforms:
                 await ctx.respond("❌ Unable to fetch platforms data")
                 return
-            
+
             # Find matching platform
-            platform_id, platform_display_name = await self.find_platform_by_name(platform)
+            platform_id, platform_display_name = await self.bot.find_platform_by_name(platform, raw_platforms)
 
             if not platform_id:
                 # Show available platforms with display names
-                raw_platforms = await self.bot.fetch_api_endpoint('platforms')
-                if raw_platforms:
-                    platforms_list = "\n".join(
-                        f"• {self.get_platform_with_emoji(self.bot.get_platform_display_name(p))}" 
-                        for p in sorted(raw_platforms, key=lambda x: self.bot.get_platform_display_name(x))
-                    )
-                    await ctx.respond(f"❌ Platform '{platform}' not found. Available platforms:\n{platforms_list}")
-                else:
-                    await ctx.respond("❌ Unable to fetch platforms data")
+                platforms_list = "\n".join(
+                    f"• {self.get_platform_with_emoji(self.bot.get_platform_display_name(p))}"
+                    for p in sorted(raw_platforms, key=lambda x: self.bot.get_platform_display_name(x))
+                )
+                await ctx.respond(f"❌ Platform '{platform}' not found. Available platforms:\n{platforms_list}")
                 return
 
             # Search for ROMs
