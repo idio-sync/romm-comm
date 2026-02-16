@@ -113,7 +113,7 @@ class ROM_View(discord.ui.View):
         if not file_path:
             return None
 
-        known_subfolders = ['hack', 'dlc', 'manual', 'mod', 'patch', 'update', 'demo', 'translation', 'prototype']
+        known_subfolders = ['hack', 'dlc', 'manual', 'mod', 'patch', 'update', 'demo', 'translation', 'prototype', 'cheat']
         path_parts = file_path.split('/')
         for part in path_parts:  # include all parts
             if part.lower() in known_subfolders:
@@ -133,6 +133,7 @@ class ROM_View(discord.ui.View):
             'demo': '🎮',
             'translation': '🌐',
             'prototype': '🔬',
+            'cheat': '🃏',
             None: '📄'  # Default for main/root files
         }
         return icons.get(subfolder, '📁')
