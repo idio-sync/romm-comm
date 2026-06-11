@@ -135,6 +135,30 @@ class ExistingGameViewTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RequestAutoFulfillmentTests(unittest.IsolatedAsyncioTestCase):
+    async def test_auto_fulfillment_dm_is_sent_without_ggrequestz(self):
+        user = FakeUser()
+        bot = FakeRequestBot(user)
+        request = Request.__new__(Request)
+        request.bot = bot
+        request.db = bot.db
+        request.ggr = None
+        request.processing_lock = asyncio.Lock()
+
+        new_games = [
+            {
+                "id": 321,
+                "name": "Mega Man X",
+                "platform": "SNES",
+                "igdb_id": 12345,
+                "fs_name": "Mega Man X (USA).zip",
+            }
+        ]
+
+        with patch("cogs.requests.asyncio.sleep", instant_sleep):
+            await request.on_batch_scan_complete(new_games)
+
+        self.assertEqual(1, len(user.messages))
+
     async def test_auto_fulfillment_dm_uses_stable_download_url(self):
         user = FakeUser()
         bot = FakeRequestBot(user)

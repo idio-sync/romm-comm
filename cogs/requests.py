@@ -2477,7 +2477,8 @@ class Request(commands.Cog):
                                     logger.info(f"✅ Synced fulfillment to ggrequestz for request #{req_id} (GGR ID: {ggr_request_id})")
                                 else:
                                     logger.error(f"❌ Failed to sync fulfillment to ggrequestz: {result.get('error')}")
-                    
+                
+                if notifications:
                     logger.info(f"Sending DMs with links for {len(notifications)} user(s).")
                     for user_id, fulfilled_games in notifications.items():
                         try:
