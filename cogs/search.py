@@ -273,7 +273,12 @@ class ROM_View(discord.ui.View):
                 embed.add_field(name="Platform", value=platform_display, inline=True)
             
             # Rest of the embed creation remains the same...
-            if metadatum := rom_data.get('metadatum'):
+            metadatum = rom_data.get('metadatum') or {}
+            if not isinstance(metadatum, dict):
+                logger.warning(f"Unexpected metadatum type for ROM {rom_data.get('id')}: {type(metadatum).__name__}")
+                metadatum = {}
+
+            if metadatum:
                 if genres := metadatum.get('genres'):
                     if isinstance(genres, list):
                         genre_list = genres[:2]  # Take only first two genres
@@ -282,7 +287,7 @@ class ROM_View(discord.ui.View):
                         genre_display = str(genres)
                     embed.add_field(name="Genres", value=genre_display, inline=True)
             
-            if metadatum := rom_data.get('metadatum'):
+            if metadatum:
                 if release_date := metadatum.get('first_release_date'):
                     try:
                         # Check if timestamp is in milliseconds (if it's too large)

@@ -5,9 +5,12 @@
 # Environment variables
 .env
 *.env
+.env*
+!.env.example
 
 # Python
 __pycache__
+__pycache__/
 *.pyc
 *.pyo
 *.pyd
@@ -25,6 +28,10 @@ nosetests.xml
 coverage.xml
 *.cover
 *.log
+*.db
+*.sqlite
+*.sqlite3
+data/
 
 # OS generated files
 .DS_Store
@@ -38,5 +45,4 @@ Thumbs.db
 #
 .env (Sample)
 .github/
-backend/
 README.md

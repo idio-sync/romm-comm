@@ -126,7 +126,7 @@ class MasterDatabase:
                     # Migration failure is not critical for new installations
                     logger.warning("Continuing despite migration failure")
                     
-            # Migrate for GGRequestz support (adds column if needed)
+            # Ensure current request schema for existing installations
             await self.migrate_for_ggrequestz()
             
             logger.debug("Initializing platform mappings...")
@@ -411,32 +411,33 @@ class MasterDatabase:
             raise
     
     async def migrate_for_ggrequestz(self):
-        """Add GGRequestz integration support to existing databases"""
+        """Ensure existing request databases have all current columns and indexes."""
         try:
             async with aiosqlite.connect(self.db_path) as db:
-                # Check if column already exists
                 cursor = await db.execute("PRAGMA table_info(requests)")
                 columns = await cursor.fetchall()
                 column_names = [col[1] for col in columns]
-                
-                if 'ggr_request_id' in column_names:
-                    logger.debug("GGRequestz column already exists")
-                    return True
-                
-                # Add column
-                logger.info("Adding ggr_request_id column for GGRequestz integration...")
-                await db.execute(
-                    "ALTER TABLE requests ADD COLUMN ggr_request_id INTEGER"
-                )
-                
-                # Add index
+
+                required_columns = {
+                    'platform_mapping_id': 'INTEGER',
+                    'igdb_game_name': 'TEXT',
+                    'ggr_request_id': 'INTEGER',
+                }
+
+                for column_name, column_type in required_columns.items():
+                    if column_name not in column_names:
+                        logger.info(f"Adding requests.{column_name} column")
+                        await db.execute(
+                            f"ALTER TABLE requests ADD COLUMN {column_name} {column_type}"
+                        )
+
                 await db.execute(
                     "CREATE INDEX IF NOT EXISTS idx_ggr_request_id ON requests(ggr_request_id)"
                 )
                 
                 await db.commit()
                 
-                logger.info("✅ GGRequestz migration completed successfully")
+                logger.info("✅ Request schema migration completed successfully")
                 return True
                 
         except Exception as e:
@@ -530,7 +531,7 @@ class MasterDatabase:
         await db.execute('CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status)')
         await db.execute('CREATE INDEX IF NOT EXISTS idx_requests_user ON requests(user_id)')
         await db.execute('CREATE INDEX IF NOT EXISTS idx_platform_mappings_name ON platform_mappings(display_name)')
-        # await db.execute('CREATE INDEX IF NOT EXISTS idx_ggr_request_id ON requests(ggr_request_id)')
+        await db.execute('CREATE INDEX IF NOT EXISTS idx_ggr_request_id ON requests(ggr_request_id)')
 
         logger.debug("Request table indexes created")
     
@@ -715,7 +716,10 @@ class MasterDatabase:
             session: Optional aiohttp session to reuse. If not provided, creates a temporary one.
         """
         url = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/igdb/platform_mapping.json"
-        platforms_file = Path('igdb') / 'platform_mapping.json'
+        platform_files = [
+            Path('.backend') / 'igdb' / 'platform_mapping.json',
+            Path('igdb') / 'platform_mapping.json',
+        ]
 
         try:
             master_platforms = None
@@ -742,7 +746,8 @@ class MasterDatabase:
             
             # Fallback to local file
             if not master_platforms:
-                if platforms_file.exists():
+                platforms_file = next((path for path in platform_files if path.exists()), None)
+                if platforms_file:
                     # Use asyncio to avoid blocking the event loop
                     def read_platforms_file():
                         with open(platforms_file, 'r') as f:
@@ -775,6 +780,7 @@ class MasterDatabase:
                     
                     # Save defaults to file for next time (use asyncio to avoid blocking)
                     def write_platforms_file():
+                        platforms_file = platform_files[0]
                         platforms_file.parent.mkdir(exist_ok=True)
                         with open(platforms_file, 'w') as f:
                             json.dump(master_platforms, f, indent=2)

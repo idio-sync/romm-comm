@@ -4,6 +4,7 @@ import os
 from dotenv import load_dotenv
 import aiohttp
 import asyncio
+import json
 from datetime import datetime
 import sys
 from typing import Dict, Optional, Any, List
@@ -567,7 +568,7 @@ class RommBot(discord.Bot):
 
                 if response.status == 401:
                     logger.debug("Got 401, attempting to refresh token")
-                    if await self.ensure_valid_token():
+                    if await self.refresh_oauth_token():
                         headers["Authorization"] = f"Bearer {self.access_token}"
                         async with session.request(method, url, **request_kwargs) as retry_response:
                             return await handle_response(retry_response)
