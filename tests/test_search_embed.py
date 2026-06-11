@@ -37,3 +37,30 @@ class SearchEmbedTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("Metadata Free Game", embed.title)
         self.assertIsNone(cover_file)
+
+    async def test_rom_download_url_uses_api_path_and_stable_filename_encoding(self):
+        view = ROM_View(FakeBot(), [], author_id=42, platform_name="NES")
+
+        url = view.build_rom_download_url(321, "Mega Man X (USA).zip")
+
+        self.assertEqual(
+            "https://romm.example/api/roms/321/content/Mega+Man+X+%28USA%29.zip",
+            url,
+        )
+
+    async def test_rom_download_url_can_filter_by_file_ids(self):
+        view = ROM_View(FakeBot(), [], author_id=42, platform_name="NES")
+
+        url = view.build_rom_download_url(321, "Mega Man X.zip", file_ids=["11", "22"])
+
+        self.assertEqual(
+            "https://romm.example/api/roms/321/content/Mega+Man+X.zip?file_ids=11,22",
+            url,
+        )
+
+
+class SearchDownloadUrlBoundaryTests(unittest.TestCase):
+    def test_search_does_not_build_non_api_rom_content_urls(self):
+        source = __import__("pathlib").Path("cogs/search.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("}/roms/{", source)

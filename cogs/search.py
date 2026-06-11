@@ -138,6 +138,29 @@ class ROM_View(discord.ui.View):
         }
         return icons.get(subfolder, '📁')
 
+    @staticmethod
+    def _encode_download_filename(file_name: str) -> str:
+        """Encode RomM download filenames consistently for Discord links."""
+        safe_file_name = str(file_name or 'unknown_file').replace(' ', '+')
+        return quote(safe_file_name, safe='+')
+
+    def build_rom_download_url(
+        self,
+        rom_id: Union[int, str],
+        file_name: str,
+        file_ids: Optional[List[Union[int, str]]] = None
+    ) -> str:
+        """Build a RomM API download URL for a whole ROM or selected file IDs."""
+        domain = self.bot.config.DOMAIN.rstrip('/')
+        encoded_file_name = self._encode_download_filename(file_name)
+        download_url = f"{domain}/api/roms/{rom_id}/content/{encoded_file_name}"
+
+        if file_ids:
+            file_ids_param = ",".join(str(file_id) for file_id in file_ids)
+            download_url = f"{download_url}?file_ids={file_ids_param}"
+
+        return download_url
+
     async def download_cover_image(self, rom_data: Dict) -> Optional[discord.File]:
         """Download cover image from Romm API and return as Discord File"""
         # Maximum image constraints to prevent DoS via oversized images
@@ -213,15 +236,12 @@ class ROM_View(discord.ui.View):
     
     async def create_rom_embed(self, rom_data: Dict) -> Tuple[discord.Embed, Optional[discord.File]]:
         try:
-            # When creating the download URL in the embed
             raw_file_name = rom_data.get('fs_name', 'unknown_file')
-            # Use plus signs for spaces - these survive Discord->Browser->Nginx
-            file_name = raw_file_name.replace(' ', '+')
-            file_name = quote(file_name, safe='+')
-            download_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_data['id']}/content/{file_name}"
+            encoded_file_name = self._encode_download_filename(raw_file_name)
+            download_url = self.build_rom_download_url(rom_data['id'], raw_file_name)
             
             logger.debug(f"Embed download URL - raw: '{raw_file_name}'")
-            logger.debug(f"Embed download URL - encoded: '{file_name}'")
+            logger.debug(f"Embed download URL - encoded: '{encoded_file_name}'")
             logger.debug(f"Embed download URL - final: {download_url}")
             igdb_name = rom_data['name'].lower().replace(' ', '-')
             igdb_name = re.sub(r'[^a-z0-9-]', '', igdb_name)
@@ -602,8 +622,7 @@ class ROM_View(discord.ui.View):
                 self.add_item(self.file_select)
 
                 # Create download buttons
-                file_name = quote(rom_data.get('fs_name', 'unknown_file'))
-                base_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_data['id']}/content/{file_name}"
+                base_url = self.build_rom_download_url(rom_data['id'], rom_data.get('fs_name', 'unknown_file'))
 
                 # Download Selected button (initially disabled)
                 self.download_selected = discord.ui.Button(
@@ -692,9 +711,8 @@ class ROM_View(discord.ui.View):
 
     def _add_single_file_download(self, rom_data: Dict):
         """Add download button for single file ROM"""
-        file_name = quote(rom_data.get('fs_name', 'unknown_file'))
         file_size = self.format_file_size(rom_data.get('fs_size_bytes', 0))
-        download_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_data['id']}/content/{file_name}"
+        download_url = self.build_rom_download_url(rom_data['id'], rom_data.get('fs_name', 'unknown_file'))
         
         self.download_all = discord.ui.Button(
             label=f"Download ({file_size})",
@@ -759,14 +777,11 @@ class ROM_View(discord.ui.View):
                     total_size += file_info.get('file_size_bytes', 0)
             
             # Create download URL with file_ids
-            file_name = quote(self._selected_rom.get('fs_name', 'unknown_file'))
-            base_url = f"{self.bot.config.DOMAIN}/api/roms/{self._selected_rom['id']}/content/{file_name}"
-            
-            if selected_file_ids:
-                file_ids_param = ','.join(selected_file_ids)
-                download_url = f"{base_url}?file_ids={file_ids_param}"
-            else:
-                download_url = base_url
+            download_url = self.build_rom_download_url(
+                self._selected_rom['id'],
+                self._selected_rom.get('fs_name', 'unknown_file'),
+                file_ids=selected_file_ids
+            )
             
             # Add updated download selected button
             count = len(self.selected_files)
@@ -780,8 +795,10 @@ class ROM_View(discord.ui.View):
             self.add_item(self.download_selected)
         else:
             # No files selected - disable download selected
-            file_name = quote(self._selected_rom.get('fs_name', 'unknown_file'))
-            base_url = f"{self.bot.config.DOMAIN}/api/roms/{self._selected_rom['id']}/content/{file_name}"
+            base_url = self.build_rom_download_url(
+                self._selected_rom['id'],
+                self._selected_rom.get('fs_name', 'unknown_file')
+            )
             
             self.download_selected = discord.ui.Button(
                 label="Download Selected (0 files)",
@@ -799,8 +816,10 @@ class ROM_View(discord.ui.View):
         else:
             all_files_label = "Download All"
         
-        file_name = quote(self._selected_rom.get('fs_name', 'unknown_file'))
-        download_all_url = f"{self.bot.config.DOMAIN}/api/roms/{self._selected_rom['id']}/content/{file_name}"
+        download_all_url = self.build_rom_download_url(
+            self._selected_rom['id'],
+            self._selected_rom.get('fs_name', 'unknown_file')
+        )
         
         self.download_all = discord.ui.Button(
             label=all_files_label,
@@ -834,8 +853,16 @@ class ROM_View(discord.ui.View):
             await interaction.followup.send("Please select files to download!", ephemeral=True)
             return
         
-        file_name = self._selected_rom.get('fs_name', 'unknown_file').replace(' ', '%20')
-        download_url = f"{self.bot.config.DOMAIN}/roms/{self._selected_rom['id']}/content/{file_name}?files={','.join(selected_values)}"
+        selected_file_ids = [
+            self.file_id_map[value]
+            for value in selected_values
+            if hasattr(self, 'file_id_map') and value in self.file_id_map
+        ]
+        download_url = self.build_rom_download_url(
+            self._selected_rom['id'],
+            self._selected_rom.get('fs_name', 'unknown_file'),
+            file_ids=selected_file_ids
+        )
         
         await interaction.followup.send(
             f"Download link for selected files:\n{download_url}",
@@ -845,15 +872,7 @@ class ROM_View(discord.ui.View):
     def get_download_url(self, rom_id: int, file_name: str, selected_files: Optional[List[str]] = None) -> str:
         """Helper method to generate properly encoded download URLs"""
         try:
-            base_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_id}/content/{quote(file_name)}"
-            
-            if selected_files:
-                # Double encode: first each filename, then the entire parameter
-                encoded_files = [quote(f) for f in selected_files]
-                files_param = quote(','.join(encoded_files))
-                return f"{base_url}?files={files_param}"
-            
-            return base_url
+            return self.build_rom_download_url(rom_id, file_name, file_ids=selected_files)
             
         except Exception as e:
             logger.error(f"Error generating download URL: {e}")
@@ -871,8 +890,10 @@ class ROM_View(discord.ui.View):
             await interaction.followup.send("Please select a ROM first!", ephemeral=True)
             return
 
-        file_name = self._selected_rom.get('fs_name', 'unknown_file').replace(' ', '%20')
-        download_url = f"{self.bot.config.DOMAIN}/api/roms/{self._selected_rom['id']}/content/{file_name}"
+        download_url = self.build_rom_download_url(
+            self._selected_rom['id'],
+            self._selected_rom.get('fs_name', 'unknown_file')
+        )
         
         await interaction.followup.send(
             f"Download link for all files:\n{download_url}",
@@ -894,8 +915,10 @@ class ROM_View(discord.ui.View):
                 await interaction.channel.send("❌ Unable to find ROM data")
                 return
 
-            file_name = selected_rom.get('fs_name', 'unknown_file').replace(' ', '%20')
-            download_url = f"{self.bot.config.DOMAIN}/api/roms/{selected_rom['id']}/content/{file_name}"
+            download_url = self.build_rom_download_url(
+                selected_rom['id'],
+                selected_rom.get('fs_name', 'unknown_file')
+            )
                 
             qr_file = await self.generate_qr(download_url)
             if qr_file:
