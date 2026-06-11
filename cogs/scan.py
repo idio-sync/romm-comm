@@ -91,8 +91,7 @@ class Scan(commands.Cog):
             # Mark scan as interrupted if we were tracking one
             if self.is_scanning:
                 logger.warning("Disconnected during active scan")
-                async with self.bot.scan_state_lock:
-                    self.bot.scan_state['is_scanning'] = False
+                await self._clear_shared_scan_state()
             
             self.is_scanning = False
             if self.last_channel and not self.external_scan:
@@ -363,6 +362,63 @@ class Scan(commands.Cog):
         self._first_event_received = False
         self._scan_initiated_externally = False
 
+    async def _clear_shared_scan_state(self):
+        """Reset shared bot-level scan state."""
+        async with self.bot.scan_state_lock:
+            self.bot.scan_state.update({
+                'is_scanning': False,
+                'scan_start_time': None,
+                'initiated_by': None,
+                'scan_type': None,
+                'channel_id': None
+            })
+
+    async def _start_discord_scan(
+        self,
+        ctx: discord.ApplicationContext,
+        *,
+        scan_type: str,
+        options: Dict[str, Any],
+        progress: Dict[str, Any],
+        response_message: str
+    ) -> bool:
+        """Connect, emit a scan command, then mark scan state after the emit succeeds."""
+        connected = await self.bot.socketio_manager.connect()
+        if not connected:
+            await self._clear_shared_scan_state()
+            self._reset_scan_state()
+            await ctx.respond("❌ Unable to connect to scan service. Please try again later.")
+            return False
+
+        try:
+            await self.sio.emit('scan', options)
+        except Exception as e:
+            logger.error(f"Failed to start {scan_type} scan: {e}", exc_info=True)
+            await self._clear_shared_scan_state()
+            self._reset_scan_state()
+            await ctx.respond("❌ Failed to start scan: could not send request to RomM.")
+            return False
+
+        started_at = datetime.now()
+        async with self.bot.scan_state_lock:
+            self.bot.scan_state.update({
+                'is_scanning': True,
+                'scan_start_time': started_at,
+                'initiated_by': 'discord',
+                'scan_type': scan_type,
+                'channel_id': ctx.channel.id
+            })
+
+        self.last_channel = ctx.channel
+        self.scan_start_time = started_at
+        self.is_scanning = True
+        self.external_scan = False
+        self.scan_progress = progress
+        self.new_games = []
+
+        await ctx.respond(response_message)
+        return True
+
     async def _handle_connection_error(self, error: str):
         """Handle connection errors and notify the user"""
         if self.last_channel and not self.external_scan:
@@ -370,7 +426,7 @@ class Scan(commands.Cog):
                 await self.last_channel.send(f"❌ Lost connection to scan service: {error}")
             except Exception as e:
                 logger.error(f"Failed to send connection error message: {e}")
-        self.is_scanning = False
+        await self._clear_shared_scan_state()
         self._reset_scan_state()
 
     async def scan_command_autocomplete(self, ctx: discord.AutocompleteContext):
@@ -472,25 +528,7 @@ class Scan(commands.Cog):
                 await ctx.respond(f"❌ Platform '{platform}' not found. Available platforms:\n{platforms_list}")
                 return
 
-            await self.bot.socketio_manager.connect()
-            
-            # Update shared state BEFORE emitting scan
-            async with self.bot.scan_state_lock:
-                self.bot.scan_state.update({
-                    'is_scanning': True,
-                    'scan_start_time': datetime.now(),
-                    'initiated_by': 'discord',
-                    'scan_type': 'platform',
-                    'channel_id': ctx.channel.id
-                })
-            
-            self.last_channel = ctx.channel
-            self.scan_start_time = datetime.now()
-            self.is_scanning = True
-            self.external_scan = False  # This is a Discord-initiated scan
-            
-            # Initialize scan progress for this platform using display name
-            self.scan_progress = {
+            progress = {
                 'current_platform': platform_display_name,
                 'current_platform_slug': None,
                 'current_rom': None,
@@ -508,37 +546,22 @@ class Scan(commands.Cog):
                 "apis": ["igdb", "moby"]
             }
             
-            self.new_games = []
-            await self.sio.emit('scan', options)
-            await ctx.respond(f"🔍 Started scanning platform: {platform_display_name}")
+            await self._start_discord_scan(
+                ctx,
+                scan_type='platform',
+                options=options,
+                progress=progress,
+                response_message=f"🔍 Started scanning platform: {platform_display_name}"
+            )
             
         except Exception as e:
-            self.is_scanning = False
-            self.new_games = []  
+            await self._clear_shared_scan_state()
+            self._reset_scan_state()
             raise
 
     async def _scan_full(self, ctx: discord.ApplicationContext):
         """Handle full system scan"""
-        await self.bot.socketio_manager.connect()
-        
-        # Update shared state BEFORE emitting scan
-        async with self.bot.scan_state_lock:
-            self.bot.scan_state.update({
-                'is_scanning': True,
-                'scan_start_time': datetime.now(),
-                'initiated_by': 'discord',
-                'scan_type': 'complete',
-                'channel_id': ctx.channel.id
-            })
-        
-        self.last_channel = ctx.channel
-        self.scan_start_time = datetime.now()
-        self.is_scanning = True
-        self.external_scan = False  # Discord-initiated
-        self.new_games = []
-
-        # Initialize scan progress for full scan
-        self.scan_progress = {
+        progress = {
             'current_platform': None,
             'current_platform_slug': None,
             'current_rom': None,
@@ -558,8 +581,13 @@ class Scan(commands.Cog):
             "apis": ["igdb", "moby"]
         }
         
-        await self.sio.emit('scan', options)
-        await ctx.respond("🔍 Started full system scan")
+        await self._start_discord_scan(
+            ctx,
+            scan_type='complete',
+            options=options,
+            progress=progress,
+            response_message="🔍 Started full system scan"
+        )
 
     async def _scan_stop(self, ctx: discord.ApplicationContext):
         """Handle scan stop command"""
@@ -567,8 +595,17 @@ class Scan(commands.Cog):
             await ctx.respond("❌ No scan is currently running")
             return
 
-        await self.bot.socketio_manager.connect()
-        await self.sio.emit("scan:stop")
+        connected = await self.bot.socketio_manager.connect()
+        if not connected:
+            await ctx.respond("❌ Unable to connect to scan service. Stop request was not sent.")
+            return
+
+        try:
+            await self.sio.emit("scan:stop")
+        except Exception as e:
+            logger.error(f"Failed to send scan stop request: {e}", exc_info=True)
+            await ctx.respond("❌ Failed to send stop request to RomM.")
+            return
         
         # Note if this was an external scan
         if self.external_scan:
@@ -657,24 +694,7 @@ class Scan(commands.Cog):
 
     async def _scan_unidentified(self, ctx: discord.ApplicationContext):
         """Handle unidentified ROMs scan"""
-        await self.bot.socketio_manager.connect()
-        
-        async with self.bot.scan_state_lock:
-            self.bot.scan_state.update({
-                'is_scanning': True,
-                'scan_start_time': datetime.now(),
-                'initiated_by': 'discord',
-                'scan_type': 'unidentified',
-                'channel_id': ctx.channel.id
-            })
-        
-        self.last_channel = ctx.channel
-        self.scan_start_time = datetime.now()
-        self.is_scanning = True
-        self.external_scan = False
-
-        # Initialize scan progress for unidentified scan
-        self.scan_progress = {
+        progress = {
             'current_platform': None,
             'current_platform_slug': None,
             'current_rom': None,
@@ -692,27 +712,16 @@ class Scan(commands.Cog):
             "apis": ["igdb", "moby"]
         }
         
-        await self.sio.emit('scan', options)
-        await ctx.respond("🔍 Started scanning unidentified ROMs")
+        await self._start_discord_scan(
+            ctx,
+            scan_type='unidentified',
+            options=options,
+            progress=progress,
+            response_message="🔍 Started scanning unidentified ROMs"
+        )
 
     async def _scan_hashes(self, ctx: discord.ApplicationContext):
         """Handle ROM hash update scan"""
-        await self.bot.socketio_manager.connect()
-        
-        async with self.bot.scan_state_lock:
-            self.bot.scan_state.update({
-                'is_scanning': True,
-                'scan_start_time': datetime.now(),
-                'initiated_by': 'discord',
-                'scan_type': 'hashes',
-                'channel_id': ctx.channel.id
-            })
-        
-        self.last_channel = ctx.channel
-        self.scan_start_time = datetime.now()
-        self.is_scanning = True
-        self.external_scan = False
-
         options = {
             "platforms": [],
             "type": ScanType.HASHES.value,
@@ -720,27 +729,16 @@ class Scan(commands.Cog):
             "apis": []
         }
         
-        await self.sio.emit('scan', options)
-        await ctx.respond("🔍 Started updating ROM hashes")
+        await self._start_discord_scan(
+            ctx,
+            scan_type='hashes',
+            options=options,
+            progress={},
+            response_message="🔍 Started updating ROM hashes"
+        )
 
     async def _scan_new_platforms(self, ctx: discord.ApplicationContext):
         """Handle new platforms scan"""
-        await self.bot.socketio_manager.connect()
-        
-        async with self.bot.scan_state_lock:
-            self.bot.scan_state.update({
-                'is_scanning': True,
-                'scan_start_time': datetime.now(),
-                'initiated_by': 'discord',
-                'scan_type': 'new_platforms',
-                'channel_id': ctx.channel.id
-            })
-        
-        self.last_channel = ctx.channel
-        self.scan_start_time = datetime.now()
-        self.is_scanning = True
-        self.external_scan = False
-
         options = {
             "platforms": [],
             "type": ScanType.NEW_PLATFORMS.value,
@@ -748,27 +746,16 @@ class Scan(commands.Cog):
             "apis": ["igdb", "moby"]
         }
         
-        await self.sio.emit('scan', options)
-        await ctx.respond("🔍 Started scanning for new platforms")
+        await self._start_discord_scan(
+            ctx,
+            scan_type='new_platforms',
+            options=options,
+            progress={},
+            response_message="🔍 Started scanning for new platforms"
+        )
 
     async def _scan_partial(self, ctx: discord.ApplicationContext):
         """Handle partial metadata scan"""
-        await self.bot.socketio_manager.connect()
-        
-        async with self.bot.scan_state_lock:
-            self.bot.scan_state.update({
-                'is_scanning': True,
-                'scan_start_time': datetime.now(),
-                'initiated_by': 'discord',
-                'scan_type': 'partial',
-                'channel_id': ctx.channel.id
-            })
-        
-        self.last_channel = ctx.channel
-        self.scan_start_time = datetime.now()
-        self.is_scanning = True
-        self.external_scan = False
-
         options = {
             "platforms": [],
             "type": ScanType.PARTIAL.value,
@@ -776,8 +763,13 @@ class Scan(commands.Cog):
             "apis": ["igdb", "moby"]
         }
         
-        await self.sio.emit('scan', options)
-        await ctx.respond("🔍 Started scanning ROMs with partial metadata")
+        await self._start_discord_scan(
+            ctx,
+            scan_type='partial',
+            options=options,
+            progress={},
+            response_message="🔍 Started scanning ROMs with partial metadata"
+        )
 
     async def _scan_summary(self, ctx: discord.ApplicationContext):
         """Handle scan summary request"""
