@@ -9,7 +9,7 @@ import aiohttp
 import aiosqlite
 import time
 
-from bot import is_admin
+from admin_checks import is_admin
 
 logger = logging.getLogger('romm_bot.users')
 

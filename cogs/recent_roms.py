@@ -19,7 +19,7 @@ import aiohttp
 import time
 from dateutil.parser import parse as parse_datetime
 
-from bot import is_admin
+from admin_checks import is_admin
 
 logger = logging.getLogger(__name__)
 

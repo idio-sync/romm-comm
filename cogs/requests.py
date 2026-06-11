@@ -15,7 +15,7 @@ from collections import defaultdict
 from .search import ROM_View
 from urllib.parse import quote
 import aiohttp
-from bot import is_admin
+from admin_checks import is_admin
 
 logger = logging.getLogger(__name__)
 
