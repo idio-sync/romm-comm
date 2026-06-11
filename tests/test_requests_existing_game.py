@@ -372,6 +372,48 @@ class RequestAutoFulfillmentTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RequestContinueFlowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_legacy_process_request_delegates_to_platform_aware_request_flow(self):
+        request = Request.__new__(Request)
+        platform_context_calls = []
+        platform_calls = []
+        selected_game = {"id": 12345, "name": "Mega Man X"}
+        message = object()
+
+        async def get_platform_request_context(platform_name):
+            platform_context_calls.append(platform_name)
+            return "SNES", 7, True
+
+        async def process_request_with_platform(*args):
+            platform_calls.append(args)
+            return 123
+
+        request.get_platform_request_context = get_platform_request_context
+        request.process_request_with_platform = process_request_with_platform
+        ctx = object()
+
+        result = await request.process_request(
+            ctx,
+            "SNES",
+            "Mega Man X",
+            "Version Request: USA",
+            selected_game,
+            message,
+        )
+
+        self.assertEqual(123, result)
+        self.assertEqual(["SNES"], platform_context_calls)
+        self.assertEqual(1, len(platform_calls))
+
+        call = platform_calls[0]
+        self.assertIs(ctx, call[0])
+        self.assertEqual("SNES", call[1])
+        self.assertEqual("Mega Man X", call[2])
+        self.assertEqual("Version Request: USA", call[3])
+        self.assertIs(selected_game, call[4])
+        self.assertIs(message, call[5])
+        self.assertEqual(7, call[6])
+        self.assertTrue(call[7])
+
     async def test_continue_request_flow_without_igdb_uses_platform_aware_request_flow(self):
         request = Request.__new__(Request)
         legacy_calls = []
