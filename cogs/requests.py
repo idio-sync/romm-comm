@@ -12,8 +12,7 @@ from pathlib import Path
 from .search import Search
 from .igdb_client import IGDBClient
 from collections import defaultdict
-from .search import ROM_View
-from urllib.parse import quote
+from .search import ROM_View, build_rom_download_url
 import aiohttp
 from admin_checks import is_admin
 
@@ -2501,8 +2500,7 @@ class Request(commands.Cog):
                                 link_parts = [f"{romm_emoji} [**View in RomM**]({romm_url})"]
                                 
                                 if filename:
-                                    safe_filename = quote(filename)
-                                    download_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_id}/content/{safe_filename}?"
+                                    download_url = build_rom_download_url(self.bot.config.DOMAIN, rom_id, filename)
                                     link_parts.append(f"⬇️ [**Download**]({download_url})")
                                 
                                 # Join the links with a separator and add them as a single line

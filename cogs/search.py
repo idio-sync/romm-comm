@@ -19,6 +19,31 @@ from collections import defaultdict
 import logging
 logger = logging.getLogger(__name__)
 
+
+def encode_rom_download_filename(file_name: str) -> str:
+    """Encode RomM download filenames consistently for Discord links."""
+    safe_file_name = str(file_name or 'unknown_file').replace(' ', '+')
+    return quote(safe_file_name, safe='+')
+
+
+def build_rom_download_url(
+    domain: str,
+    rom_id: Union[int, str],
+    file_name: str,
+    file_ids: Optional[List[Union[int, str]]] = None
+) -> str:
+    """Build a RomM API download URL for a whole ROM or selected file IDs."""
+    base_domain = domain.rstrip('/')
+    encoded_file_name = encode_rom_download_filename(file_name)
+    download_url = f"{base_domain}/api/roms/{rom_id}/content/{encoded_file_name}"
+
+    if file_ids:
+        file_ids_param = ",".join(str(file_id) for file_id in file_ids)
+        download_url = f"{download_url}?file_ids={file_ids_param}"
+
+    return download_url
+
+
 class ROM_View(discord.ui.View):
     def __init__(self, bot, search_results: List[Dict], author_id: int, platform_name: Optional[str] = None, initial_message: Optional[discord.Message] = None):
         super().__init__(timeout=300)  # 5 minute timeout
@@ -141,8 +166,7 @@ class ROM_View(discord.ui.View):
     @staticmethod
     def _encode_download_filename(file_name: str) -> str:
         """Encode RomM download filenames consistently for Discord links."""
-        safe_file_name = str(file_name or 'unknown_file').replace(' ', '+')
-        return quote(safe_file_name, safe='+')
+        return encode_rom_download_filename(file_name)
 
     def build_rom_download_url(
         self,
@@ -151,15 +175,12 @@ class ROM_View(discord.ui.View):
         file_ids: Optional[List[Union[int, str]]] = None
     ) -> str:
         """Build a RomM API download URL for a whole ROM or selected file IDs."""
-        domain = self.bot.config.DOMAIN.rstrip('/')
-        encoded_file_name = self._encode_download_filename(file_name)
-        download_url = f"{domain}/api/roms/{rom_id}/content/{encoded_file_name}"
-
-        if file_ids:
-            file_ids_param = ",".join(str(file_id) for file_id in file_ids)
-            download_url = f"{download_url}?file_ids={file_ids_param}"
-
-        return download_url
+        return build_rom_download_url(
+            self.bot.config.DOMAIN,
+            rom_id,
+            file_name,
+            file_ids=file_ids
+        )
 
     async def download_cover_image(self, rom_data: Dict) -> Optional[discord.File]:
         """Download cover image from Romm API and return as Discord File"""
