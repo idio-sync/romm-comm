@@ -472,7 +472,7 @@ class RecentRomsMonitor(commands.Cog):
             return
         
         try:
-            batch_id = datetime.utcnow().isoformat()
+            batch_id = datetime.now(timezone.utc).isoformat()
             
             # Get cutoff time from scan state
             cutoff_time = None
@@ -544,9 +544,6 @@ class RecentRomsMonitor(commands.Cog):
             # Enrich ROM data with platform names
             await self.enrich_roms_with_platform_names(new_roms)
             
-            # Mark as posted BEFORE sending
-            await self.mark_as_posted(new_roms, batch_id)
-            
             # Rest of existing posting logic...
             is_flood = len(new_roms) >= self.bulk_display_threshold
             discord_success = False
@@ -565,7 +562,6 @@ class RecentRomsMonitor(commands.Cog):
                     discord_success = True
                 except Exception as e:
                     logger.error(f"Failed to send single ROM to Discord: {e}")
-                    await self.unmark_as_posted([rom['id']])
                 finally:
                     if cover_file and hasattr(cover_file, 'fp'):
                         cover_file.fp.close()
@@ -581,12 +577,12 @@ class RecentRomsMonitor(commands.Cog):
                     discord_success = True
                 except Exception as e:
                     logger.error(f"Failed to send batch to Discord: {e}")
-                    await self.unmark_as_posted([rom['id'] for rom in new_roms])
                 finally:
                     if composite_cover_file and hasattr(composite_cover_file, 'fp'):
                         composite_cover_file.fp.close()
             
             if discord_success and message_id:
+                await self.mark_as_posted(new_roms, batch_id)
                 await self.update_message_ids(new_roms, message_id, batch_id)
                 logger.info(f"Posted {len(new_roms)} new ROM(s) from scan (message_id: {message_id})")
                 
