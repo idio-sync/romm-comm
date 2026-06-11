@@ -1978,7 +1978,7 @@ class ExistingGameView(discord.ui.View):
         # Copy over the file select dropdown if it exists
         file_select = None
         for item in rom_view.children:
-            if isinstance(item, discord.ui.Select) and item.custom_id == "rom_file_select":
+            if isinstance(item, discord.ui.Select) and item.custom_id == "file_select":
                 file_select = item
                 break
         
