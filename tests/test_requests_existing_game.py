@@ -118,6 +118,69 @@ class FakeRequestBot(FakeBot):
         return self.user
 
 
+class FakePlatformAwareRequestCog:
+    def __init__(self):
+        self.legacy_calls = []
+        self.platform_calls = []
+        self.platform_context_calls = []
+
+    async def get_platform_request_context(self, platform_name):
+        self.platform_context_calls.append(platform_name)
+        return "SNES", 7, True
+
+    async def process_request(self, *args):
+        self.legacy_calls.append(args)
+
+    async def process_request_with_platform(self, *args):
+        self.platform_calls.append(args)
+        return 123
+
+
+class FakeBotWithRequestCog(FakeBot):
+    def __init__(self, request_cog):
+        self.request_cog = request_cog
+
+    def get_cog(self, name):
+        if name == "Request":
+            return self.request_cog
+        return None
+
+
+class FakeFollowup:
+    def __init__(self):
+        self.messages = []
+
+    async def send(self, *args, **kwargs):
+        message = FakeMessage()
+        self.messages.append((args, kwargs, message))
+        return message
+
+
+class FakeMessage:
+    pass
+
+
+class FakeContext:
+    def __init__(self):
+        self.followup = FakeFollowup()
+
+
+class FakeGameSelectView:
+    selected_game = None
+
+    def __init__(self, bot, matches, platform_name):
+        self.bot = bot
+        self.matches = matches
+        self.platform_name = platform_name
+        self.message = None
+
+    def create_game_embed(self, selected_game):
+        return object()
+
+    async def wait(self):
+        self.selected_game = self.__class__.selected_game
+
+
 async def instant_sleep(delay):
     return None
 
@@ -217,6 +280,42 @@ class ExistingGameViewTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(view, interaction.response.edited_view)
 
+    async def test_igdb_existing_request_uses_platform_aware_request_flow(self):
+        rom = make_multi_file_rom()
+        selected_game = {
+            "id": 12345,
+            "name": "Mega Man Xtreme",
+            "release_date": "2000",
+            "platforms": ["Game Boy Color"],
+        }
+        request_cog = FakePlatformAwareRequestCog()
+        view = ExistingGameWithIGDBView(
+            FakeBotWithRequestCog(request_cog),
+            [rom],
+            [selected_game],
+            "SNES",
+            "Mega Man X",
+            author_id=42,
+        )
+        view.message = object()
+
+        interaction = FakeInteraction(values=["0"])
+        await view.igdb_select_callback(interaction)
+
+        self.assertEqual(["SNES"], request_cog.platform_context_calls)
+        self.assertEqual([], request_cog.legacy_calls)
+        self.assertEqual(1, len(request_cog.platform_calls))
+
+        call = request_cog.platform_calls[0]
+        self.assertIs(interaction, call[0])
+        self.assertEqual("SNES", call[1])
+        self.assertEqual("Mega Man Xtreme", call[2])
+        self.assertIsNone(call[3])
+        self.assertIs(selected_game, call[4])
+        self.assertIs(view.message, call[5])
+        self.assertEqual(7, call[6])
+        self.assertTrue(call[7])
+
 
 class RequestAutoFulfillmentTests(unittest.IsolatedAsyncioTestCase):
     async def test_auto_fulfillment_dm_is_sent_without_ggrequestz(self):
@@ -270,3 +369,97 @@ class RequestAutoFulfillmentTests(unittest.IsolatedAsyncioTestCase):
             "[**Download**](https://romm.example/api/roms/321/content/Mega+Man+X+%28USA%29.zip)",
             user.messages[0],
         )
+
+
+class RequestContinueFlowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_continue_request_flow_without_igdb_uses_platform_aware_request_flow(self):
+        request = Request.__new__(Request)
+        legacy_calls = []
+        platform_calls = []
+        platform_context_calls = []
+
+        async def get_platform_request_context(platform_name):
+            platform_context_calls.append(platform_name)
+            return "SNES", 7, True
+
+        async def process_request(*args):
+            legacy_calls.append(args)
+
+        async def process_request_with_platform(*args):
+            platform_calls.append(args)
+            return 123
+
+        request.get_platform_request_context = get_platform_request_context
+        request.process_request = process_request
+        request.process_request_with_platform = process_request_with_platform
+        ctx = object()
+
+        await request.continue_request_flow(
+            ctx,
+            "SNES",
+            "Mega Man X",
+            "Version Request: USA",
+            [],
+        )
+
+        self.assertEqual(["SNES"], platform_context_calls)
+        self.assertEqual([], legacy_calls)
+        self.assertEqual(1, len(platform_calls))
+
+        call = platform_calls[0]
+        self.assertIs(ctx, call[0])
+        self.assertEqual("SNES", call[1])
+        self.assertEqual("Mega Man X", call[2])
+        self.assertEqual("Version Request: USA", call[3])
+        self.assertIsNone(call[4])
+        self.assertIsNone(call[5])
+        self.assertEqual(7, call[6])
+        self.assertTrue(call[7])
+
+    async def test_continue_request_flow_with_igdb_uses_platform_aware_request_flow(self):
+        request = Request.__new__(Request)
+        legacy_calls = []
+        platform_calls = []
+        platform_context_calls = []
+        selected_game = {"id": 12345, "name": "Mega Man X"}
+
+        async def get_platform_request_context(platform_name):
+            platform_context_calls.append(platform_name)
+            return "SNES", 7, True
+
+        async def process_request(*args):
+            legacy_calls.append(args)
+
+        async def process_request_with_platform(*args):
+            platform_calls.append(args)
+            return 123
+
+        request.bot = FakeBot()
+        request.get_platform_request_context = get_platform_request_context
+        request.process_request = process_request
+        request.process_request_with_platform = process_request_with_platform
+        ctx = FakeContext()
+
+        FakeGameSelectView.selected_game = selected_game
+        with patch("cogs.requests.GameSelectView", FakeGameSelectView):
+            await request.continue_request_flow(
+                ctx,
+                "SNES",
+                "Mega Man X",
+                "Version Request: USA",
+                [selected_game],
+            )
+
+        self.assertEqual(["SNES"], platform_context_calls)
+        self.assertEqual([], legacy_calls)
+        self.assertEqual(1, len(platform_calls))
+
+        call = platform_calls[0]
+        self.assertIs(ctx, call[0])
+        self.assertEqual("SNES", call[1])
+        self.assertEqual("Mega Man X", call[2])
+        self.assertEqual("Version Request: USA", call[3])
+        self.assertIs(selected_game, call[4])
+        self.assertIs(ctx.followup.messages[0][2], call[5])
+        self.assertEqual(7, call[6])
+        self.assertTrue(call[7])

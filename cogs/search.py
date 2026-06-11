@@ -1345,23 +1345,33 @@ class NoResultsView(discord.ui.View):
                 await select_view.wait()
                 
                 if select_view.selected_game and select_view.selected_game != "manual":
-                    await request_cog.process_request(
+                    platform_name, mapping_id, platform_exists = await request_cog.get_platform_request_context(
+                        self.platform_name
+                    )
+                    await request_cog.process_request_with_platform(
                         interaction, 
-                        self.platform_name, 
+                        platform_name,
                         self.game_name, 
                         None,  # No additional details
                         select_view.selected_game, 
-                        select_view.message
+                        select_view.message,
+                        mapping_id,
+                        platform_exists
                     )
             else:
                 # Direct request without IGDB
-                await request_cog.process_request(
+                platform_name, mapping_id, platform_exists = await request_cog.get_platform_request_context(
+                    self.platform_name
+                )
+                await request_cog.process_request_with_platform(
                     interaction,
-                    self.platform_name,
+                    platform_name,
                     self.game_name,
                     None,  # No additional details
                     None,  # No IGDB data
-                    None   # No message to update
+                    None,  # No message to update
+                    mapping_id,
+                    platform_exists
                 )
                 
             # Disable buttons after use

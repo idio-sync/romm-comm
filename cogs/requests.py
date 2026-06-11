@@ -1786,13 +1786,18 @@ class ExistingGameWithIGDBView(discord.ui.View):
         # Process as a new request
         request_cog = self.bot.get_cog('Request')
         if request_cog:
-            await request_cog.process_request(
+            platform_name, mapping_id, platform_exists = await request_cog.get_platform_request_context(
+                self.platform_name
+            )
+            await request_cog.process_request_with_platform(
                 interaction,
-                self.platform_name,
+                platform_name,
                 self.selected_igdb['name'],  # Use IGDB name
                 None,  # No additional details
                 self.selected_igdb,
-                self.message
+                self.message,
+                mapping_id,
+                platform_exists
             )
             self.stop()
         
@@ -2186,6 +2191,31 @@ class Request(commands.Cog):
         except Exception:
             # If DB fails, fallback to using the original name
             return platform_name
+
+    async def get_platform_request_context(self, platform_name: str) -> Tuple[str, Optional[int], bool]:
+        """Return display name, mapping ID, and RomM availability for request creation."""
+        if not platform_name:
+            return platform_name, None, False
+
+        try:
+            async with self.db.get_connection() as db:
+                cursor = await db.execute(
+                    """SELECT id, display_name, in_romm
+                       FROM platform_mappings
+                       WHERE LOWER(display_name) = LOWER(?) OR LOWER(folder_name) = LOWER(?)
+                       LIMIT 1""",
+                    (platform_name, platform_name)
+                )
+                result = await cursor.fetchone()
+
+                if result:
+                    mapping_id, display_name, in_romm = result
+                    return display_name, mapping_id, bool(in_romm)
+
+        except Exception as e:
+            logger.warning(f"Could not resolve request platform context for '{platform_name}': {e}")
+
+        return platform_name, None, False
     
     @property
     def igdb_enabled(self) -> bool:
@@ -3243,11 +3273,35 @@ class Request(commands.Cog):
             else:
                 selected_game = select_view.selected_game
                 # Process request with IGDB data including ID
-                await self.process_request(ctx, platform_display_name, game, details, selected_game, select_view.message)
+                platform_name, mapping_id, platform_exists = await self.get_platform_request_context(
+                    platform_display_name
+                )
+                await self.process_request_with_platform(
+                    ctx,
+                    platform_name,
+                    game,
+                    details,
+                    selected_game,
+                    select_view.message,
+                    mapping_id,
+                    platform_exists
+                )
                 return
         
         # Process manual request (no IGDB ID)
-        await self.process_request(ctx, platform_display_name, game, details, None, None)
+        platform_name, mapping_id, platform_exists = await self.get_platform_request_context(
+            platform_display_name
+        )
+        await self.process_request_with_platform(
+            ctx,
+            platform_name,
+            game,
+            details,
+            None,
+            None,
+            mapping_id,
+            platform_exists
+        )
     
     async def _sync_statuses_from_ggrequestz(self, user_id: Optional[int] = None):
         """Sync request statuses from ggrequestz to Discord database"""
