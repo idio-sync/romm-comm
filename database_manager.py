@@ -128,6 +128,7 @@ class MasterDatabase:
                     
             # Ensure current request schema for existing installations
             await self.migrate_for_ggrequestz()
+            await self.migrate_user_link_schema()
             
             logger.debug("Initializing platform mappings...")
             await self.initialize_platform_mappings()
@@ -443,6 +444,28 @@ class MasterDatabase:
         except Exception as e:
             logger.error(f"GGRequestz migration failed: {e}")
             return False
+
+    async def migrate_user_link_schema(self):
+        """Ensure existing user link databases have ownership tracking columns."""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute("PRAGMA table_info(user_links)")
+                columns = await cursor.fetchall()
+                column_names = [col[1] for col in columns]
+
+                if 'created_by_bot' not in column_names:
+                    logger.info("Adding user_links.created_by_bot column")
+                    await db.execute(
+                        "ALTER TABLE user_links ADD COLUMN created_by_bot BOOLEAN DEFAULT 0"
+                    )
+
+                await db.commit()
+                logger.info("✅ User link schema migration completed successfully")
+                return True
+
+        except Exception as e:
+            logger.error(f"User link schema migration failed: {e}")
+            return False
     
     async def _create_recent_roms_tables(self, db):
         """Create tables for RecentRoms cog"""
@@ -546,6 +569,7 @@ class MasterDatabase:
                 romm_id INTEGER NOT NULL,
                 discord_username TEXT,
                 discord_avatar TEXT,
+                created_by_bot BOOLEAN DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -620,7 +644,7 @@ class MasterDatabase:
                 cursor = await db.execute(
                     """
                     SELECT discord_id, romm_username, romm_id, discord_username, 
-                           discord_avatar, created_at, updated_at
+                           discord_avatar, created_by_bot, created_at, updated_at
                     FROM user_links 
                     WHERE discord_id = ?
                     """,
@@ -635,8 +659,9 @@ class MasterDatabase:
                         'romm_id': row[2],
                         'discord_username': row[3],
                         'discord_avatar': row[4],
-                        'created_at': row[5],
-                        'updated_at': row[6]
+                        'created_by_bot': bool(row[5]),
+                        'created_at': row[6],
+                        'updated_at': row[7]
                     }
                 return None
         except Exception as e:
@@ -645,7 +670,8 @@ class MasterDatabase:
 
     async def add_user_link(self, discord_id: int, romm_username: str, 
                            romm_id: int, discord_username: str = None, 
-                           discord_avatar: str = None) -> bool:
+                           discord_avatar: str = None,
+                           created_by_bot: bool = False) -> bool:
         """Add or update a user link"""
         try:
             async with self.get_connection() as db:
@@ -653,10 +679,10 @@ class MasterDatabase:
                     """
                     INSERT OR REPLACE INTO user_links 
                     (discord_id, romm_username, romm_id, discord_username, 
-                     discord_avatar, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                     discord_avatar, created_by_bot, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     """,
-                    (discord_id, romm_username, romm_id, discord_username, discord_avatar)
+                    (discord_id, romm_username, romm_id, discord_username, discord_avatar, int(created_by_bot))
                 )
                 await db.commit()
                 logger.info(f"Added/updated user link for Discord ID {discord_id}")
@@ -687,7 +713,7 @@ class MasterDatabase:
                 cursor = await db.execute(
                     """
                     SELECT discord_id, romm_username, romm_id, discord_username, 
-                           discord_avatar, created_at, updated_at
+                           discord_avatar, created_by_bot, created_at, updated_at
                     FROM user_links
                     """
                 )
@@ -700,8 +726,9 @@ class MasterDatabase:
                         'romm_id': row[2],
                         'discord_username': row[3],
                         'discord_avatar': row[4],
-                        'created_at': row[5],
-                        'updated_at': row[6]
+                        'created_by_bot': bool(row[5]),
+                        'created_at': row[6],
+                        'updated_at': row[7]
                     }
                     for row in rows
                 ]

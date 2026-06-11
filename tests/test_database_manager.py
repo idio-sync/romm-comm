@@ -63,3 +63,51 @@ class RequestSchemaMigrationTests(unittest.IsolatedAsyncioTestCase):
                 """
             )
             self.assertIsNotNone(await cursor.fetchone())
+
+
+class UserLinkSchemaMigrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_user_link_migration_adds_created_by_bot_column(self):
+        fd, db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.addCleanup(lambda: os.path.exists(db_path) and os.remove(db_path))
+
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute(
+                """
+                CREATE TABLE user_links (
+                    discord_id INTEGER PRIMARY KEY,
+                    romm_username TEXT NOT NULL,
+                    romm_id INTEGER NOT NULL,
+                    discord_username TEXT,
+                    discord_avatar TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            await db.commit()
+
+        manager = MasterDatabase(db_path)
+        migrated = await manager.migrate_user_link_schema()
+
+        self.assertTrue(migrated)
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute("PRAGMA table_info(user_links)")
+            columns = {row[1] for row in await cursor.fetchall()}
+
+        self.assertIn("created_by_bot", columns)
+
+    async def test_new_user_link_schema_has_created_by_bot_column(self):
+        fd, db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.addCleanup(lambda: os.path.exists(db_path) and os.remove(db_path))
+
+        manager = MasterDatabase(db_path)
+        async with aiosqlite.connect(db_path) as db:
+            await manager._create_user_tables(db)
+            await db.commit()
+
+            cursor = await db.execute("PRAGMA table_info(user_links)")
+            columns = {row[1] for row in await cursor.fetchall()}
+
+        self.assertIn("created_by_bot", columns)

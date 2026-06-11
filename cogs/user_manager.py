@@ -1293,6 +1293,26 @@ class UserManager(commands.Cog):
             if not user:
                 logger.warning(f"User not found in RomM: {user_link['romm_username']}")
                 return False
+
+            if not user_link.get('created_by_bot', False):
+                logger.warning(
+                    f"Preserving RomM account for {member.display_name}: linked account was not created by this bot"
+                )
+
+                log_channel = self.bot.get_channel(self.log_channel_id)
+                if log_channel:
+                    await log_channel.send(
+                        embed=discord.Embed(
+                            title="RomM Account Preserved",
+                            description=(
+                                f"Auto-register role was removed from {member.mention}, but linked "
+                                f"RomM account `{user_link['romm_username']}` was not bot-created.\n"
+                                "The account was left unchanged for manual review."
+                            ),
+                            color=discord.Color.yellow()
+                        )
+                    )
+                return False
             
             # Check if user is a RomM admin
             if await self.is_romm_admin(user):
@@ -1594,7 +1614,8 @@ class UserManager(commands.Cog):
                     username,
                     response_data['id'],
                     member.display_name,
-                    member.avatar.key if member.avatar else None
+                    member.avatar.key if member.avatar else None,
+                    created_by_bot=True
                 )
                 
                 # Send DM with credentials
