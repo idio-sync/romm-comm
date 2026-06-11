@@ -116,8 +116,8 @@ Create a `.env` file in the project root with the following variables.
 TOKEN=your_discord_bot_token
 GUILD=your_guild_id
 API_URL=http://your_romm_host:port
-USER=api_username
-PASS=api_password
+ROMM_USER=api_username
+ROMM_PASS=api_password
 
 # Optional
 ADMIN_ID=admin_user_id
@@ -144,7 +144,7 @@ GGREQUESTZ_API_KEY=ggr_api_key
 - `TOKEN` — Discord bot token.
 - `GUILD` — Discord server (guild) ID.
 - `API_URL` — Base URL for your RomM instance (use `http://ip:port` or a domain).
-- `USER` / `PASS` — API credentials for RomM.
+- `ROMM_USER` / `ROMM_PASS` — API credentials for RomM. Legacy `USER` / `PASS` still work, but `USER` can collide with the operating system username.
 
 **Common optional settings (defaults shown where applicable):**
 - `ADMIN_ID` — User OR role ID allowed to run admin commands (scan, sync users, etc.).

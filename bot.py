@@ -269,8 +269,22 @@ class Config:
         self.SHOW_API_SUCCESS = self.parse_bool(os.getenv('SHOW_API_SUCCESS', 'false'), False)
         self.CACHE_TTL = int(os.getenv('CACHE_TTL', '3900'))  # 65 minutes default
         self.API_TIMEOUT = int(os.getenv('API_TIMEOUT', '30'))  # 30 seconds default
-        self.USER = os.getenv('USER')
-        self.PASS = os.getenv('PASS')
+        explicit_user = os.getenv('ROMM_USER') or os.getenv('ROMM_USERNAME')
+        explicit_pass = os.getenv('ROMM_PASS') or os.getenv('ROMM_PASSWORD')
+        legacy_user = os.getenv('USER')
+        legacy_pass = os.getenv('PASS')
+
+        self.USER = explicit_user
+        self.PASS = explicit_pass
+
+        if not explicit_user and not explicit_pass:
+            self.USER = legacy_user
+            self.PASS = legacy_pass
+            if legacy_user or legacy_pass:
+                logger.warning("USER/PASS are deprecated for RomM credentials; use ROMM_USER/ROMM_PASS instead")
+        elif explicit_user and not explicit_pass and legacy_pass:
+            self.PASS = legacy_pass
+            logger.warning("PASS is deprecated for RomM credentials; use ROMM_PASS instead")
         self.REQUESTS_ENABLED = self.parse_bool(os.getenv('REQUESTS_ENABLED', 'true'), True)
 
         # Cog-specific config (centralized here to avoid scattered os.getenv calls)
@@ -289,8 +303,14 @@ class Config:
 
     def validate(self):
         """Validate configuration values."""
-        required = {'TOKEN', 'GUILD_ID', 'API_BASE_URL', 'USER', 'PASS'}
-        missing = [k for k, v in vars(self).items() if k in required and not v]
+        required = {
+            'TOKEN': self.TOKEN,
+            'GUILD': self.GUILD_ID,
+            'API_URL': self.API_BASE_URL,
+            'ROMM_USER': self.USER,
+            'ROMM_PASS': self.PASS,
+        }
+        missing = [k for k, v in required.items() if not v]
         
         if missing:
             raise ValueError(f"Missing required environment variables: {', '.join(missing)}")

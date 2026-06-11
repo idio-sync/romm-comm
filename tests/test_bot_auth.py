@@ -1,5 +1,7 @@
 import importlib
+import os
 import unittest
+from unittest.mock import patch
 
 
 class FakeResponse:
@@ -85,3 +87,66 @@ class BotAuthTests(unittest.IsolatedAsyncioTestCase):
             ["Bearer expired-token", "Bearer fresh-token"],
             fake_bot.session.auth_headers,
         )
+
+
+class ConfigCredentialTests(unittest.TestCase):
+    def test_romm_specific_credentials_win_over_generic_user_environment(self):
+        bot_module = importlib.import_module("bot")
+
+        with patch.dict(
+            os.environ,
+            {
+                "TOKEN": "discord-token",
+                "GUILD": "123",
+                "API_URL": "https://romm.example",
+                "USER": "shell-user",
+                "PASS": "legacy-password",
+                "ROMM_USER": "romm-user",
+                "ROMM_PASS": "romm-password",
+            },
+            clear=True,
+        ):
+            config = bot_module.Config()
+
+        self.assertEqual("romm-user", config.USER)
+        self.assertEqual("romm-password", config.PASS)
+
+    def test_generic_user_environment_does_not_satisfy_missing_romm_user(self):
+        bot_module = importlib.import_module("bot")
+
+        with patch.dict(
+            os.environ,
+            {
+                "TOKEN": "discord-token",
+                "GUILD": "123",
+                "API_URL": "https://romm.example",
+                "USER": "shell-user",
+                "ROMM_PASS": "romm-password",
+            },
+            clear=True,
+        ):
+            with self.assertRaises(ValueError) as exc:
+                bot_module.Config()
+
+        self.assertIn("ROMM_USER", str(exc.exception))
+
+    def test_legacy_user_and_pass_still_work_when_new_names_are_absent(self):
+        bot_module = importlib.import_module("bot")
+
+        with patch.dict(
+            os.environ,
+            {
+                "TOKEN": "discord-token",
+                "GUILD": "123",
+                "API_URL": "https://romm.example",
+                "USER": "legacy-user",
+                "PASS": "legacy-password",
+            },
+            clear=True,
+        ):
+            with self.assertLogs("romm_bot", level="WARNING") as logs:
+                config = bot_module.Config()
+
+        self.assertEqual("legacy-user", config.USER)
+        self.assertEqual("legacy-password", config.PASS)
+        self.assertIn("USER/PASS are deprecated", "\n".join(logs.output))
