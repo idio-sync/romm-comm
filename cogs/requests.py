@@ -2001,7 +2001,6 @@ class ExistingGameView(discord.ui.View):
             if isinstance(item, discord.ui.Button) and "Download" in item.label:
                 item.row = button_row
                 self.add_item(item)
-                break
         
         # Re-add "Request Different Version" and "Cancel" buttons
         request_different = discord.ui.Button(

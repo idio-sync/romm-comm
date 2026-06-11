@@ -133,6 +133,40 @@ class ExistingGameViewTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(1, len(file_selects))
 
+    async def test_full_rom_view_keeps_multi_file_download_all_button(self):
+        rom = {
+            "id": 321,
+            "name": "Mega Man X",
+            "fs_name": "Mega Man X.zip",
+            "platform_id": 7,
+            "igdb": {},
+            "multi": True,
+            "files": [
+                {
+                    "id": 11,
+                    "file_name": "Mega Man X.sfc",
+                    "file_size_bytes": 1024,
+                },
+                {
+                    "id": 22,
+                    "file_name": "Mega Man X Manual.pdf",
+                    "file_size_bytes": 2048,
+                    "category": "manual",
+                },
+            ],
+        }
+        view = ExistingGameView(FakeBot(), [rom], "SNES", "Mega Man X", author_id=42)
+
+        await view.create_full_rom_view(rom)
+
+        download_labels = [
+            item.label
+            for item in view.children
+            if isinstance(item, discord.ui.Button) and "Download" in item.label
+        ]
+
+        self.assertIn("Download All (2 files, 3.00 KB)", download_labels)
+
 
 class RequestAutoFulfillmentTests(unittest.IsolatedAsyncioTestCase):
     async def test_auto_fulfillment_dm_is_sent_without_ggrequestz(self):
