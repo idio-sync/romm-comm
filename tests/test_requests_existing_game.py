@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import discord
 
-from cogs.requests import ExistingGameView, Request
+from cogs.requests import ExistingGameView, ExistingGameWithIGDBView, Request
 
 
 class FakeConfig:
@@ -85,6 +85,30 @@ class FakeUser:
         self.messages.append(message)
 
 
+class FakeInteractionUser:
+    def __init__(self, user_id):
+        self.id = user_id
+
+
+class FakeInteractionResponse:
+    def __init__(self):
+        self.edited_view = None
+        self.sent_messages = []
+
+    async def edit_message(self, **kwargs):
+        self.edited_view = kwargs.get("view")
+
+    async def send_message(self, *args, **kwargs):
+        self.sent_messages.append((args, kwargs))
+
+
+class FakeInteraction:
+    def __init__(self, user_id=42, values=None):
+        self.user = FakeInteractionUser(user_id)
+        self.data = {"values": values or []}
+        self.response = FakeInteractionResponse()
+
+
 class FakeRequestBot(FakeBot):
     def __init__(self, user):
         self.db = FakeDatabase()
@@ -98,29 +122,33 @@ async def instant_sleep(delay):
     return None
 
 
+def make_multi_file_rom():
+    return {
+        "id": 321,
+        "name": "Mega Man X",
+        "fs_name": "Mega Man X.zip",
+        "platform_id": 7,
+        "igdb": {},
+        "multi": True,
+        "files": [
+            {
+                "id": 11,
+                "file_name": "Mega Man X.sfc",
+                "file_size_bytes": 1024,
+            },
+            {
+                "id": 22,
+                "file_name": "Mega Man X Manual.pdf",
+                "file_size_bytes": 2048,
+                "category": "manual",
+            },
+        ],
+    }
+
+
 class ExistingGameViewTests(unittest.IsolatedAsyncioTestCase):
     async def test_full_rom_view_keeps_multi_file_selector(self):
-        rom = {
-            "id": 321,
-            "name": "Mega Man X",
-            "fs_name": "Mega Man X.zip",
-            "platform_id": 7,
-            "igdb": {},
-            "multi": True,
-            "files": [
-                {
-                    "id": 11,
-                    "file_name": "Mega Man X.sfc",
-                    "file_size_bytes": 1024,
-                },
-                {
-                    "id": 22,
-                    "file_name": "Mega Man X Manual.pdf",
-                    "file_size_bytes": 2048,
-                    "category": "manual",
-                },
-            ],
-        }
+        rom = make_multi_file_rom()
         view = ExistingGameView(FakeBot(), [rom], "SNES", "Mega Man X", author_id=42)
 
         await view.create_full_rom_view(rom)
@@ -134,27 +162,7 @@ class ExistingGameViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(file_selects))
 
     async def test_full_rom_view_keeps_multi_file_download_all_button(self):
-        rom = {
-            "id": 321,
-            "name": "Mega Man X",
-            "fs_name": "Mega Man X.zip",
-            "platform_id": 7,
-            "igdb": {},
-            "multi": True,
-            "files": [
-                {
-                    "id": 11,
-                    "file_name": "Mega Man X.sfc",
-                    "file_size_bytes": 1024,
-                },
-                {
-                    "id": 22,
-                    "file_name": "Mega Man X Manual.pdf",
-                    "file_size_bytes": 2048,
-                    "category": "manual",
-                },
-            ],
-        }
+        rom = make_multi_file_rom()
         view = ExistingGameView(FakeBot(), [rom], "SNES", "Mega Man X", author_id=42)
 
         await view.create_full_rom_view(rom)
@@ -166,6 +174,48 @@ class ExistingGameViewTests(unittest.IsolatedAsyncioTestCase):
         ]
 
         self.assertIn("Download All (2 files, 3.00 KB)", download_labels)
+
+    async def test_file_selection_keeps_existing_game_view_controls(self):
+        rom = make_multi_file_rom()
+        view = ExistingGameView(FakeBot(), [rom], "SNES", "Mega Man X", author_id=42)
+
+        await view.create_full_rom_view(rom)
+
+        file_select = next(
+            item
+            for item in view.children
+            if isinstance(item, discord.ui.Select) and item.custom_id == "file_select"
+        )
+
+        interaction = FakeInteraction(values=["file_0"])
+        await file_select.callback(interaction)
+
+        self.assertIs(view, interaction.response.edited_view)
+
+        button_labels = [
+            item.label for item in view.children if isinstance(item, discord.ui.Button)
+        ]
+        self.assertIn("Request Different Version", button_labels)
+        self.assertIn("Download Selected (1 file, 1.00 KB)", button_labels)
+
+    async def test_igdb_existing_file_selection_keeps_existing_game_view(self):
+        rom = make_multi_file_rom()
+        view = ExistingGameWithIGDBView(
+            FakeBot(), [rom], [], "SNES", "Mega Man X", author_id=42
+        )
+
+        await view.show_rom_for_download(FakeInteraction(), rom)
+
+        file_select = next(
+            item
+            for item in view.children
+            if isinstance(item, discord.ui.Select) and item.custom_id == "file_select"
+        )
+
+        interaction = FakeInteraction(values=["file_0"])
+        await file_select.callback(interaction)
+
+        self.assertIs(view, interaction.response.edited_view)
 
 
 class RequestAutoFulfillmentTests(unittest.IsolatedAsyncioTestCase):

@@ -588,6 +588,8 @@ class ROM_View(discord.ui.View):
     async def update_file_select(self, rom_data: Dict):
         """Update file selection dropdown for multi-file ROMs"""
         try:
+            self._selected_rom = rom_data
+
             # Clear existing file-related components
             components_to_remove = []
             for item in self.children:
@@ -742,7 +744,11 @@ class ROM_View(discord.ui.View):
         )
         self.add_item(self.download_all)
 
-    async def file_select_callback(self, interaction: discord.Interaction):
+    async def file_select_callback(
+        self,
+        interaction: discord.Interaction,
+        target_view: Optional[discord.ui.View] = None,
+    ):
         """Handle file selection with improved feedback"""
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("This selection isn't for you!", ephemeral=True)
@@ -770,7 +776,7 @@ class ROM_View(discord.ui.View):
                 )
             
             # Update download buttons
-            await self._update_download_buttons(interaction)
+            await self._update_download_buttons(interaction, target_view=target_view)
             
         except Exception as e:
             logger.error(f"Error in file selection: {e}", exc_info=True)
@@ -779,12 +785,26 @@ class ROM_View(discord.ui.View):
                 ephemeral=True
             )
 
-    async def _update_download_buttons(self, interaction: discord.Interaction):
+    async def _update_download_buttons(
+        self,
+        interaction: discord.Interaction,
+        target_view: Optional[discord.ui.View] = None,
+    ):
         """Update download buttons based on selection"""
+        view_to_update = target_view or self
+
         # Remove old buttons
-        buttons_to_remove = [item for item in self.children if isinstance(item, discord.ui.Button)]
+        buttons_to_remove = [
+            item
+            for item in view_to_update.children
+            if isinstance(item, discord.ui.Button) and "Download" in (item.label or "")
+        ]
+        download_button_row = next(
+            (button.row for button in buttons_to_remove if button.row is not None),
+            None,
+        )
         for button in buttons_to_remove:
-            self.remove_item(button)
+            view_to_update.remove_item(button)
         
         if self.selected_files and hasattr(self, 'file_id_map'):
             # Get selected file IDs
@@ -811,9 +831,10 @@ class ROM_View(discord.ui.View):
                 label=f"Download Selected ({count} {'file' if count == 1 else 'files'}, {size_str})",
                 style=discord.ButtonStyle.link,
                 url=download_url,
-                disabled=False
+                disabled=False,
+                row=download_button_row
             )
-            self.add_item(self.download_selected)
+            view_to_update.add_item(self.download_selected)
         else:
             # No files selected - disable download selected
             base_url = self.build_rom_download_url(
@@ -825,9 +846,10 @@ class ROM_View(discord.ui.View):
                 label="Download Selected (0 files)",
                 style=discord.ButtonStyle.link,
                 url=base_url,
-                disabled=True
+                disabled=True,
+                row=download_button_row
             )
-            self.add_item(self.download_selected)
+            view_to_update.add_item(self.download_selected)
         
         # Re-add download all button
         if hasattr(self, '_selected_rom') and self._selected_rom:
@@ -845,11 +867,12 @@ class ROM_View(discord.ui.View):
         self.download_all = discord.ui.Button(
             label=all_files_label,
             style=discord.ButtonStyle.link,
-            url=download_all_url
+            url=download_all_url,
+            row=download_button_row
         )
-        self.add_item(self.download_all)
+        view_to_update.add_item(self.download_all)
         
-        await interaction.response.edit_message(view=self)
+        await interaction.response.edit_message(view=view_to_update)
 
     async def download_selected_callback(self, interaction: discord.Interaction):
         """Handle downloading selected files"""

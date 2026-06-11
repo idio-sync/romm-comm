@@ -1828,6 +1828,19 @@ class ExistingGameWithIGDBView(discord.ui.View):
         # Copy download components from ROM_View
         for item in rom_view.children:
             if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                if isinstance(item, discord.ui.Select) and item.custom_id == "file_select":
+                    async def file_select_callback(
+                        interaction,
+                        source_view=rom_view,
+                        host_view=self
+                    ):
+                        await source_view.file_select_callback(
+                            interaction,
+                            target_view=host_view
+                        )
+
+                    item.callback = file_select_callback
+
                 self.add_item(item)
         
         if cover_file:
@@ -1993,6 +2006,17 @@ class ExistingGameView(discord.ui.View):
         
         # Add file select if available
         if file_select:
+            async def file_select_callback(
+                interaction,
+                source_view=rom_view,
+                host_view=self
+            ):
+                await source_view.file_select_callback(
+                    interaction,
+                    target_view=host_view
+                )
+
+            file_select.callback = file_select_callback
             self.add_item(file_select)
         
         # Add all three buttons on the same row
