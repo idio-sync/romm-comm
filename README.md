@@ -112,12 +112,16 @@ Setting this disables authentication for the download endpoint. If not set (or s
 Create a `.env` file in the project root with the following variables.
 
 ```env
-# Required
+# Required: Discord + RomM connection
 TOKEN=your_discord_bot_token
 GUILD=your_guild_id
 API_URL=http://your_romm_host:port
-ROMM_USER=api_username
-ROMM_PASS=api_password
+
+# Required: RomM API auth — use EITHER a client token (preferred)...
+ROMM_CLIENT_TOKEN=rmm_your_client_token
+# ...OR a username/password:
+#ROMM_USER=api_username
+#ROMM_PASS=api_password
 
 # Optional
 ADMIN_ID=admin_user_id
@@ -144,7 +148,9 @@ GGREQUESTZ_API_KEY=ggr_api_key
 - `TOKEN` — Discord bot token.
 - `GUILD` — Discord server (guild) ID.
 - `API_URL` — Base URL for your RomM instance (use `http://ip:port` or a domain).
-- `ROMM_USER` / `ROMM_PASS` — API credentials for RomM. Legacy `USER` / `PASS` still work, but `USER` can collide with the operating system username.
+- **RomM API auth (choose one):**
+  - `ROMM_CLIENT_TOKEN` — *(preferred, RomM 4.8+)* A Client API Token so the bot connects without storing a user's password. Create one in the RomM web UI under your user profile → **API Tokens** (or `POST /api/client-tokens`), granting the scopes `roms.read platforms.read firmware.read users.read users.write me.write`. It must be created by an admin user, since scopes are capped by the creating user's permissions (user-manager commands need `users.write`). When set, `ROMM_USER`/`ROMM_PASS` are not required.
+  - `ROMM_USER` / `ROMM_PASS` — Username/password fallback used when no client token is set. Legacy `USER` / `PASS` still work, but `USER` can collide with the operating system username.
 
 **Common optional settings (defaults shown where applicable):**
 - `ADMIN_ID` — User OR role ID allowed to run admin commands (scan, sync users, etc.).
