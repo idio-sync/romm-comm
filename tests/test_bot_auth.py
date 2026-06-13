@@ -1,5 +1,7 @@
+import asyncio
 import importlib
 import os
+import types
 import unittest
 from unittest.mock import patch
 
@@ -87,6 +89,23 @@ class BotAuthTests(unittest.IsolatedAsyncioTestCase):
             ["Bearer expired-token", "Bearer fresh-token"],
             fake_bot.session.auth_headers,
         )
+
+    async def test_ensure_valid_token_uses_client_token_without_oauth(self):
+        bot_module = importlib.import_module("bot")
+
+        class ClientTokenConfig:
+            ROMM_CLIENT_TOKEN = "rmm_clienttoken"
+
+        fake = types.SimpleNamespace(
+            config=ClientTokenConfig(),
+            access_token=None,
+            token_lock=asyncio.Lock(),
+        )
+
+        result = await bot_module.RommBot.ensure_valid_token(fake)
+
+        self.assertTrue(result)
+        self.assertEqual("rmm_clienttoken", fake.access_token)
 
 
 class ConfigCredentialTests(unittest.TestCase):

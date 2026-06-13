@@ -457,6 +457,10 @@ class RommBot(discord.Bot):
     async def ensure_valid_token(self) -> bool:
         """Ensure we have a valid OAuth token, refreshing if necessary."""
         async with self.token_lock:
+            # Client API token is a static credential: no OAuth grant or refresh needed.
+            if self.config.ROMM_CLIENT_TOKEN:
+                self.access_token = self.config.ROMM_CLIENT_TOKEN
+                return True
             # Check if token is expired or missing
             if not self.access_token or time.time() >= self.token_expiry:
                 logger.debug("Token expired or missing, refreshing...")
