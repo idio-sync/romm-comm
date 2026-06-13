@@ -54,8 +54,6 @@ class Scan(commands.Cog):
         self._first_event_received: bool = False
         self._scan_initiated_externally: bool = False
         
-        self.setup_socket_handlers()
-
         logging.getLogger('socketio').setLevel(logging.WARNING)
         logging.getLogger('engineio').setLevel(logging.WARNING)
 
@@ -70,270 +68,160 @@ class Scan(commands.Cog):
             return False
         return True
 
-    def setup_socket_handlers(self):
-        """Set up Socket.IO event handlers"""
-        @self.sio.event
-        async def connect():
-            logger.info("Connected to websocket server")
-            # Reset detection flags on connect
-            self._first_event_received = False
-            self._scan_initiated_externally = False
+    @commands.Cog.listener('on_romm_connect')
+    async def on_romm_connect(self):
+        logger.info("Connected to websocket server")
+        # Reset detection flags on connect
+        self._first_event_received = False
+        self._scan_initiated_externally = False
 
-        @self.sio.event
-        async def connect_error(error):
-            logger.error(f"Failed to connect to websocket: {error}")
-            await self._handle_connection_error(error)
+    @commands.Cog.listener('on_romm_connect_error')
+    async def on_romm_connect_error(self, error):
+        logger.error(f"Failed to connect to websocket: {error}")
+        await self._handle_connection_error(error)
 
-        @self.sio.event
-        async def disconnect():
-            logger.warning("Disconnected from websocket server")
-            
-            # Mark scan as interrupted if we were tracking one
-            if self.is_scanning:
-                logger.warning("Disconnected during active scan")
-                await self._clear_shared_scan_state()
-            
-            self.is_scanning = False
-            if self.last_channel and not self.external_scan:
-                try:
-                    await self.last_channel.send("📡 Disconnected from scan service")
-                except Exception as e:
-                    logger.error(f"Failed to send disconnect message: {e}")
+    @commands.Cog.listener('on_romm_disconnect')
+    async def on_romm_disconnect(self):
+        logger.warning("Disconnected from websocket server")
 
-        @self.sio.on('scan:scanning_platform')
-        async def on_scanning_platform(data):
+        # Mark scan as interrupted if we were tracking one
+        if self.is_scanning:
+            logger.warning("Disconnected during active scan")
+            await self._clear_shared_scan_state()
+
+        self.is_scanning = False
+        if self.last_channel and not self.external_scan:
             try:
-                # First event detection - if this is the first event and we didn't initiate scan
-                # Use lock to prevent race condition when checking and setting is_scanning
-                async with self.bot.scan_state_lock:
-                    if not self._first_event_received and not self.is_scanning:
-                        logger.info("🔍 External scan detected via platform event")
-                        self._scan_initiated_externally = True
-                        self.scan_start_time = datetime.now()
-                        self.is_scanning = True
-                        self.external_scan = True
-
-                        # Update bot-level shared state (already holding lock)
-                        self.bot.scan_state.update({
-                            'is_scanning': True,
-                            'scan_start_time': self.scan_start_time,
-                            'initiated_by': 'romm',
-                            'scan_type': 'platform',
-                            'channel_id': None
-                        })
-
-                        self.scan_progress = {
-                            'current_platform': None,
-                            'current_platform_slug': None,
-                            'current_rom': None,
-                            'platform_roms': 0,
-                            'total_roms': 0,
-                            'scanned_roms': 0,
-                            'scanned_platforms': 0,
-                            'added_platforms': 0,
-                            'added_roms': 0,
-                            'metadata_roms': 0
-                        }
-
-                    self._first_event_received = True
-                
-                # Handle platform data
-                if isinstance(data, dict):
-                    platform_name = data.get('name', 'Unknown Platform')
-                    platform_slug = data.get('slug', 'unknown')
-                else:
-                    platform_name = str(data)
-                    platform_slug = 'unknown'
-                
-                self.scan_progress['current_platform'] = platform_name
-                self.scan_progress['current_platform_slug'] = platform_slug
-                self.scan_progress['platform_roms'] = 0  # Reset ROM count for new platform
-                self.scan_progress['scanned_platforms'] = self.scan_progress.get('scanned_platforms', 0) + 1
-                
-                # Only send messages if we have a channel (Discord-initiated scan)
-                if self.last_channel and not self.external_scan:
-                    await self.last_channel.send(f"🔍 Scanning platform: {platform_name}")
-                    
+                await self.last_channel.send("📡 Disconnected from scan service")
             except Exception as e:
-                logger.error(f"Error handling platform scan update: {e}")
+                logger.error(f"Failed to send disconnect message: {e}")
 
-        @self.sio.on('scan:scanning_rom')
-        async def on_scanning_rom(data):
-            try:
-                # First event detection - same logic as platform
-                # Use lock to prevent race condition when checking and setting is_scanning
-                async with self.bot.scan_state_lock:
-                    if not self._first_event_received and not self.is_scanning:
-                        logger.info("🔍 External scan detected via ROM event")
-                        self._scan_initiated_externally = True
-                        self.scan_start_time = datetime.now()
-                        self.is_scanning = True
-                        self.external_scan = True
+    @commands.Cog.listener('on_romm_scan_platform')
+    async def on_romm_scan_platform(self, data):
+        try:
+            # First event detection - if this is the first event and we didn't initiate scan
+            # Use lock to prevent race condition when checking and setting is_scanning
+            async with self.bot.scan_state_lock:
+                if not self._first_event_received and not self.is_scanning:
+                    logger.info("🔍 External scan detected via platform event")
+                    self._scan_initiated_externally = True
+                    self.scan_start_time = datetime.now()
+                    self.is_scanning = True
+                    self.external_scan = True
 
-                        # Update bot-level shared state (already holding lock)
-                        self.bot.scan_state.update({
-                            'is_scanning': True,
-                            'scan_start_time': self.scan_start_time,
-                            'initiated_by': 'romm',
-                            'scan_type': 'rom',
-                            'channel_id': None
-                        })
-
-                        self.scan_progress = {
-                            'current_platform': 'Unknown',
-                            'current_platform_slug': None,
-                            'current_rom': None,
-                            'platform_roms': 0,
-                            'total_roms': 0,
-                            'scanned_roms': 0,
-                            'scanned_platforms': 0,
-                            'added_platforms': 0,
-                            'added_roms': 0,
-                            'metadata_roms': 0
-                        }
-
-                    self._first_event_received = True
-                
-                # Handle ROM data
-                if isinstance(data, dict):
-                    rom_name = data.get('name', 'Unknown ROM')
-                    self.scan_progress['current_rom'] = rom_name
-                    self.scan_progress['platform_roms'] = self.scan_progress.get('platform_roms', 0) + 1
-                    self.scan_progress['total_roms'] = self.scan_progress.get('total_roms', 0) + 1
-                    self.scan_progress['scanned_roms'] = self.scan_progress.get('scanned_roms', 0) + 1
-                    
-                    if data.get('is_new', False):
-                        self.scan_progress['added_roms'] = self.scan_progress.get('added_roms', 0) + 1
-                        # Use the display name stored in scan_progress for consistency
-                        current_platform = self.scan_progress.get('current_platform', 'Unknown')
-                        self.new_games.append({
-                            'platform': current_platform,
-                            'name': rom_name,
-                            'file_name': data.get('file_name', '')
-                        })
-                    if data.get('has_metadata', False):
-                        self.scan_progress['metadata_roms'] = self.scan_progress.get('metadata_roms', 0) + 1
-            except Exception as e:
-                logger.error(f"Error handling ROM scan update: {e}")
-                
-        @self.sio.on('scan:done')
-        async def on_scan_complete(stats):
-            try:
-                logger.info(f"📊 Scan complete event received with stats: {stats}")
-                
-                # Reset detection flags
-                self._first_event_received = False
-                self._scan_initiated_externally = False
-                
-                # Update bot-level shared state
-                async with self.bot.scan_state_lock:
+                    # Update bot-level shared state (already holding lock)
                     self.bot.scan_state.update({
-                        'is_scanning': False,
-                        'scan_start_time': None,
-                        'initiated_by': None,
-                        'scan_type': None,
+                        'is_scanning': True,
+                        'scan_start_time': self.scan_start_time,
+                        'initiated_by': 'romm',
+                        'scan_type': 'platform',
                         'channel_id': None
                     })
-                
-                self.is_scanning = False
-                
-                # Handle externally initiated scans gracefully
-                if self.scan_start_time is None:
-                    logger.info("Scan completion received for externally initiated scan with no tracked start time")
-                    
-                    # Store basic stats if available
-                    if stats:
-                        self.last_scan_stats = {
-                            'duration': 'Unknown (External Scan)',
-                            'scanned_platforms': stats.get('scanned_platforms', 0),
-                            'added_platforms': stats.get('added_platforms', 0),
-                            'scanned_roms': stats.get('scanned_roms', 0),
-                            'added_roms': stats.get('added_roms', 0),
-                            'metadata_roms': stats.get('metadata_roms', 0),
-                            'scanned_firmware': stats.get('scanned_firmware', 0),
-                            'added_firmware': stats.get('added_firmware', 0)
-                        }
-                    
-                    # Reset and return early
-                    self._reset_scan_state()
-                    return
 
-                # Calculate duration for tracked scans
-                duration = datetime.now() - self.scan_start_time
-                duration_str = str(duration).split('.')[0]
+                    self.scan_progress = {
+                        'current_platform': None,
+                        'current_platform_slug': None,
+                        'current_rom': None,
+                        'platform_roms': 0,
+                        'total_roms': 0,
+                        'scanned_roms': 0,
+                        'scanned_platforms': 0,
+                        'added_platforms': 0,
+                        'added_roms': 0,
+                        'metadata_roms': 0
+                    }
 
-                # Combine server stats with our tracked progress
-                final_stats = {
-                    'duration': duration_str,
-                    'scanned_platforms': stats.get('scanned_platforms', 0) or self.scan_progress.get('scanned_platforms', 0),
-                    'added_platforms': stats.get('added_platforms', 0) or self.scan_progress.get('added_platforms', 0),
-                    'scanned_roms': stats.get('scanned_roms', 0) or self.scan_progress.get('scanned_roms', 0),
-                    'added_roms': stats.get('added_roms', 0) or self.scan_progress.get('added_roms', 0),
-                    'metadata_roms': stats.get('metadata_roms', 0) or self.scan_progress.get('metadata_roms', 0),
-                    'scanned_firmware': stats.get('scanned_firmware', 0),
-                    'added_firmware': stats.get('added_firmware', 0)
-                }
+                self._first_event_received = True
 
-                # Store stats for summary command
-                self.last_scan_stats = {
-                    **final_stats,
-                    'total_roms_found': self.scan_progress.get('total_roms', 0)
-                }
+            # Handle platform data
+            if isinstance(data, dict):
+                platform_name = data.get('name', 'Unknown Platform')
+                platform_slug = data.get('slug', 'unknown')
+            else:
+                platform_name = str(data)
+                platform_slug = 'unknown'
 
-                # Only send Discord message if this was a Discord-initiated scan
-                if self.last_channel and not self.external_scan:
-                    message = [
-                        f"✅ Scan completed in {duration_str}",
-                        "",
-                        "**Stats  📊:**",
-                        f"- Duration  ⏱️: {duration_str}",
-                        "",
-                        "**Platforms  🎮:**",
-                        f"- Platforms Scanned: {final_stats['scanned_platforms']}",
-                        f"- New Platforms Added: {final_stats['added_platforms']}",
-                        "",
-                        "**ROMs  💾:**",
-                        f"- Total ROMs Scanned: {final_stats['scanned_roms']}",
-                        f"- New ROMs Added: {final_stats['added_roms']}",
-                    ]
-                    
-                    if final_stats.get('metadata_roms'):
-                        message.append(f"- ROMs with Metadata: {final_stats['metadata_roms']}")
-                    
-                    message.extend([
-                        "",
-                        f"**Firmware  {self.bot.emoji_dict.get('bios', '🔧')}:**",
-                        f"- Firmware Scanned: {final_stats['scanned_firmware']}",
-                        f"- New Firmware Added: {final_stats['added_firmware']}"
-                    ])
-                    
-                    await self.last_channel.send('\n'.join(message))
-                else:
-                    # Log completion for external scans
-                    logger.info(f"External scan completed - ROMs: {final_stats['scanned_roms']}, Added: {final_stats['added_roms']}")
+            self.scan_progress['current_platform'] = platform_name
+            self.scan_progress['current_platform_slug'] = platform_slug
+            self.scan_progress['platform_roms'] = 0  # Reset ROM count for new platform
+            self.scan_progress['scanned_platforms'] = self.scan_progress.get('scanned_platforms', 0) + 1
 
-                # If there are new games, dispatch the batch event
-                if self.new_games:
-                    logger.info(f"Dispatching batch_scan_complete with {len(self.new_games)} new games")
-                    self.bot.dispatch('batch_scan_complete', self.new_games)
-                
-                # Reset scan state
-                self._reset_scan_state()
-                
-            except Exception as e:
-                logger.error(f"Error handling scan completion: {e}", exc_info=True)
-                self._reset_scan_state()
-        
-        @self.sio.on('scan:done_ko')
-        async def on_scan_error(error_message):
-            """Handle scan errors"""
-            logger.error(f"❌ Scan failed: {error_message}")
-            
+            # Only send messages if we have a channel (Discord-initiated scan)
+            if self.last_channel and not self.external_scan:
+                await self.last_channel.send(f"🔍 Scanning platform: {platform_name}")
+
+        except Exception as e:
+            logger.error(f"Error handling platform scan update: {e}")
+
+    @commands.Cog.listener('on_romm_scan_rom')
+    async def on_romm_scan_rom(self, data):
+        try:
+            # First event detection - same logic as platform
+            # Use lock to prevent race condition when checking and setting is_scanning
+            async with self.bot.scan_state_lock:
+                if not self._first_event_received and not self.is_scanning:
+                    logger.info("🔍 External scan detected via ROM event")
+                    self._scan_initiated_externally = True
+                    self.scan_start_time = datetime.now()
+                    self.is_scanning = True
+                    self.external_scan = True
+
+                    # Update bot-level shared state (already holding lock)
+                    self.bot.scan_state.update({
+                        'is_scanning': True,
+                        'scan_start_time': self.scan_start_time,
+                        'initiated_by': 'romm',
+                        'scan_type': 'rom',
+                        'channel_id': None
+                    })
+
+                    self.scan_progress = {
+                        'current_platform': 'Unknown',
+                        'current_platform_slug': None,
+                        'current_rom': None,
+                        'platform_roms': 0,
+                        'total_roms': 0,
+                        'scanned_roms': 0,
+                        'scanned_platforms': 0,
+                        'added_platforms': 0,
+                        'added_roms': 0,
+                        'metadata_roms': 0
+                    }
+
+                self._first_event_received = True
+
+            # Handle ROM data
+            if isinstance(data, dict):
+                rom_name = data.get('name', 'Unknown ROM')
+                self.scan_progress['current_rom'] = rom_name
+                self.scan_progress['platform_roms'] = self.scan_progress.get('platform_roms', 0) + 1
+                self.scan_progress['total_roms'] = self.scan_progress.get('total_roms', 0) + 1
+                self.scan_progress['scanned_roms'] = self.scan_progress.get('scanned_roms', 0) + 1
+
+                if data.get('is_new', False):
+                    self.scan_progress['added_roms'] = self.scan_progress.get('added_roms', 0) + 1
+                    # Use the display name stored in scan_progress for consistency
+                    current_platform = self.scan_progress.get('current_platform', 'Unknown')
+                    self.new_games.append({
+                        'platform': current_platform,
+                        'name': rom_name,
+                        'file_name': data.get('file_name', '')
+                    })
+                if data.get('has_metadata', False):
+                    self.scan_progress['metadata_roms'] = self.scan_progress.get('metadata_roms', 0) + 1
+        except Exception as e:
+            logger.error(f"Error handling ROM scan update: {e}")
+
+    @commands.Cog.listener('on_romm_scan_done')
+    async def on_romm_scan_done(self, stats):
+        try:
+            logger.info(f"📊 Scan complete event received with stats: {stats}")
+
             # Reset detection flags
             self._first_event_received = False
             self._scan_initiated_externally = False
-            
-            # Update bot-level state
+
+            # Update bot-level shared state
             async with self.bot.scan_state_lock:
                 self.bot.scan_state.update({
                     'is_scanning': False,
@@ -342,15 +230,118 @@ class Scan(commands.Cog):
                     'scan_type': None,
                     'channel_id': None
                 })
-            
-            # Notify channel if Discord-initiated
+
+            self.is_scanning = False
+
+            # Handle externally initiated scans gracefully
+            if self.scan_start_time is None:
+                logger.info("Scan completion received for externally initiated scan with no tracked start time")
+
+                # Store basic stats if available
+                if stats:
+                    self.last_scan_stats = {
+                        'duration': 'Unknown (External Scan)',
+                        'scanned_platforms': stats.get('scanned_platforms', 0),
+                        'added_platforms': stats.get('added_platforms', 0),
+                        'scanned_roms': stats.get('scanned_roms', 0),
+                        'added_roms': stats.get('added_roms', 0),
+                        'metadata_roms': stats.get('metadata_roms', 0),
+                        'scanned_firmware': stats.get('scanned_firmware', 0),
+                        'added_firmware': stats.get('added_firmware', 0)
+                    }
+
+                # Reset and return early
+                self._reset_scan_state()
+                return
+
+            # Calculate duration for tracked scans
+            duration = datetime.now() - self.scan_start_time
+            duration_str = str(duration).split('.')[0]
+
+            # Combine server stats with our tracked progress
+            final_stats = {
+                'duration': duration_str,
+                'scanned_platforms': stats.get('scanned_platforms', 0) or self.scan_progress.get('scanned_platforms', 0),
+                'added_platforms': stats.get('added_platforms', 0) or self.scan_progress.get('added_platforms', 0),
+                'scanned_roms': stats.get('scanned_roms', 0) or self.scan_progress.get('scanned_roms', 0),
+                'added_roms': stats.get('added_roms', 0) or self.scan_progress.get('added_roms', 0),
+                'metadata_roms': stats.get('metadata_roms', 0) or self.scan_progress.get('metadata_roms', 0),
+                'scanned_firmware': stats.get('scanned_firmware', 0),
+                'added_firmware': stats.get('added_firmware', 0)
+            }
+
+            # Store stats for summary command
+            self.last_scan_stats = {
+                **final_stats,
+                'total_roms_found': self.scan_progress.get('total_roms', 0)
+            }
+
+            # Only send Discord message if this was a Discord-initiated scan
             if self.last_channel and not self.external_scan:
-                try:
-                    await self.last_channel.send(f"❌ Scan failed: {error_message}")
-                except Exception as e:
-                    logger.error(f"Failed to send error message: {e}")
-            
+                message = [
+                    f"✅ Scan completed in {duration_str}",
+                    "",
+                    "**Stats  📊:**",
+                    f"- Duration  ⏱️: {duration_str}",
+                    "",
+                    "**Platforms  🎮:**",
+                    f"- Platforms Scanned: {final_stats['scanned_platforms']}",
+                    f"- New Platforms Added: {final_stats['added_platforms']}",
+                    "",
+                    "**ROMs  💾:**",
+                    f"- Total ROMs Scanned: {final_stats['scanned_roms']}",
+                    f"- New ROMs Added: {final_stats['added_roms']}",
+                ]
+
+                if final_stats.get('metadata_roms'):
+                    message.append(f"- ROMs with Metadata: {final_stats['metadata_roms']}")
+
+                message.extend([
+                    "",
+                    f"**Firmware  {self.bot.emoji_dict.get('bios', '🔧')}:**",
+                    f"- Firmware Scanned: {final_stats['scanned_firmware']}",
+                    f"- New Firmware Added: {final_stats['added_firmware']}"
+                ])
+
+                await self.last_channel.send('\n'.join(message))
+            else:
+                # Log completion for external scans
+                logger.info(f"External scan completed - ROMs: {final_stats['scanned_roms']}, Added: {final_stats['added_roms']}")
+
+            # Reset scan state
             self._reset_scan_state()
+
+        except Exception as e:
+            logger.error(f"Error handling scan completion: {e}", exc_info=True)
+            self._reset_scan_state()
+
+    @commands.Cog.listener('on_romm_scan_error')
+    async def on_romm_scan_error(self, error_message):
+        """Handle scan errors"""
+        logger.error(f"❌ Scan failed: {error_message}")
+
+        # Reset detection flags
+        self._first_event_received = False
+        self._scan_initiated_externally = False
+
+        # Update bot-level state
+        async with self.bot.scan_state_lock:
+            self.bot.scan_state.update({
+                'is_scanning': False,
+                'scan_start_time': None,
+                'initiated_by': None,
+                'scan_type': None,
+                'channel_id': None
+            })
+
+        # Notify channel if Discord-initiated
+        if self.last_channel and not self.external_scan:
+            try:
+                await self.last_channel.send(f"❌ Scan failed: {error_message}")
+            except Exception as e:
+                logger.error(f"Failed to send error message: {e}")
+
+        self._reset_scan_state()
 
     def _reset_scan_state(self):
         """Reset all scan-related state variables"""
