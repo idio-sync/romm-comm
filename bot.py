@@ -103,14 +103,20 @@ class SocketIOManager:
                     logger.debug(f"SocketIO Manager connecting (attempt {attempt + 1}/{max_retries})...")
                     
                     base_url = self.config.API_BASE_URL.rstrip('/')
-                    auth_string = f"{self.config.USER}:{self.config.PASS}"
-                    auth_bytes = auth_string.encode('ascii')
-                    base64_auth = base64.b64encode(auth_bytes).decode('ascii')
-                    
-                    headers = {
-                        'Authorization': f'Basic {base64_auth}',
-                        'User-Agent': 'RommBot/1.0'
-                    }
+                    if self.config.ROMM_CLIENT_TOKEN:
+                        # Client API tokens authenticate via Bearer, same as the HTTP API.
+                        headers = {
+                            'Authorization': f'Bearer {self.config.ROMM_CLIENT_TOKEN}',
+                            'User-Agent': 'RommBot/1.0'
+                        }
+                    else:
+                        auth_string = f"{self.config.USER}:{self.config.PASS}"
+                        auth_bytes = auth_string.encode('ascii')
+                        base64_auth = base64.b64encode(auth_bytes).decode('ascii')
+                        headers = {
+                            'Authorization': f'Basic {base64_auth}',
+                            'User-Agent': 'RommBot/1.0'
+                        }
                     
                     await self.sio.connect(
                         base_url,
