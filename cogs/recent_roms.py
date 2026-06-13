@@ -68,38 +68,127 @@ class RecentRomsMonitor(commands.Cog):
         
         # Use shared SocketIO manager
         self.sio = bot.socketio_manager.sio
-  
-        self._handlers_registered = False
-        
+
         if self.enabled:
             bot.loop.create_task(self.setup())
             logger.debug("Recent ROMs WebSocket monitor enabled")
 
-    def setup_socket_handlers(self):
-        """Set up Socket.IO event handlers"""
-        
-        if self._handlers_registered:
-            logger.debug("Socket handlers already registered, skipping")
-            return
-        
-        self._handlers_registered = True
-        
-        @self.sio.event
-        async def connect():
-            """Handle connection event"""
-            logger.info("✅ RecentRomsMonitor connected to websocket server")
-            async with self.scan_lock:
-                self.current_scan_roms.clear()
-                self.current_scan_names.clear()
-            async with self.processing_lock:
-                self.recently_processed.clear()
+    @commands.Cog.listener('on_romm_connect')
+    async def on_romm_connect(self):
+        """Handle connection event"""
+        logger.info("✅ RecentRomsMonitor connected to websocket server")
+        async with self.scan_lock:
+            self.current_scan_roms.clear()
+            self.current_scan_names.clear()
+        async with self.processing_lock:
+            self.recently_processed.clear()
 
-        @self.sio.event
-        async def disconnect():
-            """Handle disconnection event"""
-            logger.warning("RecentRomsMonitor disconnected from websocket server")
-            
-            # Cancel any pending timer
+    @commands.Cog.listener('on_romm_disconnect')
+    async def on_romm_disconnect(self):
+        """Handle disconnection event"""
+        logger.warning("RecentRomsMonitor disconnected from websocket server")
+
+        # Cancel any pending timer
+        if self.scan_completion_timer and not self.scan_completion_timer.done():
+            self.scan_completion_timer.cancel()
+            try:
+                await self.scan_completion_timer
+            except asyncio.CancelledError:
+                pass
+
+    @commands.Cog.listener('on_romm_connect_error')
+    async def on_romm_connect_error(self, data):
+        """Handle connection errors"""
+        logger.error(f"Socket.IO connection error: {data}")
+
+    @commands.Cog.listener('on_romm_scan_rom')
+    async def on_romm_scan_rom(self, data):
+        """Handle new ROM being scanned"""
+        try:
+            # Capture scan start time on first ROM
+            async with self.bot.scan_state_lock:
+                if self.bot.scan_state['is_scanning'] and not self.bot.scan_state.get('notification_cutoff_time'):
+                    # Store cutoff with 10-second buffer to handle clock skew
+                    self.bot.scan_state['notification_cutoff_time'] = datetime.utcnow() - timedelta(seconds=10)
+                    logger.info(f"Set notification cutoff time: {self.bot.scan_state['notification_cutoff_time']}")
+
+            # API sends 'id' and 'name', not 'rom_id' and 'rom_name'
+            rom_id = data.get('id') or data.get('rom_id')
+            rom_name = data.get('name') or data.get('rom_name', 'Unknown')
+
+            if not rom_id:
+                logger.debug(f"Received scan:scanning_rom event without rom_id: {data.keys()}")
+                return
+
+            # Skip ROMs that are still being identified (first emission)
+            # Only process the second emission with complete metadata
+            if data.get('is_identifying') is True:
+                logger.debug(f"ROM {rom_id} still being identified, waiting for complete data")
+                return
+
+            # Check if already processed (prevents duplicates from multiple socket events)
+            async with self.processing_lock:
+                if rom_id in self.currently_processing or rom_id in self.recently_processed:
+                    logger.debug(f"ROM {rom_id} already in processing queue, skipping")
+                    return
+
+            # Early database check to prevent duplicate notifications
+            # This is intentional: duplicate socket events or multiple ROM versions
+            # should only generate ONE notification per game
+            if await self.has_been_posted(rom_id):
+                logger.debug(f"ROM {rom_id} already posted to database, skipping")
+                return
+
+            async with self.scan_lock:
+                # Check for duplicates in current batch
+                if rom_name.lower() in self.current_scan_names:
+                    logger.debug(f"Duplicate ROM name in batch: {rom_name}")
+                    return
+
+                # Add to batch - handle both field name formats
+                rom = {
+                    'id': rom_id,
+                    'name': rom_name,
+                    'platform_name': data.get('platform_name', 'Unknown'),
+                    'platform_id': data.get('platform_id'),
+                    'file_name': data.get('file_name'),
+                    'fs_name': data.get('fs_name') or rom_name,
+                    'fs_size_bytes': data.get('fs_size_bytes'),
+                    'url_cover': data.get('url_cover'),
+                    'created_at': data.get('created_at'),
+                }
+
+                self.current_scan_names.add(rom_name.lower())
+                self.current_scan_roms.append(rom)
+
+                # Mark as currently processing
+                async with self.processing_lock:
+                    self.currently_processing.add(rom_id)
+
+                logger.debug(f"Queued ROM: {rom['name']} ({len(self.current_scan_roms)} in batch)")
+
+                # Reset or start the inactivity timer
+                if self.scan_completion_timer and not self.scan_completion_timer.done():
+                    self.scan_completion_timer.cancel()
+                    try:
+                        await self.scan_completion_timer
+                    except asyncio.CancelledError:
+                        pass
+
+                self.scan_completion_timer = asyncio.create_task(
+                    self._trigger_batch_processing_after_delay()
+                )
+
+        except Exception as e:
+            logger.error(f"Error handling scan:scanning_rom event: {e}", exc_info=True)
+
+    @commands.Cog.listener('on_romm_scan_done')
+    async def on_romm_scan_done(self, stats):
+        """Handle scan completion"""
+        try:
+            logger.info("Received scan:done event")
+
+            # Cancel timer if running
             if self.scan_completion_timer and not self.scan_completion_timer.done():
                 self.scan_completion_timer.cancel()
                 try:
@@ -107,125 +196,25 @@ class RecentRomsMonitor(commands.Cog):
                 except asyncio.CancelledError:
                     pass
 
-        @self.sio.event
-        async def connect_error(data):
-            """Handle connection errors"""
-            logger.error(f"Socket.IO connection error: {data}")
-        
-        @self.sio.on('scan:scanning_rom')
-        async def on_scanning_rom(data):
-            """Handle new ROM being scanned"""
-            try:
-                # Capture scan start time on first ROM
-                async with self.bot.scan_state_lock:
-                    if self.bot.scan_state['is_scanning'] and not self.bot.scan_state.get('notification_cutoff_time'):
-                        # Store cutoff with 10-second buffer to handle clock skew
-                        self.bot.scan_state['notification_cutoff_time'] = datetime.utcnow() - timedelta(seconds=10)
-                        logger.info(f"Set notification cutoff time: {self.bot.scan_state['notification_cutoff_time']}")
-                
-                # API sends 'id' and 'name', not 'rom_id' and 'rom_name'
-                rom_id = data.get('id') or data.get('rom_id')
-                rom_name = data.get('name') or data.get('rom_name', 'Unknown')
-                
-                if not rom_id:
-                    logger.debug(f"Received scan:scanning_rom event without rom_id: {data.keys()}")
-                    return
-                
-                # Skip ROMs that are still being identified (first emission)
-                # Only process the second emission with complete metadata
-                if data.get('is_identifying') is True:
-                    logger.debug(f"ROM {rom_id} still being identified, waiting for complete data")
-                    return
-                
-                # Check if already processed (prevents duplicates from multiple socket events)
-                async with self.processing_lock:
-                    if rom_id in self.currently_processing or rom_id in self.recently_processed:
-                        logger.debug(f"ROM {rom_id} already in processing queue, skipping")
-                        return
-                
-                # Early database check to prevent duplicate notifications
-                # This is intentional: duplicate socket events or multiple ROM versions
-                # should only generate ONE notification per game
-                if await self.has_been_posted(rom_id):
-                    logger.debug(f"ROM {rom_id} already posted to database, skipping")
-                    return
-                
-                async with self.scan_lock:
-                    # Check for duplicates in current batch
-                    if rom_name.lower() in self.current_scan_names:
-                        logger.debug(f"Duplicate ROM name in batch: {rom_name}")
-                        return
-                    
-                    # Add to batch - handle both field name formats
-                    rom = {
-                        'id': rom_id,
-                        'name': rom_name,
-                        'platform_name': data.get('platform_name', 'Unknown'),
-                        'platform_id': data.get('platform_id'),
-                        'file_name': data.get('file_name'),
-                        'fs_name': data.get('fs_name') or rom_name,
-                        'fs_size_bytes': data.get('fs_size_bytes'),
-                        'url_cover': data.get('url_cover'),
-                        'created_at': data.get('created_at'),
-                    }
-                    
-                    self.current_scan_names.add(rom_name.lower())
-                    self.current_scan_roms.append(rom)
-                    
-                    # Mark as currently processing
-                    async with self.processing_lock:
-                        self.currently_processing.add(rom_id)
-                    
-                    logger.debug(f"Queued ROM: {rom['name']} ({len(self.current_scan_roms)} in batch)")
-                    
-                    # Reset or start the inactivity timer
-                    if self.scan_completion_timer and not self.scan_completion_timer.done():
-                        self.scan_completion_timer.cancel()
-                        try:
-                            await self.scan_completion_timer
-                        except asyncio.CancelledError:
-                            pass
-                    
-                    self.scan_completion_timer = asyncio.create_task(
-                        self._trigger_batch_processing_after_delay()
-                    )
-                    
-            except Exception as e:
-                logger.error(f"Error handling scan:scanning_rom event: {e}", exc_info=True)
-        
-        @self.sio.on('scan:done')
-        async def on_scan_done(stats):
-            """Handle scan completion"""
-            try:
-                logger.info("Received scan:done event")
-                
-                # Cancel timer if running
-                if self.scan_completion_timer and not self.scan_completion_timer.done():
-                    self.scan_completion_timer.cancel()
-                    try:
-                        await self.scan_completion_timer
-                    except asyncio.CancelledError:
-                        pass
-                
-                async with self.scan_lock:
-                    if self.current_scan_roms:
-                        roms_to_process = self.current_scan_roms.copy()
-                        self.current_scan_roms.clear()
-                        self.current_scan_names.clear()
-                        
-                        logger.info(f"Scan complete, processing {len(roms_to_process)} ROMs")
-                        # DON'T await here - let it run independently
-                        asyncio.create_task(self.handle_scan_complete(roms_to_process, stats))
-                    else:
-                        logger.info("Scan complete with no identified ROMs to process")
-                        # Clear cutoff time only if no ROMs to process
-                        async with self.bot.scan_state_lock:
-                            if 'notification_cutoff_time' in self.bot.scan_state:
-                                del self.bot.scan_state['notification_cutoff_time']
-                                logger.debug("Cleared notification cutoff time (no ROMs)")
-                        
-            except Exception as e:
-                logger.error(f"Error handling scan:done event: {e}", exc_info=True)
+            async with self.scan_lock:
+                if self.current_scan_roms:
+                    roms_to_process = self.current_scan_roms.copy()
+                    self.current_scan_roms.clear()
+                    self.current_scan_names.clear()
+
+                    logger.info(f"Scan complete, processing {len(roms_to_process)} ROMs")
+                    # DON'T await here - let it run independently
+                    asyncio.create_task(self.handle_scan_complete(roms_to_process, stats))
+                else:
+                    logger.info("Scan complete with no identified ROMs to process")
+                    # Clear cutoff time only if no ROMs to process
+                    async with self.bot.scan_state_lock:
+                        if 'notification_cutoff_time' in self.bot.scan_state:
+                            del self.bot.scan_state['notification_cutoff_time']
+                            logger.debug("Cleared notification cutoff time (no ROMs)")
+
+        except Exception as e:
+            logger.error(f"Error handling scan:done event: {e}", exc_info=True)
     
     async def _trigger_batch_processing_after_delay(self):
         """Wait for inactivity then process the batch"""
@@ -258,10 +247,7 @@ class RecentRomsMonitor(commands.Cog):
             
             # Initialize HTTP session for downloads
             await self._ensure_http_session()
-            
-            # Setup socket handlers
-            self.setup_socket_handlers()
-            
+
             # Start cleanup task
             self.cleanup_task.start()
             
