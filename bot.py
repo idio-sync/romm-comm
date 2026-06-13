@@ -746,10 +746,10 @@ class RommBot(discord.Bot):
             
             # Initialize OAuth tokens AFTER database
             logger.debug("Initializing OAuth tokens...")
-            if not await self.get_oauth_token():
-                logger.warning("Failed to obtain OAuth tokens, some features may not work")
+            if not await self.ensure_valid_token():
+                logger.warning("Failed to obtain RomM API token, some features may not work")
             else:
-                logger.info("✅ OAuth tokens initialized successfully")
+                logger.info("✅ RomM API token initialized successfully")
                                        
         except Exception as e:
             logger.error("=" * 50)
