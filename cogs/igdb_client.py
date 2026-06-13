@@ -259,10 +259,19 @@ class IGDBClient:
         """Perform a single IGDB search"""
         try:
             url = "https://api.igdb.com/v4/games"
-            
+
+            # Escape user input so it can't break out of the quoted search clause
+            # (or inject additional apicalypse clauses). Backslash must be escaped first.
+            safe_search_term = (
+                search_term.replace('\\', '\\\\')
+                           .replace('"', '\\"')
+                           .replace('\n', ' ')
+                           .replace('\r', ' ')
+            )
+
             # Build the IGDB query
             query = (
-                f'search "{search_term}"; '
+                f'search "{safe_search_term}"; '
                 'fields name,alternative_names.name,platforms.name,first_release_date,'
                 'summary,cover.url,game_modes.name,genres.name,involved_companies.company.name,'
                 'involved_companies.developer,involved_companies.publisher,external_games.*;'

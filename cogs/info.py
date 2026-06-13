@@ -50,11 +50,13 @@ class Info(commands.Cog):
         if not self.bot.config.UPDATE_VOICE_NAMES:
             return
             
-        stats_data = self.bot.cache.get('stats')
-        user_count_data = self.bot.cache.get('user_count')        
-        if not stats_data:
+        # Copy so we never mutate the shared cached dict (APICache.get returns it by reference)
+        cached_stats = self.bot.cache.get('stats')
+        if not cached_stats:
             return
-        
+        stats_data = dict(cached_stats)
+        user_count_data = self.bot.cache.get('user_count')
+
         if user_count_data and 'user_count' in user_count_data:
             stats_data['User Count'] = user_count_data['user_count']
         

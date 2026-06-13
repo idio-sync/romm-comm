@@ -468,9 +468,13 @@ class RecentRomsMonitor(commands.Cog):
         
         channel = self.bot.get_channel(self.recent_roms_channel_id)
         if not channel:
-            logger.error(f"Recent ROMs channel {self.recent_roms_channel_id} not found")
-            return
-        
+            # get_channel only checks the local cache; fall back to an API fetch
+            try:
+                channel = await self.bot.fetch_channel(self.recent_roms_channel_id)
+            except Exception as e:
+                logger.error(f"Recent ROMs channel {self.recent_roms_channel_id} not found: {e}")
+                return
+
         try:
             batch_id = datetime.now(timezone.utc).isoformat()
             
@@ -1280,7 +1284,7 @@ class RecentRomsMonitor(commands.Cog):
         default=1
     )
     @is_admin()
-    async def refresh_recent(self, ctx: discord.ApplicationContext, count: int = 5):
+    async def refresh_recent(self, ctx: discord.ApplicationContext, count: int = 1):
         """Refresh recent ROM notifications with updated metadata"""
         if not self.enabled:
             await ctx.respond("Recent ROMs monitoring is disabled.", ephemeral=True)
@@ -1298,8 +1302,12 @@ class RecentRomsMonitor(commands.Cog):
             
             channel = self.bot.get_channel(self.recent_roms_channel_id)
             if not channel:
-                await ctx.followup.send("Recent ROMs channel not found.", ephemeral=True)
-                return
+                # get_channel only checks the local cache; fall back to an API fetch
+                try:
+                    channel = await self.bot.fetch_channel(self.recent_roms_channel_id)
+                except Exception:
+                    await ctx.followup.send("Recent ROMs channel not found.", ephemeral=True)
+                    return
             
             refreshed = 0
             failed = 0

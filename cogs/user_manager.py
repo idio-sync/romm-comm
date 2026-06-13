@@ -1104,8 +1104,10 @@ class UserManager(commands.Cog):
         if not username:
             return f"user_{str(hash(display_name))[-8:]}"
             
-        # Check if username exists and make unique if needed
-        users = await self.bot.fetch_api_endpoint('users')
+        # Check if username exists and make unique if needed.
+        # bypass_cache so two near-simultaneous onboards don't both read a stale
+        # user list and compute the same "unique" username.
+        users = await self.bot.fetch_api_endpoint('users', bypass_cache=True)
         if users:
             existing_usernames = [user.get('username', '') for user in users]
             original_username = username

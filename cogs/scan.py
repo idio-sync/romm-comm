@@ -612,8 +612,11 @@ class Scan(commands.Cog):
             await ctx.respond("🛑 Stop request sent for externally initiated scan")
         else:
             await ctx.respond("🛑 Scan stop request has been sent")
-        
+
         self._reset_scan_state()
+        # Also clear the shared bot.scan_state so /scan status doesn't report a
+        # phantom "in progress" scan after a stop (local reset alone left it set).
+        await self._clear_shared_scan_state()
 
     async def _scan_status(self, ctx: discord.ApplicationContext):
         """Detect if a scan is running and show its status"""

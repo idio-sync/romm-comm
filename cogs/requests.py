@@ -1613,13 +1613,14 @@ class ExistingGameWithIGDBView(discord.ui.View):
         super().__init__(timeout=180)
         self.bot = bot
         self.existing_matches = existing_matches
+        self.igdb_matches = igdb_matches
         self.platform_name = platform_name
         self.game_name = game_name
         self.author_id = author_id
         self.selected_rom = None
         self.selected_igdb = None
         self.message = None
-        
+
         # Filter IGDB matches to remove games that already exist
         self.filtered_igdb_matches = self._filter_igdb_matches(existing_matches, igdb_matches)
         
@@ -3079,12 +3080,14 @@ class Request(commands.Cog):
                     
                     ggr_status = ggr_request.get('status')
                     
-                    # Map ggrequestz status to Discord status
+                    # Map ggrequestz status to Discord status.
+                    # Local canonical statuses are: pending, fulfilled, reject, cancelled.
+                    # 'approved' has no local equivalent, so it is intentionally omitted
+                    # (status_mapping.get returns None -> no local update).
                     status_mapping = {
                         'pending': 'pending',
-                        'approved': 'approved',
                         'fulfilled': 'fulfilled',
-                        'rejected': 'rejected',
+                        'rejected': 'reject',
                         'cancelled': 'cancelled'
                     }
                     
