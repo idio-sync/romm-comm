@@ -258,6 +258,12 @@ class Config:
         elif explicit_user and not explicit_pass and legacy_pass:
             self.PASS = legacy_pass
             logger.warning("PASS is deprecated for RomM credentials; use ROMM_PASS instead")
+
+        # RomM client API token (preferred over USER/PASS when set).
+        # Create one in the RomM web UI (user profile -> API tokens) or via
+        # POST /api/client-tokens. Sent as `Authorization: Bearer <token>`.
+        self.ROMM_CLIENT_TOKEN = os.getenv('ROMM_CLIENT_TOKEN')
+
         self.REQUESTS_ENABLED = self.parse_bool(os.getenv('REQUESTS_ENABLED', 'true'), True)
 
         # Cog-specific config (centralized here to avoid scattered os.getenv calls)
@@ -280,9 +286,12 @@ class Config:
             'TOKEN': self.TOKEN,
             'GUILD': self.GUILD_ID,
             'API_URL': self.API_BASE_URL,
-            'ROMM_USER': self.USER,
-            'ROMM_PASS': self.PASS,
         }
+        # RomM API auth: a client token replaces username/password.
+        # When no client token is set, fall back to requiring ROMM_USER/ROMM_PASS.
+        if not self.ROMM_CLIENT_TOKEN:
+            required['ROMM_USER'] = self.USER
+            required['ROMM_PASS'] = self.PASS
         missing = [k for k, v in required.items() if not v]
         
         if missing:

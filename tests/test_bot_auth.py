@@ -150,3 +150,39 @@ class ConfigCredentialTests(unittest.TestCase):
         self.assertEqual("legacy-user", config.USER)
         self.assertEqual("legacy-password", config.PASS)
         self.assertIn("USER/PASS are deprecated", "\n".join(logs.output))
+
+    def test_client_token_alone_satisfies_validation(self):
+        bot_module = importlib.import_module("bot")
+
+        with patch.dict(
+            os.environ,
+            {
+                "TOKEN": "discord-token",
+                "GUILD": "123",
+                "API_URL": "https://romm.example",
+                "ROMM_CLIENT_TOKEN": "rmm_clienttoken",
+            },
+            clear=True,
+        ):
+            config = bot_module.Config()
+
+        self.assertEqual("rmm_clienttoken", config.ROMM_CLIENT_TOKEN)
+        self.assertIsNone(config.USER)
+        self.assertIsNone(config.PASS)
+
+    def test_missing_all_romm_credentials_raises(self):
+        bot_module = importlib.import_module("bot")
+
+        with patch.dict(
+            os.environ,
+            {
+                "TOKEN": "discord-token",
+                "GUILD": "123",
+                "API_URL": "https://romm.example",
+            },
+            clear=True,
+        ):
+            with self.assertRaises(ValueError) as exc:
+                bot_module.Config()
+
+        self.assertIn("ROMM_USER", str(exc.exception))
