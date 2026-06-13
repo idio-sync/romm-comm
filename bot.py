@@ -103,14 +103,20 @@ class SocketIOManager:
                     logger.debug(f"SocketIO Manager connecting (attempt {attempt + 1}/{max_retries})...")
                     
                     base_url = self.config.API_BASE_URL.rstrip('/')
-                    auth_string = f"{self.config.USER}:{self.config.PASS}"
-                    auth_bytes = auth_string.encode('ascii')
-                    base64_auth = base64.b64encode(auth_bytes).decode('ascii')
-                    
-                    headers = {
-                        'Authorization': f'Basic {base64_auth}',
-                        'User-Agent': 'RommBot/1.0'
-                    }
+                    if self.config.ROMM_CLIENT_TOKEN:
+                        # Client API tokens authenticate via Bearer, same as the HTTP API.
+                        headers = {
+                            'Authorization': f'Bearer {self.config.ROMM_CLIENT_TOKEN}',
+                            'User-Agent': 'RommBot/1.0'
+                        }
+                    else:
+                        auth_string = f"{self.config.USER}:{self.config.PASS}"
+                        auth_bytes = auth_string.encode('ascii')
+                        base64_auth = base64.b64encode(auth_bytes).decode('ascii')
+                        headers = {
+                            'Authorization': f'Basic {base64_auth}',
+                            'User-Agent': 'RommBot/1.0'
+                        }
                     
                     await self.sio.connect(
                         base_url,
@@ -258,6 +264,12 @@ class Config:
         elif explicit_user and not explicit_pass and legacy_pass:
             self.PASS = legacy_pass
             logger.warning("PASS is deprecated for RomM credentials; use ROMM_PASS instead")
+
+        # RomM client API token (preferred over USER/PASS when set).
+        # Create one in the RomM web UI (user profile -> API tokens) or via
+        # POST /api/client-tokens. Sent as `Authorization: Bearer <token>`.
+        self.ROMM_CLIENT_TOKEN = os.getenv('ROMM_CLIENT_TOKEN') or None
+
         self.REQUESTS_ENABLED = self.parse_bool(os.getenv('REQUESTS_ENABLED', 'true'), True)
 
         # Cog-specific config (centralized here to avoid scattered os.getenv calls)
@@ -280,9 +292,12 @@ class Config:
             'TOKEN': self.TOKEN,
             'GUILD': self.GUILD_ID,
             'API_URL': self.API_BASE_URL,
-            'ROMM_USER': self.USER,
-            'ROMM_PASS': self.PASS,
         }
+        # RomM API auth: a client token replaces username/password.
+        # When no client token is set, fall back to requiring ROMM_USER/ROMM_PASS.
+        if not self.ROMM_CLIENT_TOKEN:
+            required['ROMM_USER'] = self.USER
+            required['ROMM_PASS'] = self.PASS
         missing = [k for k, v in required.items() if not v]
         
         if missing:
@@ -448,6 +463,10 @@ class RommBot(discord.Bot):
     async def ensure_valid_token(self) -> bool:
         """Ensure we have a valid OAuth token, refreshing if necessary."""
         async with self.token_lock:
+            # Client API token is a static credential: no OAuth grant or refresh needed.
+            if self.config.ROMM_CLIENT_TOKEN:
+                self.access_token = self.config.ROMM_CLIENT_TOKEN
+                return True
             # Check if token is expired or missing
             if not self.access_token or time.time() >= self.token_expiry:
                 logger.debug("Token expired or missing, refreshing...")
@@ -560,6 +579,13 @@ class RommBot(discord.Bot):
                         return None
 
                 if response.status == 401:
+                    # A client API token can't be refreshed; a 401 means it is invalid/revoked.
+                    if self.config.ROMM_CLIENT_TOKEN:
+                        logger.error(
+                            "Got 401 using ROMM_CLIENT_TOKEN - the client token may be "
+                            "invalid, expired, or revoked. Verify it in RomM."
+                        )
+                        return None
                     logger.debug("Got 401, attempting to refresh token")
                     if await self.refresh_oauth_token():
                         headers["Authorization"] = f"Bearer {self.access_token}"
@@ -733,10 +759,10 @@ class RommBot(discord.Bot):
             
             # Initialize OAuth tokens AFTER database
             logger.debug("Initializing OAuth tokens...")
-            if not await self.get_oauth_token():
-                logger.warning("Failed to obtain OAuth tokens, some features may not work")
+            if not await self.ensure_valid_token():
+                logger.warning("Failed to obtain RomM API token, some features may not work")
             else:
-                logger.info("✅ OAuth tokens initialized successfully")
+                logger.info("✅ RomM API token initialized successfully")
                                        
         except Exception as e:
             logger.error("=" * 50)
@@ -921,6 +947,9 @@ class RommBot(discord.Bot):
     @tasks.loop(minutes=10)
     async def refresh_token_task(self):
         """Periodically refresh the OAuth token to keep it valid."""
+        # Client API tokens are static and never need refreshing.
+        if self.config.ROMM_CLIENT_TOKEN:
+            return
         if self.access_token:
             await self.ensure_valid_token()
 

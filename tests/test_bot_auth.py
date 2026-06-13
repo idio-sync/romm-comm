@@ -1,5 +1,7 @@
+import asyncio
 import importlib
 import os
+import types
 import unittest
 from unittest.mock import patch
 
@@ -39,6 +41,7 @@ class FakeSession:
 
 class FakeConfig:
     API_BASE_URL = "https://romm.example"
+    ROMM_CLIENT_TOKEN = None
 
 
 class FakeBot:
@@ -87,6 +90,39 @@ class BotAuthTests(unittest.IsolatedAsyncioTestCase):
             ["Bearer expired-token", "Bearer fresh-token"],
             fake_bot.session.auth_headers,
         )
+
+    async def test_authenticated_request_does_not_refresh_client_token_on_401(self):
+        bot_module = importlib.import_module("bot")
+        fake_bot = FakeBot()
+        fake_bot.config.ROMM_CLIENT_TOKEN = "rmm_clienttoken"
+        fake_bot.session = FakeSession([FakeResponse(401)])
+
+        with self.assertLogs("romm_bot", level="ERROR"):
+            result = await bot_module.RommBot.make_authenticated_request(
+                fake_bot,
+                "GET",
+                "roms",
+            )
+
+        self.assertIsNone(result)
+        self.assertEqual(0, fake_bot.refresh_calls)
+
+    async def test_ensure_valid_token_uses_client_token_without_oauth(self):
+        bot_module = importlib.import_module("bot")
+
+        class ClientTokenConfig:
+            ROMM_CLIENT_TOKEN = "rmm_clienttoken"
+
+        fake = types.SimpleNamespace(
+            config=ClientTokenConfig(),
+            access_token=None,
+            token_lock=asyncio.Lock(),
+        )
+
+        result = await bot_module.RommBot.ensure_valid_token(fake)
+
+        self.assertTrue(result)
+        self.assertEqual("rmm_clienttoken", fake.access_token)
 
 
 class ConfigCredentialTests(unittest.TestCase):
@@ -150,3 +186,40 @@ class ConfigCredentialTests(unittest.TestCase):
         self.assertEqual("legacy-user", config.USER)
         self.assertEqual("legacy-password", config.PASS)
         self.assertIn("USER/PASS are deprecated", "\n".join(logs.output))
+
+    def test_client_token_alone_satisfies_validation(self):
+        bot_module = importlib.import_module("bot")
+
+        with patch.dict(
+            os.environ,
+            {
+                "TOKEN": "discord-token",
+                "GUILD": "123",
+                "API_URL": "https://romm.example",
+                "ROMM_CLIENT_TOKEN": "rmm_clienttoken",
+            },
+            clear=True,
+        ):
+            config = bot_module.Config()
+
+        self.assertEqual("rmm_clienttoken", config.ROMM_CLIENT_TOKEN)
+        self.assertIsNone(config.USER)
+        self.assertIsNone(config.PASS)
+
+    def test_missing_all_romm_credentials_raises(self):
+        bot_module = importlib.import_module("bot")
+
+        with patch.dict(
+            os.environ,
+            {
+                "TOKEN": "discord-token",
+                "GUILD": "123",
+                "API_URL": "https://romm.example",
+            },
+            clear=True,
+        ):
+            with self.assertRaises(ValueError) as exc:
+                bot_module.Config()
+
+        self.assertIn("ROMM_USER", str(exc.exception))
+        self.assertIn("ROMM_PASS", str(exc.exception))
