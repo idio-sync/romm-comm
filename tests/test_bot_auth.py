@@ -41,6 +41,7 @@ class FakeSession:
 
 class FakeConfig:
     API_BASE_URL = "https://romm.example"
+    ROMM_CLIENT_TOKEN = None
 
 
 class FakeBot:
@@ -89,6 +90,22 @@ class BotAuthTests(unittest.IsolatedAsyncioTestCase):
             ["Bearer expired-token", "Bearer fresh-token"],
             fake_bot.session.auth_headers,
         )
+
+    async def test_authenticated_request_does_not_refresh_client_token_on_401(self):
+        bot_module = importlib.import_module("bot")
+        fake_bot = FakeBot()
+        fake_bot.config.ROMM_CLIENT_TOKEN = "rmm_clienttoken"
+        fake_bot.session = FakeSession([FakeResponse(401)])
+
+        with self.assertLogs("romm_bot", level="ERROR"):
+            result = await bot_module.RommBot.make_authenticated_request(
+                fake_bot,
+                "GET",
+                "roms",
+            )
+
+        self.assertIsNone(result)
+        self.assertEqual(0, fake_bot.refresh_calls)
 
     async def test_ensure_valid_token_uses_client_token_without_oauth(self):
         bot_module = importlib.import_module("bot")

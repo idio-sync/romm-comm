@@ -573,6 +573,13 @@ class RommBot(discord.Bot):
                         return None
 
                 if response.status == 401:
+                    # A client API token can't be refreshed; a 401 means it is invalid/revoked.
+                    if self.config.ROMM_CLIENT_TOKEN:
+                        logger.error(
+                            "Got 401 using ROMM_CLIENT_TOKEN - the client token may be "
+                            "invalid, expired, or revoked. Verify it in RomM."
+                        )
+                        return None
                     logger.debug("Got 401, attempting to refresh token")
                     if await self.refresh_oauth_token():
                         headers["Authorization"] = f"Bearer {self.access_token}"
@@ -934,6 +941,9 @@ class RommBot(discord.Bot):
     @tasks.loop(minutes=10)
     async def refresh_token_task(self):
         """Periodically refresh the OAuth token to keep it valid."""
+        # Client API tokens are static and never need refreshing.
+        if self.config.ROMM_CLIENT_TOKEN:
+            return
         if self.access_token:
             await self.ensure_valid_token()
 
