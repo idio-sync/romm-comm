@@ -262,7 +262,7 @@ class Config:
         # RomM client API token (preferred over USER/PASS when set).
         # Create one in the RomM web UI (user profile -> API tokens) or via
         # POST /api/client-tokens. Sent as `Authorization: Bearer <token>`.
-        self.ROMM_CLIENT_TOKEN = os.getenv('ROMM_CLIENT_TOKEN')
+        self.ROMM_CLIENT_TOKEN = os.getenv('ROMM_CLIENT_TOKEN') or None
 
         self.REQUESTS_ENABLED = self.parse_bool(os.getenv('REQUESTS_ENABLED', 'true'), True)
 

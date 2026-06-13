@@ -186,3 +186,4 @@ class ConfigCredentialTests(unittest.TestCase):
                 bot_module.Config()
 
         self.assertIn("ROMM_USER", str(exc.exception))
+        self.assertIn("ROMM_PASS", str(exc.exception))
