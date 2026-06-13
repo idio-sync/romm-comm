@@ -128,6 +128,22 @@ class ScanStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("complete", bot.scan_state["scan_type"])
         self.assertEqual("🔍 Started full system scan", ctx.responses[0][0][0])
 
+    async def test_start_scan_is_blocked_when_already_scanning(self):
+        bot = FakeBot(connect_result=True)
+        scan = Scan(bot)
+        scan.is_scanning = True
+        ctx = FakeContext()
+
+        result = await scan._start_discord_scan(
+            ctx, scan_type="complete", options={}, progress={},
+            response_message="should not send",
+        )
+
+        self.assertFalse(result)
+        self.assertEqual(0, bot.socketio_manager.connect_calls)
+        self.assertEqual([], bot.sio.emitted)
+        self.assertIn("already in progress", ctx.responses[0][0][0])
+
 
 class ScanListenerTests(unittest.IsolatedAsyncioTestCase):
     async def test_scan_done_listener_posts_summary_and_stores_stats(self):

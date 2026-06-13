@@ -57,17 +57,6 @@ class Scan(commands.Cog):
         logging.getLogger('socketio').setLevel(logging.WARNING)
         logging.getLogger('engineio').setLevel(logging.WARNING)
 
-    async def cog_before_invoke(self, ctx: discord.ApplicationContext) -> bool:
-        """Checks that should run before any command in this cog."""
-        # Get the subcommand from the options
-        current_command = ctx.interaction.data.get('options', [{}])[0].get('value', '').lower()
-        
-        # Allow status, detect, stop, and summary commands even during scanning
-        if self.is_scanning and current_command not in ['status', 'stop', 'detect', 'summary']:
-            await ctx.respond("❌ A scan is already in progress. Use `/scan status` to check progress or `/scan stop` to stop it.")
-            return False
-        return True
-
     @commands.Cog.listener('on_romm_connect')
     async def on_romm_connect(self):
         logger.info("Connected to websocket server")
@@ -374,6 +363,12 @@ class Scan(commands.Cog):
         response_message: str
     ) -> bool:
         """Connect, emit a scan command, then mark scan state after the emit succeeds."""
+        if self.is_scanning:
+            await ctx.respond(
+                "❌ A scan is already in progress. Use `/scan status` to check progress "
+                "or `/scan stop` to stop it."
+            )
+            return False
         connected = await self.bot.socketio_manager.connect()
         if not connected:
             await self._clear_shared_scan_state()
