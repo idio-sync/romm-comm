@@ -73,8 +73,9 @@ class RateLimit:
 class SocketIOManager:
     """Shared Socket.IO connection manager for all cogs"""
     
-    def __init__(self, config):
-        self.config = config
+    def __init__(self, bot):
+        self.bot = bot
+        self.config = bot.config
         self.sio = socketio.AsyncClient(
             logger=False,
             engineio_logger=False,
@@ -88,7 +89,45 @@ class SocketIOManager:
         self._connection_errors = 0
         self._last_successful_connect = time.time()
         self._health_monitor_task = None
-        
+        self._register_event_handlers()
+
+    def _register_event_handlers(self):
+        """Register the one-and-only set of Socket.IO handlers and re-broadcast
+        each as a bot event. Cogs subscribe via @commands.Cog.listener instead of
+        competing for the single-handler-per-event socket client."""
+        self.sio.on('connect', self._on_sio_connect)
+        self.sio.on('disconnect', self._on_sio_disconnect)
+        self.sio.on('connect_error', self._on_sio_connect_error)
+        self.sio.on('scan:scanning_platform', self._on_sio_scan_platform)
+        self.sio.on('scan:scanning_rom', self._on_sio_scan_rom)
+        self.sio.on('scan:done', self._on_sio_scan_done)
+        self.sio.on('scan:done_ko', self._on_sio_scan_error)
+
+    async def _on_sio_connect(self):
+        logger.debug("Socket.IO connect event; broadcasting romm_connect")
+        self.bot.dispatch('romm_connect')
+
+    async def _on_sio_disconnect(self, *args):
+        logger.debug("Socket.IO disconnect event; broadcasting romm_disconnect")
+        self.bot.dispatch('romm_disconnect')
+
+    async def _on_sio_connect_error(self, *args):
+        data = args[0] if args else None
+        logger.error(f"Socket.IO connect error: {data}")
+        self.bot.dispatch('romm_connect_error', data)
+
+    async def _on_sio_scan_platform(self, data=None):
+        self.bot.dispatch('romm_scan_platform', data)
+
+    async def _on_sio_scan_rom(self, data=None):
+        self.bot.dispatch('romm_scan_rom', data)
+
+    async def _on_sio_scan_done(self, stats=None):
+        self.bot.dispatch('romm_scan_done', stats)
+
+    async def _on_sio_scan_error(self, error_message=None):
+        self.bot.dispatch('romm_scan_error', error_message)
+
     async def connect(self):
         """Connect to RomM Socket.IO server"""
         async with self._connection_lock:
@@ -742,7 +781,7 @@ class RommBot(discord.Bot):
             logger.debug("About to initialize SocketIO manager...")
             
             try:
-                self.socketio_manager = SocketIOManager(self.config)
+                self.socketio_manager = SocketIOManager(self)
                 logger.debug(f"SocketIOManager created successfully")
                 
                 logger.debug("Attempting to connect to SocketIO...")

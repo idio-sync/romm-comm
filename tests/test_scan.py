@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from datetime import datetime
 
 from cogs.scan import Scan
 
@@ -57,16 +58,30 @@ class FakeBot:
         self.sio = FakeSIO(self)
         self.socketio_manager = FakeSocketIOManager(self.sio, connect_result)
         self.emoji_dict = {}
+        self.dispatched = []
+
+    def dispatch(self, event, *args):
+        self.dispatched.append((event, args))
 
 
 class FakeChannel:
     id = 1234
+
+    def __init__(self):
+        self.sent = []
+
+    async def send(self, *args, **kwargs):
+        self.sent.append((args, kwargs))
 
 
 class FakeContext:
     def __init__(self):
         self.channel = FakeChannel()
         self.responses = []
+        self.deferred = False
+
+    async def defer(self, *args, **kwargs):
+        self.deferred = True
 
     async def respond(self, *args, **kwargs):
         self.responses.append((args, kwargs))
@@ -112,3 +127,81 @@ class ScanStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(bot.scan_state["is_scanning"])
         self.assertEqual("complete", bot.scan_state["scan_type"])
         self.assertEqual("🔍 Started full system scan", ctx.responses[0][0][0])
+
+    async def test_start_scan_is_blocked_when_already_scanning(self):
+        bot = FakeBot(connect_result=True)
+        scan = Scan(bot)
+        scan.is_scanning = True
+        ctx = FakeContext()
+
+        result = await scan._start_discord_scan(
+            ctx, scan_type="complete", options={}, progress={},
+            response_message="should not send",
+        )
+
+        self.assertFalse(result)
+        self.assertEqual(0, bot.socketio_manager.connect_calls)
+        self.assertEqual([], bot.sio.emitted)
+        self.assertIn("already in progress", ctx.responses[0][0][0])
+
+
+class ScanListenerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_scan_done_listener_posts_summary_and_stores_stats(self):
+        bot = FakeBot()
+        scan = Scan(bot)
+        channel = FakeChannel()
+        scan.last_channel = channel
+        scan.external_scan = False
+        scan.is_scanning = True
+        scan.scan_start_time = datetime.now()
+        scan.scan_progress = {"total_roms": 3}
+
+        await scan.on_romm_scan_done({"scanned_roms": 3, "added_roms": 1})
+
+        self.assertEqual(scan.last_scan_stats["scanned_roms"], 3)
+        self.assertTrue(channel.sent)
+        self.assertFalse(scan.is_scanning)
+
+    async def test_scan_done_listener_does_not_dispatch_batch_complete(self):
+        bot = FakeBot()
+        scan = Scan(bot)
+        scan.last_channel = None
+        scan.is_scanning = True
+        scan.scan_start_time = datetime.now()
+        scan.scan_progress = {"total_roms": 1}
+        scan.new_games = [{"id": 7, "platform": "SNES", "name": "X"}]
+
+        await scan.on_romm_scan_done({"scanned_roms": 1})
+
+        self.assertEqual([], [e for e, _ in bot.dispatched if e == "batch_scan_complete"])
+
+    async def test_scan_rom_listener_tracks_new_games(self):
+        bot = FakeBot()
+        scan = Scan(bot)
+        scan.is_scanning = True
+        scan.external_scan = False
+        scan._first_event_received = True
+        scan.scan_progress = {"current_platform": "SNES", "total_roms": 0,
+                              "scanned_roms": 0, "platform_roms": 0}
+        scan.new_games = []
+
+        await scan.on_romm_scan_rom({"name": "Chrono Trigger", "is_new": True,
+                                     "file_name": "ct.sfc"})
+
+        self.assertEqual(1, len(scan.new_games))
+        self.assertEqual("Chrono Trigger", scan.new_games[0]["name"])
+
+    def test_scan_cog_no_longer_owns_socket_handlers(self):
+        self.assertFalse(hasattr(Scan, "setup_socket_handlers"))
+
+
+class ScanDeferTests(unittest.IsolatedAsyncioTestCase):
+    async def test_scan_command_defers_before_dispatching(self):
+        bot = FakeBot(connect_result=True)
+        scan = Scan(bot)
+        ctx = FakeContext()
+
+        # Call the raw callback (bypasses the @is_admin check) with a no-network subcommand
+        await Scan.scan.callback(scan, ctx, command="summary", platform=None)
+
+        self.assertTrue(ctx.deferred)

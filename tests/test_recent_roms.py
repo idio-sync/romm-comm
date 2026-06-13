@@ -31,8 +31,8 @@ class FakeBot:
     def get_cog(self, name):
         return None
 
-    def dispatch(self, name, payload):
-        self.dispatched.append((name, payload))
+    def dispatch(self, name, *args):
+        self.dispatched.append((name, args))
 
 
 def build_monitor(events, detailed_roms):
@@ -97,3 +97,35 @@ class RecentRomsPostingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(["fetch", "enrich", "embed", "send", "mark", "update"], events)
         self.assertIn("Posted 1 new ROM(s)", "\n".join(logs.output))
+
+
+class RecentRomsListenerTests(unittest.IsolatedAsyncioTestCase):
+    def test_monitor_no_longer_owns_socket_handlers(self):
+        self.assertFalse(hasattr(RecentRomsMonitor, "setup_socket_handlers"))
+
+    async def test_scan_rom_listener_queues_rom(self):
+        monitor = object.__new__(RecentRomsMonitor)
+        monitor.bot = FakeBot(FakeChannel([]))
+        # FakeBot.__init__ provides scan_state_lock (required by the handler body).
+        monitor.bot.scan_state = {"is_scanning": True}
+        monitor.scan_lock = asyncio.Lock()
+        monitor.processing_lock = asyncio.Lock()
+        monitor.current_scan_roms = []
+        monitor.current_scan_names = set()
+        monitor.currently_processing = set()
+        monitor.recently_processed = set()
+        monitor.scan_completion_timer = None
+
+        async def has_been_posted(rom_id):
+            return False
+
+        monitor.has_been_posted = has_been_posted
+
+        await monitor.on_romm_scan_rom({"id": 42, "name": "Earthbound",
+                                        "platform_name": "SNES"})
+
+        self.assertEqual(1, len(monitor.current_scan_roms))
+        self.assertEqual(42, monitor.current_scan_roms[0]["id"])
+        # Cancel the inactivity timer the handler started so the test loop is clean
+        if monitor.scan_completion_timer:
+            monitor.scan_completion_timer.cancel()
