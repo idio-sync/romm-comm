@@ -193,3 +193,15 @@ class ScanListenerTests(unittest.IsolatedAsyncioTestCase):
 
     def test_scan_cog_no_longer_owns_socket_handlers(self):
         self.assertFalse(hasattr(Scan, "setup_socket_handlers"))
+
+
+class ScanDeferTests(unittest.IsolatedAsyncioTestCase):
+    async def test_scan_command_defers_before_dispatching(self):
+        bot = FakeBot(connect_result=True)
+        scan = Scan(bot)
+        ctx = FakeContext()
+
+        # Call the raw callback (bypasses the @is_admin check) with a no-network subcommand
+        await Scan.scan.callback(scan, ctx, command="summary", platform=None)
+
+        self.assertTrue(ctx.deferred)

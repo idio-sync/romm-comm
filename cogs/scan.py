@@ -466,6 +466,7 @@ class Scan(commands.Cog):
         )
     ):
         """Scan ROMs and fetch metadata from various sources"""
+        await ctx.defer()
         command = command.lower()
         
         if command == "platform":
