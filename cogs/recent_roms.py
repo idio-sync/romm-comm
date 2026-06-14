@@ -1331,12 +1331,23 @@ class RecentRomsMonitor(commands.Cog):
                     if not updated_roms:
                         skipped += 1
                         continue
-                    
+
+                    # A partial refetch must not rebuild the post: doing so would drop
+                    # the missing games from a batch and orphan their message_id rows
+                    # (leaving the batch unrefreshable). Leave it intact and skip.
+                    if len(updated_roms) != len(rom_data):
+                        logger.warning(
+                            f"Refresh skipped for batch {notification['batch_id']}: "
+                            f"only {len(updated_roms)}/{len(rom_data)} ROM(s) refetched"
+                        )
+                        skipped += 1
+                        continue
+
                     # Enrich with platform names
                     await self.enrich_roms_with_platform_names(updated_roms)
-                    
-                    # Recreate embed(s)
-                    if len(updated_roms) == 1:
+
+                    # Recreate embed(s) — shape follows the original batch size
+                    if len(rom_data) == 1:
                         # Single ROM
                         embed, cover_file = await self.create_single_rom_embed(updated_roms[0])
                         
@@ -1346,7 +1357,10 @@ class RecentRomsMonitor(commands.Cog):
                                 new_message = await channel.send(embed=embed, file=cover_file)
                                 await message.delete()
                                 # Update message ID in database
-                                await self.update_message_ids(updated_roms, new_message.id, notification['batch_id'])
+                                # Update message_id for the ENTIRE batch, not just the
+                                # refetched subset, so no rom_id is left pointing at the
+                                # now-deleted message.
+                                await self.update_message_ids(rom_data, new_message.id, notification['batch_id'])
                             else:
                                 # Just update embed
                                 await message.edit(embed=embed)
@@ -1364,7 +1378,10 @@ class RecentRomsMonitor(commands.Cog):
                                 new_message = await channel.send(embed=embed, file=composite_file)
                                 await message.delete()
                                 # Update message ID in database
-                                await self.update_message_ids(updated_roms, new_message.id, notification['batch_id'])
+                                # Update message_id for the ENTIRE batch, not just the
+                                # refetched subset, so no rom_id is left pointing at the
+                                # now-deleted message.
+                                await self.update_message_ids(rom_data, new_message.id, notification['batch_id'])
                             else:
                                 # Just update embed
                                 await message.edit(embed=embed)
