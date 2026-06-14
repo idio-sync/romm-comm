@@ -1692,7 +1692,9 @@ class Search(commands.Cog):
             field_count = 0
 
             for firmware in firmware_data:
-                file_name = firmware.get('file_name', 'unknown_file').replace(' ', '%20')
+                # Use the same path-segment encoder as ROM downloads so filenames
+                # with #, &, +, or unicode produce valid URLs (not just spaces).
+                file_name = encode_rom_download_filename(firmware.get('file_name', 'unknown_file'))
                 download_url = f"{self.bot.config.DOMAIN}/api/firmware/{firmware.get('id')}/content/{file_name}"
 
                 field_value = (
@@ -2015,7 +2017,10 @@ class Search(commands.Cog):
             # Sort results
             def sort_roms(rom):
                 game_name = rom['name'].lower()
-                filename = rom.get('file_name', '').upper()
+                # ROM dicts expose the filesystem name as 'fs_name' (there is no
+                # top-level 'file_name'), so the region-priority checks below were
+                # always running against an empty string and doing nothing.
+                filename = rom.get('fs_name', '').upper()
 
                 if game_name.startswith("the "):
                     game_name = game_name[4:]

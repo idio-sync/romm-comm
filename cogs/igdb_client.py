@@ -28,7 +28,11 @@ class IGDBClient:
     async def ensure_session(self) -> aiohttp.ClientSession:
         """Ensure an active session exists and return it."""
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            # Bound every IGDB/Twitch request so a hung connection can't leave a
+            # deferred /igdb interaction stuck "thinking" forever.
+            self._session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=15)
+            )
         return self._session
 
     async def get_access_token(self) -> bool:
