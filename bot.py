@@ -820,7 +820,8 @@ class RommBot(discord.Bot):
             'cogs.scan', 
             'cogs.requests',
             'cogs.user_manager',
-            'cogs.recent_roms'
+            'cogs.recent_roms',
+            'cogs.achievements'
         ]
         
         # Dependencies for each cog
@@ -832,7 +833,8 @@ class RommBot(discord.Bot):
             'cogs.scan': ['socketio'],
             'cogs.requests': ['aiosqlite'],
             'cogs.user_manager': ['aiohttp','aiosqlite'],
-            'cogs.recent_roms': ['aiosqlite']
+            'cogs.recent_roms': ['aiosqlite'],
+            'cogs.achievements': []
         }
 
         for cog in core_cogs:

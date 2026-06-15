@@ -1,6 +1,11 @@
 import logging
+import discord
+from discord.ext import commands
 
 logger = logging.getLogger(__name__)
+
+RA_LOGO_URL = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png"
+TOP_N = 10
 
 # RA award tiers that count as "mastered" for the leaderboard (case-insensitive).
 # RA's real tiers include beaten-softcore / beaten-hardcore / completed / mastered;
@@ -87,3 +92,80 @@ def compute_game_leaderboard(users, links, rom_ra_id, bot_username=None):
         })
     rows.sort(key=lambda r: (-r["earned"], -r["hardcore"], r["name"].lower()))
     return rows
+
+
+class RetroAchievements(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+        self.db_manager = bot.db
+
+    async def _build_links_map(self, ctx):
+        """Return {romm_id: discord_display_name} for all linked users.
+
+        Resolves the live guild member display name when possible, falling back to
+        the stored Discord username, then the RomM username.
+        """
+        links = {}
+        try:
+            for link in await self.db_manager.get_all_user_links():
+                romm_id = link.get("romm_id")
+                if romm_id is None:
+                    continue
+                name = None
+                member = ctx.guild.get_member(link["discord_id"]) if ctx.guild else None
+                if member:
+                    name = member.display_name
+                links[romm_id] = name or link.get("discord_username") or link.get("romm_username")
+        except Exception as e:
+            logger.error(f"Failed to build user-links map: {e}")
+        return links
+
+    def _format_global_line(self, rank, row):
+        marker = "🔗 " if row["is_linked"] else ""
+        return (f"**#{rank}** {marker}**{row['name']}** — "
+                f"{row['earned']:,} 🏆 · {row['hardcore']:,} hardcore · {row['mastered']} mastered")
+
+    def _build_global_embed(self, rows):
+        embed = discord.Embed(
+            title="🏆 RetroAchievements Leaderboard",
+            description="Ranked by total achievements earned",
+            color=discord.Color.gold(),
+        )
+        lines = [self._format_global_line(i + 1, r) for i, r in enumerate(rows[:TOP_N])]
+        embed.add_field(name="​", value="\n".join(lines), inline=False)
+        embed.set_thumbnail(url=RA_LOGO_URL)
+        embed.set_footer(text=f"Top {min(TOP_N, len(rows))} of {len(rows)} players with RA progress · 🔗 = linked Discord member")
+        return embed
+
+    @discord.slash_command(
+        name="ra-leaderboard",
+        description="RetroAchievements leaderboard (global, or per-game if you name a game)",
+    )
+    async def ra_leaderboard(self, ctx: discord.ApplicationContext,
+                             game: discord.Option(str, "Game name for a per-game board", required=False, default=None) = None):
+        await ctx.defer()
+        users = await self.bot.fetch_api_endpoint('users')
+        if users is None:
+            await ctx.respond("❌ Can't read RomM users right now — check RomM connectivity and make sure the bot's token includes the `users.read` scope.")
+            return
+
+        bot_username = getattr(self.bot.config, "USER", None)
+        links = await self._build_links_map(ctx)
+
+        if game:
+            await self._respond_game_leaderboard(ctx, users, links, bot_username, game)
+            return
+
+        rows = compute_global_leaderboard(users, links, bot_username=bot_username)
+        if not rows:
+            await ctx.respond("No RetroAchievements progress is tracked yet.")
+            return
+        await ctx.respond(embed=self._build_global_embed(rows))
+
+    async def _respond_game_leaderboard(self, ctx, users, links, bot_username, game):
+        # Implemented in Task 4.
+        await ctx.respond("Per-game leaderboard coming soon.")
+
+
+def setup(bot):
+    bot.add_cog(RetroAchievements(bot))
