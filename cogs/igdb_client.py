@@ -1,4 +1,5 @@
 from typing import List, Dict, Optional
+import asyncio
 import aiohttp
 import logging
 from datetime import datetime, timedelta
@@ -19,6 +20,7 @@ class IGDBClient:
         self.access_token = None
         self.token_expires = None
         self._session: Optional[aiohttp.ClientSession] = None
+        self._token_lock = asyncio.Lock()  # Serialize token refreshes (see get_access_token)
         self._platform_cache = {}  # Cache for platform slug to ID mapping
         
         if not all([self.client_id, self.client_secret]):
@@ -36,36 +38,45 @@ class IGDBClient:
         return self._session
 
     async def get_access_token(self) -> bool:
-        """Get or refresh Twitch OAuth token for IGDB access"""
-        try:
+        """Get or refresh the Twitch OAuth token for IGDB access."""
+        # Fast path: a still-valid token needs no lock.
+        if self.access_token and self.token_expires and datetime.now() < self.token_expires:
+            return True
+
+        # Serialize refreshes: without this, concurrent callers (the /igdb fan-out,
+        # request enrichment, etc.) each POST to Twitch, and Twitch invalidates the
+        # older client-credentials token — 401-ing any in-flight request still using it.
+        async with self._token_lock:
+            # Another coroutine may have refreshed while we waited for the lock.
             if self.access_token and self.token_expires and datetime.now() < self.token_expires:
                 return True
 
-            session = await self.ensure_session()
-            url = f"https://id.twitch.tv/oauth2/token"
-            params = {
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
-                "grant_type": "client_credentials"
-            }
+            try:
+                session = await self.ensure_session()
+                url = "https://id.twitch.tv/oauth2/token"
+                params = {
+                    "client_id": self.client_id,
+                    "client_secret": self.client_secret,
+                    "grant_type": "client_credentials"
+                }
 
-            async with session.post(url, params=params) as response:
-                if response.status == 200:
-                    try:
-                        data = await response.json()
-                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
-                        logger.error(f"Invalid JSON response from Twitch OAuth: {e}")
+                async with session.post(url, params=params) as response:
+                    if response.status == 200:
+                        try:
+                            data = await response.json()
+                        except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                            logger.error(f"Invalid JSON response from Twitch OAuth: {e}")
+                            return False
+                        self.access_token = data["access_token"]
+                        self.token_expires = datetime.now() + timedelta(seconds=data["expires_in"] - 100)
+                        return True
+                    else:
+                        logger.error(f"Failed to get IGDB token: {response.status}")
                         return False
-                    self.access_token = data["access_token"]
-                    self.token_expires = datetime.now() + timedelta(seconds=data["expires_in"] - 100)
-                    return True
-                else:
-                    logger.error(f"Failed to get IGDB token: {response.status}")
-                    return False
 
-        except Exception as e:
-            logger.error(f"Error getting IGDB token: {e}")
-            return False
+            except Exception as e:
+                logger.error(f"Error getting IGDB token: {e}")
+                return False
 
     async def get_platform_id_from_slug(self, platform_slug: str) -> Optional[int]:
         """Get IGDB platform ID from slug"""
