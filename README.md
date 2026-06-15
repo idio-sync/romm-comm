@@ -179,6 +179,7 @@ GGREQUESTZ_API_KEY=ggr_api_key
 - `/igdb [option]` — View list of games from IGDB: `upcoming`, `recent`, `popular`, or `exclusive`, generally or by platform with option to request.
 - `/user_manager` — Manage Romm and Discord users (linking, new account prompting, etc.) (admin only).
 - `/refresh_recent_metadata` — Refresh recently added game notifiction metadata/covers (admin only).
+- **`/ra-leaderboard [game]`** — RetroAchievements leaderboard. With no argument it ranks users across the server by total achievements earned (hardcore and games-mastered shown as columns); pass a game name for a per-game board. Discord-linked users show their server name with a 🔗 marker. Requires the bot's RomM token to have the `users.read` scope (already in the default `ROMM_CLIENT_TOKEN` scope list and the OAuth grant).
 
 ---
 
