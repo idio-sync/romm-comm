@@ -1,6 +1,6 @@
 # RetroAchievements Leaderboard — Design Spec
 
-**Date:** 2026-06-14
+**Date:** 2026-06-14 (rev. 2026-06-15 after spec review)
 **Status:** Approved (brainstorming) — ready for implementation plan
 **Feature area:** From the RomM API review — "RetroAchievements depth" → an RA leaderboard.
 
@@ -20,39 +20,50 @@ The bot already surfaces RA minimally: a single "Achievements" link built from a
 | Roster | **Hybrid**: rank all RomM users with RA progression; decorate Discord-linked users with their Discord display name + 🔗 marker; show unlinked users by RomM username |
 | Top N | **10** (footer shows total participants) |
 | Identity | Discord **display name** (not a mention — avoids ping noise); 🔗 marker for linked |
-| Tiebreak | hardcore earned → games mastered → name (alphabetical) |
+| Tiebreak (global) | hardcore earned → games mastered → name (alphabetical) |
+| Tiebreak (per-game) | hardcore earned → name (mastery is implied by `num_awarded == max_possible`, so it is intentionally dropped here) |
 
 ## RomM 4.9 API surface (verified against the 4.9.0 source)
 
-**Per-user** — `UserSchema` (returned by `GET /api/users` and `GET /api/users/{id}`, both require `Scope.USERS_READ`; the bot's token already requests `users.read`):
+**Per-user** — `UserSchema` (returned by `GET /api/users` and `GET /api/users/{id}`, both require `Scope.USERS_READ`):
 - `ra_username: str | None`
-- `ra_progression: RAProgression | None` — wraps `RAUserProgression`:
-  - `total: int`
-  - `results: list[RAUserGameProgression]`, where each `RAUserGameProgression` has:
-    - `rom_ra_id: int | None` — the game's RA id (matches a ROM's `ra_id`)
+- `ra_progression: RAProgression | None` — over the wire this is a **flattened JSON dict**, not a nested object. `RAProgression` is a TypedDict of `RAUserProgression`'s fields, all `NotRequired`, so both keys may be absent. Consume defensively: `prog = user.get("ra_progression") or {}; results = prog.get("results", [])`. Keys:
+  - `total: int` (optional in the wire dict)
+  - `results: list[RAUserGameProgression]` (optional in the wire dict), where each entry has:
+    - `rom_ra_id: int | None` — the game's RetroAchievements id
     - `max_possible: int | None` — achievements in the set
     - `num_awarded: int | None` — achievements earned
     - `num_awarded_hardcore: int | None`
     - `most_recent_awarded_date: str | None` (NotRequired)
-    - `highest_award_kind: str | None` (NotRequired) — RA award tier (e.g. mastered/completed)
+    - `highest_award_kind: str | None` (NotRequired) — RA award tier (string, no enum in source)
     - `earned_achievements: list[EarnedAchievement]`
 
-**Per-game** — ROM detail (`GET /api/roms/{id}`, `roms.read`): `ra_id`, `ra_hash`, and `merged_ra_metadata` (wraps `RAMetadata`, whose `achievements: list[RAGameRomAchievement]` gives the achievement-set size for the per-game board's "X/Y" and footer).
+**`ra_progression` is a stored JSON column** on the RomM user model (`backend/models/user.py`: `Mapped[dict | None] = mapped_column(CustomJSON(), default=dict)`), and `GET /users` serializes the full `UserSchema` per row (`[UserSchema.model_validate(u) for u in get_users()]`). So a **single `GET /api/users` call returns every user's full `ra_progression`** — no per-user calls needed. (This resolves the earlier open concern; the per-user fallback below is a defensive contingency only.)
+
+**Per-game** — ROM detail/list (`roms.read`): `ra_id`, `ra_hash`, and `merged_ra_metadata` (type `RomRAMetadata`, a TypedDict of `RAMetadata`'s fields all-`NotRequired`; read `merged_ra_metadata.get("achievements", [])` for the set size — it may be absent). `ra_id` and `merged_ra_metadata` are on the base `RomSchema`, so search-list ROM items may already carry them.
 
 **Not needed:** `POST /api/users/{id}/ra/refresh` (`ME_WRITE`) triggers a server-side RA refresh. The leaderboard is read-only and reflects whatever progression RomM has already stored; we do not call refresh.
 
-**Bot-side mapping:** the `user_links` table (`discord_id, romm_username, romm_id`) and `db_manager.get_user_link(discord_id)` provide the Discord ↔ RomM mapping for the hybrid identity decoration ([cogs/user_manager.py:229](../../../cogs/user_manager.py#L229)).
+**Bot-side mapping:** the `user_links` table (`discord_id, romm_username, romm_id`) and `db_manager.get_user_link(discord_id)` provide the Discord ↔ RomM mapping ([cogs/user_manager.py:229](../../../cogs/user_manager.py#L229), `database_manager.py`).
 
-### Verification carried into the plan
+### Auth requirement (important)
 
-`ra_progression` is a field on `UserSchema` (default `None`). Confirm during implementation that the **list** endpoint `GET /api/users` actually populates it (not only `/users/{id}`). **Defined fallback:** if the list omits it, fetch per-user via `GET /api/users/{id}` with caching + light concurrency. Either path yields the same feature; only the call count differs. Likewise confirm the concrete `highest_award_kind` string values used to count "mastered" (treat values containing "master"/"complet" as mastery; refine to RA's exact tier strings during implementation).
+The feature needs `users.read` on the bot's RomM credential:
+- **OAuth password grant** path: the bot already requests `users.read` ([bot.py](../../../bot.py), `get_oauth_token` scope string), so it works automatically.
+- **Client API token** path (`ROMM_CLIENT_TOKEN`, the preferred/documented credential): scopes are **fixed when the token is minted in the RomM UI** — the bot cannot request them at runtime. If the token was created without `users.read`, `GET /api/users` returns 401/403 and `fetch_api_endpoint` returns `None` with no retry. The command must detect this (`users` fetch → `None`) and show a clear message ("the bot's RomM token can't read users — re-create `ROMM_CLIENT_TOKEN` with the `users.read` scope"), not a generic empty board. This requirement must also be added to the README's `ROMM_CLIENT_TOKEN` scope list.
+
+### Verifications carried into the plan
+
+1. **`rom_ra_id` ↔ `ra_id` identity space.** The per-game board matches a user's `RAUserGameProgression.rom_ra_id` against the resolved ROM's `ra_id`. Both are `int | None` RA game ids and almost certainly the same id space, but the source doesn't prove equality (different code paths populate them). Verify with a known game (confirm `rom.ra_id == progression.rom_ra_id`). Edge case: if the per-game board is empty *despite* the game having a non-null `ra_id`, surface a diagnostic ("no matching RA progress found for this game — possible id mismatch") rather than the generic "no one has played yet."
+2. **`highest_award_kind` mastery tiers.** Source types it `str | None` with no enum, so the exact strings are deferred. RA's real tiers are typically `beaten-softcore`, `beaten-hardcore`, `completed`, `mastered`. Count "mastered" as `highest_award_kind` matching (case-insensitive) `"mastered"` or `"completed"` — note that `"beaten-*"` intentionally does NOT count as mastery. Confirm the actual values RomM emits during implementation.
+3. **List-population fallback (contingency).** Should `GET /api/users` ever omit `ra_progression` in practice, fall back to per-user `GET /api/users/{id}` with caching + light concurrency. Not expected, given it's a stored column.
 
 ## Command UX
 
 ```
 /ra-leaderboard [game]
   • no arg     → global board
-  • game given → per-game board (game name fuzzy-resolved via the existing search flow)
+  • game given → per-game board (game name resolved via a new platform-agnostic search call)
 ```
 
 ### Global board (`/ra-leaderboard`)
@@ -83,57 +94,65 @@ Thumbnail: the game's cover (reusing the existing cover-fetch path).
 
 ## Architecture & components
 
-**New cog: `cogs/achievements.py`** — follows the existing cog pattern (`commands.Cog` subclass + module-level `setup(bot)`). Holds the `/ra-leaderboard` slash command (py-cord) with an optional `game: str` parameter, plus embed building.
+**New cog: `cogs/achievements.py`** — follows the existing cog pattern (`commands.Cog` subclass + module-level `setup(bot)`, `@discord.slash_command`, `discord.ApplicationContext`, `discord.Option`). Holds the `/ra-leaderboard` slash command with an optional `game: str` parameter, plus embed building.
 
-**Pure ranking functions (module-level functions in `cogs/achievements.py`, importable by tests — matching the existing style `from cogs.scan import Scan`):**
+**Pure ranking functions (module-level functions in `cogs/achievements.py`, importable by tests — matching the existing style `from cogs.search import ...`):**
 
 - `compute_global_leaderboard(users, links) -> list[LeaderboardRow]`
-  For each user with a non-empty `ra_progression.results`: `earned = sum(num_awarded)`, `hardcore = sum(num_awarded_hardcore)`, `mastered = count(highest_award_kind is a mastery tier)`. Attach identity from `links`. Include only users with `earned >= 1`. Sort by `earned` desc, then the tiebreak chain. Return rows (rank assigned by caller or within).
+  For each user, read `results = (user.get("ra_progression") or {}).get("results", [])`. If non-empty: `earned = sum(r.get("num_awarded") or 0)`, `hardcore = sum(r.get("num_awarded_hardcore") or 0)`, `mastered = count(r where highest_award_kind matches mastery tiers)`. Attach identity from `links`. Include only users with `earned >= 1`. Sort by `earned` desc, then global tiebreak chain.
 
 - `compute_game_leaderboard(users, links, rom_ra_id) -> list[LeaderboardRow]`
-  For each user, select the `results` entry where `rom_ra_id` matches; skip users with no such entry. Rank by that entry's `num_awarded` (tiebreak: hardcore → name). Rows carry `earned`, `max_possible`, `num_awarded_hardcore`, `highest_award_kind`.
+  For each user, select the `results` entry where `rom_ra_id` matches; skip users with no such entry. Rank by that entry's `num_awarded` (per-game tiebreak: hardcore → name). Rows carry `earned`, `max_possible`, `num_awarded_hardcore`, `highest_award_kind`.
 
-A `LeaderboardRow` is a small dataclass/dict: `display_name`, `is_linked`, `earned`, `hardcore`, `mastered` (global) or `earned`/`max_possible`/`hardcore`/`award_kind` (per-game). Keeping these as standalone pure functions isolates all logic from Discord so it is unit-testable with plain dicts.
+A `LeaderboardRow` is a small dataclass/dict: `display_name`, `is_linked`, plus `earned`/`hardcore`/`mastered` (global) or `earned`/`max_possible`/`hardcore`/`award_kind` (per-game). Standalone pure functions isolate all logic from Discord so it is unit-testable with plain dicts.
 
-**Identity resolution:** read `user_links` via `db_manager`, build `{romm_id|romm_username → discord_id}`. For each ranked RomM user, if linked, resolve the guild member's display name (fallback to RomM username if the member left the guild); else use the RomM username. Linked rows get the 🔗 marker.
+**Identity resolution:** read `user_links` via `db_manager`, build `{romm_id → discord_id}` (and a username map as fallback). For each ranked RomM user, if linked, resolve the guild member's display name (fallback to RomM username if the member left the guild); else use the RomM username. Linked rows get the 🔗 marker. **Exclude the bot's own RomM account** (the user behind `ROMM_USER`/the client token, resolvable from config) so "RommBot" never appears on the board.
 
-**Game resolution (per-game mode):** reuse the existing search flow — resolve the `game` string to a ROM via `/api/roms?search_term=…` (+ platform list), take the **top match** (no disambiguation UI in v1), then fetch ROM detail for `ra_id` and `merged_ra_metadata` (set size + cover). Match users' `results` on `rom_ra_id == ra_id`.
+**Game resolution (per-game mode) — NEW code, not a reused helper.** The existing `/search` resolution is inline inside the `search()` command and *requires* a `platform` argument, so it cannot be called here. The per-game path issues its own **platform-agnostic** call — `roms?search_term={game}&limit={n}` (the RomM API does not require `platform_id`; the bot adds it only in `/search`) — takes the **top match** (no disambiguation UI in v1), and reads `ra_id` + `merged_ra_metadata` (set size) + `platform_id`/`url_cover` (for the cover thumbnail). Match users' `results` on `rom_ra_id == ra_id`. (Optionally extract a small shared resolver, but treat it as new code.)
 
 ## Data flow
 
 **Global:**
-1. `fetch_api_endpoint('users')` (cached) → all users with `ra_progression`.
-2. Load `user_links` → identity map.
+1. `fetch_api_endpoint('users')` (cached). If it returns `None` → show the auth/permission error (see Auth requirement). 
+2. Load `user_links` → identity map; determine the bot's own RomM account to exclude.
 3. `compute_global_leaderboard(users, links)` → rows.
 4. Build embed (top 10; footer = total participants).
 
 **Per-game:**
-1. Resolve `game` → ROM (top search match) → `ra_id` + `merged_ra_metadata` (set size, cover).
-2. `fetch_api_endpoint('users')` (cached) + identity map.
+1. Resolve `game` → top search match → `ra_id` + `merged_ra_metadata` (set size) + `platform_id`/`url_cover` (cover).
+2. `fetch_api_endpoint('users')` (cached; same `None` → auth-error handling) + identity map.
 3. `compute_game_leaderboard(users, links, ra_id)` → rows.
 4. Build embed (top 10; footer = players who have played).
 
 ## Error & edge handling
 
-- **No RA data anywhere** (no users with progression) → friendly empty-state embed ("No RetroAchievements progress is tracked yet").
-- **Per-game, game not found** → reuse the search "couldn't find that game" response.
+- **`/api/users` returns `None`** (401/403 — token lacks `users.read`, common on misconfigured client tokens) → explicit permission-error message, not an empty board.
+- **No RA data anywhere** (users fetched, but none have progression) → friendly empty-state embed ("No RetroAchievements progress is tracked yet").
+- **Per-game, game not found** → "couldn't find that game" response.
 - **Per-game, game has no `ra_id`** → "That game isn't tracked on RetroAchievements."
 - **Per-game, nobody has played** → "No one has RA progress on this game yet."
+- **Per-game, empty despite a non-null `ra_id`** → diagnostic message (possible `rom_ra_id`/`ra_id` mismatch — see Verification 1).
 - **Users with `ra_username` but empty/zero progression** → excluded.
+- **The bot's own RomM account** → excluded from the roster.
 - **Linked member left the guild** → fall back to RomM username (unlinked styling).
-- **Large `/api/users` payload** → rely on the bot's existing `APICache` TTL; top-10 cap on display.
-- **Ties** → hardcore → mastered → alphabetical.
+- **Large `/api/users` payload** → the global call pulls *all* users' *full* per-game progression (incl. `earned_achievements` lists) even though only aggregates are shown; rely on the bot's existing `APICache` TTL and the top-10 display cap.
+- **Ties** → global: hardcore → mastered → alphabetical; per-game: hardcore → alphabetical.
+
+## Privacy note (deliberate choice)
+
+The hybrid roster ranks **all** RomM users with RA progression, including accounts never linked to a Discord member and shown by bare RomM username, in a board posted to a Discord channel. This is an intentional decision for v1. A `RA_LEADERBOARD_LINKED_ONLY` config flag (default off) to restrict the board to Discord-linked users is recorded as an out-of-scope follow-up for admins who object to listing unlinked accounts.
 
 ## Testing
 
-Unit tests (stdlib `unittest`, `tests/` conventions) for the two pure functions, importing them directly from `cogs.achievements`:
-- Global: ranking order by earned; tiebreak chain (hardcore, then mastered, then name); mastery counting from `highest_award_kind`; identity decoration (linked vs unlinked); exclusion of zero/empty users; empty-input → empty result.
-- Per-game: filtering/selection by `rom_ra_id`; ranking by that game's `num_awarded`; users without an entry excluded; empty/edge inputs.
+Unit tests (stdlib `unittest`, `tests/` conventions, `IsolatedAsyncioTestCase` where needed) for the two pure functions, importing them directly from `cogs.achievements`:
+- Global: ranking order by earned; tiebreak chain (hardcore, then mastered, then name); mastery counting from `highest_award_kind` (case-insensitive; `beaten-*` excluded); identity decoration (linked vs unlinked); bot-account exclusion; exclusion of zero/empty users; defensive handling of missing `ra_progression`/`results` keys; empty-input → empty result.
+- Per-game: filtering/selection by `rom_ra_id`; ranking by that game's `num_awarded`; per-game tiebreak (hardcore → name); users without an entry excluded; empty/edge inputs.
 
-Embed building and command wiring are verified manually at runtime against a live RomM 4.9 instance (consistent with how the bot tests Discord I/O — logic is unit-tested, Discord side is manual).
+Embed building, command wiring, the auth/permission error path, and game resolution are verified manually at runtime against a live RomM 4.9 instance (consistent with how the bot tests Discord I/O — logic is unit-tested, Discord/HTTP side is manual).
 
 ## Out of scope (possible follow-ups)
 
+- `RA_LEADERBOARD_LINKED_ONLY` config flag (linked-users-only board).
 - Auto-posted / periodically refreshed leaderboard message in a channel.
 - Points-based (RA score) ranking.
 - Per-game disambiguation UI when a name matches multiple ROMs.
