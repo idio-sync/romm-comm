@@ -1,6 +1,6 @@
 import unittest
 
-from cogs.achievements import compute_global_leaderboard
+from cogs.achievements import compute_global_leaderboard, compute_game_leaderboard
 
 
 def _user(uid, username, results, ra_username="ra"):
@@ -75,6 +75,45 @@ class GlobalLeaderboardTests(unittest.TestCase):
 
     def test_empty_input_returns_empty(self):
         self.assertEqual([], compute_global_leaderboard([], {}))
+
+
+class GameLeaderboardTests(unittest.TestCase):
+    def test_filters_to_matching_game_and_ranks_by_earned(self):
+        users = [
+            _user(1, "alice", [_result(40, rom_ra_id=99, max_possible=50),
+                               _result(5, rom_ra_id=7)]),
+            _user(2, "bob", [_result(48, rom_ra_id=99, max_possible=50)]),
+            _user(3, "carol", [_result(10, rom_ra_id=7)]),  # never played game 99
+        ]
+        rows = compute_game_leaderboard(users, {}, rom_ra_id=99)
+        self.assertEqual(["bob", "alice"], [r["name"] for r in rows])
+        self.assertEqual(48, rows[0]["earned"])
+        self.assertEqual(50, rows[0]["max_possible"])
+
+    def test_tiebreak_hardcore_then_name(self):
+        users = [
+            _user(1, "zed", [_result(10, hardcore=1, rom_ra_id=99)]),
+            _user(2, "amy", [_result(10, hardcore=1, rom_ra_id=99)]),
+            _user(3, "kim", [_result(10, hardcore=8, rom_ra_id=99)]),
+        ]
+        rows = compute_game_leaderboard(users, {}, rom_ra_id=99)
+        self.assertEqual(["kim", "amy", "zed"], [r["name"] for r in rows])
+
+    def test_carries_award_kind_and_excludes_zero_and_bot(self):
+        users = [
+            _user(1, "alice", [_result(50, kind="mastered", rom_ra_id=99, max_possible=50)]),
+            _user(2, "zero", [_result(0, rom_ra_id=99)]),     # 0 earned -> excluded
+            _user(3, "rommbot", [_result(50, rom_ra_id=99)]),  # bot -> excluded
+        ]
+        rows = compute_game_leaderboard(users, {1: "AliceD"}, rom_ra_id=99, bot_username="rommbot")
+        self.assertEqual(1, len(rows))
+        self.assertEqual("AliceD", rows[0]["name"])
+        self.assertTrue(rows[0]["is_linked"])
+        self.assertEqual("mastered", rows[0]["award_kind"])
+
+    def test_no_matching_players_returns_empty(self):
+        users = [_user(1, "alice", [_result(5, rom_ra_id=7)])]
+        self.assertEqual([], compute_game_leaderboard(users, {}, rom_ra_id=99))
 
 
 if __name__ == "__main__":

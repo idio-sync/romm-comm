@@ -53,3 +53,37 @@ def compute_global_leaderboard(users, links, bot_username=None):
         })
     rows.sort(key=lambda r: (-r["earned"], -r["hardcore"], -r["mastered"], r["name"].lower()))
     return rows
+
+
+def compute_game_leaderboard(users, links, rom_ra_id, bot_username=None):
+    """Rank users by achievements earned for one specific game (matched on rom_ra_id).
+
+    Returns rows sorted best-first; each row:
+        {romm_id, name, is_linked, earned, max_possible, hardcore, award_kind}
+    Per-game tiebreak is hardcore -> name (mastery is implied by earned == max_possible).
+    """
+    bot_name = (bot_username or "").strip().lower()
+    rows = []
+    for user in users:
+        username = user.get("username") or ""
+        if bot_name and username.strip().lower() == bot_name:
+            continue
+        entry = next((r for r in _results_of(user) if r.get("rom_ra_id") == rom_ra_id), None)
+        if entry is None:
+            continue
+        earned = entry.get("num_awarded") or 0
+        if earned < 1:
+            continue
+        romm_id = user.get("id")
+        linked_name = links.get(romm_id)
+        rows.append({
+            "romm_id": romm_id,
+            "name": linked_name or username,
+            "is_linked": linked_name is not None,
+            "earned": earned,
+            "max_possible": entry.get("max_possible"),
+            "hardcore": entry.get("num_awarded_hardcore") or 0,
+            "award_kind": entry.get("highest_award_kind"),
+        })
+    rows.sort(key=lambda r: (-r["earned"], -r["hardcore"], r["name"].lower()))
+    return rows
