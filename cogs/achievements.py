@@ -24,6 +24,11 @@ def _results_of(user) -> list:
     return prog.get("results") or []
 
 
+def _short_name(name, limit=24):
+    name = name or ""
+    return name if len(name) <= limit else name[:limit - 1] + "…"
+
+
 def compute_global_leaderboard(users, links, bot_username=None):
     """Rank users by total RA achievements earned across all games.
 
@@ -123,7 +128,7 @@ class RetroAchievements(commands.Cog):
 
     def _format_global_line(self, rank, row):
         marker = "🔗 " if row["is_linked"] else ""
-        return (f"**#{rank}** {marker}**{row['name']}** — "
+        return (f"**#{rank}** {marker}**{_short_name(row['name'])}** — "
                 f"{row['earned']:,} 🏆 · {row['hardcore']:,} hardcore · {row['mastered']} mastered")
 
     def _build_global_embed(self, rows):
@@ -168,7 +173,7 @@ class RetroAchievements(commands.Cog):
         mp = row.get("max_possible")
         count = f"{row['earned']}/{mp}" if mp else f"{row['earned']}"
         award = f" ✦ {row['award_kind'].replace('-', ' ').title()}" if row.get("award_kind") else ""
-        return (f"**#{rank}** {marker}**{row['name']}** — "
+        return (f"**#{rank}** {marker}**{_short_name(row['name'])}** — "
                 f"{count} 🏆{award} · {row['hardcore']:,} hardcore")
 
     def _build_game_embed(self, rom, rows):
@@ -211,7 +216,7 @@ class RetroAchievements(commands.Cog):
         rows = compute_game_leaderboard(users, links, ra_id, bot_username=bot_username)
         if not rows:
             # Diagnostic: distinguish a systematic ra_id/rom_ra_id mismatch from a genuinely unplayed game.
-            any_progression = any((u.get("ra_progression") or {}).get("results") for u in users)
+            any_progression = any(_results_of(u) for u in users)
             if any_progression:
                 logger.warning(
                     f"/ra-leaderboard '{game}' resolved ra_id={ra_id} but matched 0 progression rows "
