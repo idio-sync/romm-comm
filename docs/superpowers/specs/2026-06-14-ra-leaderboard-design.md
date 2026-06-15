@@ -54,7 +54,7 @@ The feature needs `users.read` on the bot's RomM credential:
 
 ### Verifications carried into the plan
 
-1. **`rom_ra_id` ↔ `ra_id` identity space.** The per-game board matches a user's `RAUserGameProgression.rom_ra_id` against the resolved ROM's `ra_id`. RomM's RA sync is expected to populate both from the same RA game id, but verify with a known game during implementation (confirm `rom.ra_id == progression.rom_ra_id`). This is an implementation/manual-validation note only; an empty board for a tracked game is still a normal "no one has played yet" result unless logs/manual checks prove an id mismatch.
+1. **`rom_ra_id` ↔ `ra_id` identity space.** The per-game board matches a user's `RAUserGameProgression.rom_ra_id` against the resolved ROM's `ra_id`. RomM's RA sync is expected to populate both from the same RA game id, but verify with a known game during implementation (confirm `rom.ra_id == progression.rom_ra_id`). This is an implementation/manual-validation note only; an empty board for a tracked game is still treated as a normal "no one has played yet" result. **Observability (to avoid a silent failure mode):** the per-game path logs a `warning` when the resolved `ra_id` is non-null yet matches zero progression rows *while the global participant count is > 0* — a signature of a systematic `ra_id`/`rom_ra_id` mismatch rather than a genuinely unplayed game. The user-facing message stays "no one has played yet"; the warning log is the diagnostic surface, so a mismatch is observable instead of indistinguishable from an empty board.
 2. **`highest_award_kind` mastery tiers.** Source types it `str | None` with no enum, so the exact strings are deferred. RA's real tiers are typically `beaten-softcore`, `beaten-hardcore`, `completed`, `mastered`. Count "mastered" as `highest_award_kind` matching (case-insensitive) `"mastered"` or `"completed"` — note that `"beaten-*"` intentionally does NOT count as mastery. Confirm the actual values RomM emits during implementation.
 3. **List-population fallback (contingency).** Should `GET /api/users` ever omit `ra_progression` in practice, fall back to per-user `GET /api/users/{id}` with caching + light concurrency. Not expected, given it's a stored column.
 
@@ -91,6 +91,8 @@ Ranked by achievements earned · 50 achievements in this set
 8 of 22 players have played this game · 🔗 = linked Discord member
 ```
 Thumbnail: the game's cover (reusing the existing cover-fetch path).
+
+When the set size is unknown (neither `merged_ra_metadata.achievements` nor a `max_possible` is available), the header omits the "· N achievements in this set" clause and rows show bare `num_awarded` 🏆 with no `/max` denominator.
 
 ## Architecture & components
 
