@@ -1,6 +1,7 @@
 import logging
 import discord
 from discord.ext import commands
+from urllib.parse import quote_plus
 
 logger = logging.getLogger(__name__)
 
@@ -162,9 +163,63 @@ class RetroAchievements(commands.Cog):
             return
         await ctx.respond(embed=self._build_global_embed(rows))
 
+    def _format_game_line(self, rank, row):
+        marker = "🔗 " if row["is_linked"] else ""
+        mp = row.get("max_possible")
+        count = f"{row['earned']}/{mp}" if mp else f"{row['earned']}"
+        award = f" ✦ {row['award_kind'].replace('-', ' ').title()}" if row.get("award_kind") else ""
+        return (f"**#{rank}** {marker}**{row['name']}** — "
+                f"{count} 🏆{award} · {row['hardcore']:,} hardcore")
+
+    def _build_game_embed(self, rom, rows):
+        title = rom.get("name") or "Unknown game"
+        platform = rom.get("platform_name")
+        header_title = f"🏆 RetroAchievements — {title}" + (f" ({platform})" if platform else "")
+        set_size = next((r["max_possible"] for r in rows if r.get("max_possible")), None)
+        desc = "Ranked by achievements earned"
+        if set_size:
+            desc += f" · {set_size} achievements in this set"
+        embed = discord.Embed(title=header_title, description=desc, color=discord.Color.gold())
+        lines = [self._format_game_line(i + 1, r) for i, r in enumerate(rows[:TOP_N])]
+        embed.add_field(name="​", value="\n".join(lines), inline=False)
+        # Cover served unauthenticated at /assets/...; set directly as thumbnail when present.
+        platform_id, rom_id = rom.get("platform_id"), rom.get("id")
+        if rom.get("url_cover") and platform_id and rom_id:
+            embed.set_thumbnail(url=f"{self.bot.config.API_BASE_URL}/assets/romm/resources/roms/{platform_id}/{rom_id}/cover/big.png")
+        else:
+            embed.set_thumbnail(url=RA_LOGO_URL)
+        embed.set_footer(text=f"Top {min(TOP_N, len(rows))} of {len(rows)} players who have played this game · 🔗 = linked Discord member")
+        return embed
+
     async def _respond_game_leaderboard(self, ctx, users, links, bot_username, game):
-        # Implemented in Task 4.
-        await ctx.respond("Per-game leaderboard coming soon.")
+        search = await self.bot.fetch_api_endpoint(f"roms?search_term={quote_plus(game)}&limit=25")
+        if isinstance(search, dict):
+            items = search.get("items", [])
+        elif isinstance(search, list):
+            items = search
+        else:
+            items = []
+        if not items:
+            await ctx.respond(f"Couldn't find a game matching “{game}”.")
+            return
+        rom = items[0]
+        ra_id = rom.get("ra_id")
+        if not ra_id:
+            await ctx.respond(f"**{rom.get('name', game)}** isn't tracked on RetroAchievements.")
+            return
+
+        rows = compute_game_leaderboard(users, links, ra_id, bot_username=bot_username)
+        if not rows:
+            # Diagnostic: distinguish a systematic ra_id/rom_ra_id mismatch from a genuinely unplayed game.
+            any_progression = any((u.get("ra_progression") or {}).get("results") for u in users)
+            if any_progression:
+                logger.warning(
+                    f"/ra-leaderboard '{game}' resolved ra_id={ra_id} but matched 0 progression rows "
+                    f"while users have RA progress — possible ra_id/rom_ra_id id-space mismatch."
+                )
+            await ctx.respond(f"No one has RetroAchievements progress on **{rom.get('name', game)}** yet.")
+            return
+        await ctx.respond(embed=self._build_game_embed(rom, rows))
 
 
 def setup(bot):
