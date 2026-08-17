@@ -241,7 +241,7 @@ class UserManagementView(discord.ui.View):
         for user in sorted(users_data, key=lambda u: u.get('username', '').lower()):
             username = user.get('username', 'Unknown')
             user_id = user.get('id')
-            role = user.get('role', 'VIEWER')
+            role = user.get('role', 'user')
             
             # Check if linked
             is_linked = (username.lower() in linked_usernames) or (user_id in linked_romm_ids)
@@ -927,7 +927,7 @@ class UserManagementView(discord.ui.View):
         if self.selected_romm_user:
             embed.add_field(
                 name="Selected RomM User",
-                value=f"`{self.selected_romm_user['username']}`\nRole: {self.selected_romm_user.get('role', 'VIEWER')}",
+                value=f"`{self.selected_romm_user['username']}`\nRole: {self.selected_romm_user.get('role', 'user')}",
                 inline=True
             )
         else:
@@ -1199,7 +1199,7 @@ class UserManager(commands.Cog):
             logger.error(f"Error finding user {username}: {e}", exc_info=True)
             return None
     
-    async def send_invite_link(self, member: discord.Member, role: str = "viewer") -> bool:
+    async def send_invite_link(self, member: discord.Member, role: str = "user") -> bool:
         """Send a standardized invite link to a Discord member."""
         try:
             existing_link = await self.db_manager.get_user_link(member.id)
@@ -1439,13 +1439,14 @@ class UserManager(commands.Cog):
                         new_username = await self.sanitize_username(member.display_name)
                         logger.info(f"Attempting to update username from {existing_username} to {new_username}")
                         
-                        # Use bot's helper for update
-                        update_params = {"username": new_username}
+                        # PUT /api/users/{id} takes form data, not query params
+                        update_form = aiohttp.FormData()
+                        update_form.add_field('username', new_username)
                         
                         result = await self.bot.make_authenticated_request(
                             method="PUT",
                             endpoint=f"users/{existing_user['id']}",
-                            params=update_params,
+                            form_data=update_form,
                             require_csrf=True
                         )
                         
@@ -1594,18 +1595,19 @@ class UserManager(commands.Cog):
             username = await self.sanitize_username(member.display_name)
             password = await self.generate_secure_password()
             
-            # Prepare form data
-            form_data = aiohttp.FormData()
-            form_data.add_field('username', username)
-            form_data.add_field('password', password)
-            form_data.add_field('email', 'none')  # Required field
-            form_data.add_field('role', 'VIEWER')
+            # POST /api/users takes a JSON body, not form data
+            user_payload = {
+                'username': username,
+                'password': password,
+                'email': 'none',  # Required field
+                'role': 'user',
+            }
             
             # Create user using bot's helper (it handles CSRF automatically)
             response_data = await self.bot.make_authenticated_request(
                 method="POST",
                 endpoint="users",
-                form_data=form_data,
+                data=user_payload,
                 require_csrf=True
             )
             

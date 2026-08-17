@@ -89,7 +89,49 @@ class SocketIOManager:
         self._connection_errors = 0
         self._last_successful_connect = time.time()
         self._health_monitor_task = None
+        self._session_cookie = None
         self._register_event_handlers()
+
+    async def _fetch_session_cookie(self) -> Optional[str]:
+        """Log in via /api/login to obtain a RomM session cookie.
+
+        RomM resolves the identity of a Socket.IO client from the server-side
+        session attached to the handshake cookie, not from the Authorization
+        header. Privileged socket events (scan, scan:stop) are rejected without
+        it, so the handshake has to carry a real session cookie. Client API
+        tokens cannot open a session, so this needs ROMM_USER / ROMM_PASS.
+        """
+        if not (self.config.USER and self.config.PASS):
+            logger.warning(
+                "No ROMM_USER / ROMM_PASS configured, so no RomM session can be "
+                "opened; RomM will reject scan commands from this bot"
+            )
+            return None
+
+        base_url = self.config.API_BASE_URL.rstrip('/')
+        auth = aiohttp.BasicAuth(self.config.USER, self.config.PASS)
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(f"{base_url}/api/login", auth=auth) as response:
+                    if response.status != 200:
+                        logger.warning(
+                            f"Session login failed (status {response.status}); "
+                            "scan commands will be rejected by RomM"
+                        )
+                        return None
+
+                    for cookie_header in response.headers.getall('Set-Cookie', []):
+                        match = re.search(r'romm_session=([^;]+)', cookie_header)
+                        if match:
+                            logger.debug("Obtained RomM session cookie for Socket.IO")
+                            return f"romm_session={match.group(1)}"
+
+                    logger.warning("Login succeeded but no romm_session cookie was returned")
+                    return None
+        except Exception as e:
+            logger.warning(f"Could not obtain RomM session cookie: {e}")
+            return None
 
     def _register_event_handlers(self):
         """Register the one-and-only set of Socket.IO handlers and re-broadcast
@@ -156,7 +198,14 @@ class SocketIOManager:
                             'Authorization': f'Basic {base64_auth}',
                             'User-Agent': 'RommBot/1.0'
                         }
-                    
+
+                    # RomM authorizes privileged socket events (scan, scan:stop)
+                    # from the session cookie only, never from the Authorization
+                    # header, so refresh it on every connection attempt.
+                    self._session_cookie = await self._fetch_session_cookie()
+                    if self._session_cookie:
+                        headers['Cookie'] = self._session_cookie
+
                     await self.sio.connect(
                         base_url,
                         headers=headers,
@@ -522,7 +571,7 @@ class RommBot(discord.Bot):
         """Get CSRF token from the heartbeat endpoint."""
         try:
             session = await self.ensure_session()
-            heartbeat_url = f"{self.config.API_BASE_URL}/heartbeat"
+            heartbeat_url = f"{self.config.API_BASE_URL}/api/heartbeat"
             
             async with session.get(heartbeat_url) as response:
                 if response.status != 200:

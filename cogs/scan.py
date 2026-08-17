@@ -14,12 +14,16 @@ from admin_checks import is_admin
 logger = logging.getLogger(__name__)
 
 class ScanType(str, Enum):
-    """Enum for scan types to prevent typos and provide better code completion"""
+    """Enum for scan types to prevent typos and provide better code completion
+
+    Values must match RomM's ScanType enum, which the scan socket resolves with
+    ScanType[options["type"].upper()] - an unknown value fails the scan.
+    """
     QUICK = "quick"
     COMPLETE = "complete"
     NEW_PLATFORMS = "new_platforms"
-    PARTIAL = "partial"
-    UNIDENTIFIED = "unidentified"
+    PARTIAL = "update"
+    UNIDENTIFIED = "unmatched"
     HASHES = "hashes"
 
 class ScanCommands(str, Enum):
