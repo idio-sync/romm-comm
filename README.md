@@ -112,12 +112,16 @@ Setting this disables authentication for the download endpoint. If not set (or s
 Create a `.env` file in the project root with the following variables.
 
 ```env
-# Required
+# Required: Discord + RomM connection
 TOKEN=your_discord_bot_token
 GUILD=your_guild_id
 API_URL=http://your_romm_host:port
-USER=api_username
-PASS=api_password
+
+# Required: RomM API auth — use EITHER a client token (preferred)...
+ROMM_CLIENT_TOKEN=rmm_your_client_token
+# ...OR a username/password:
+#ROMM_USER=api_username
+#ROMM_PASS=api_password
 
 # Optional
 ADMIN_ID=admin_user_id
@@ -144,7 +148,9 @@ GGREQUESTZ_API_KEY=ggr_api_key
 - `TOKEN` — Discord bot token.
 - `GUILD` — Discord server (guild) ID.
 - `API_URL` — Base URL for your RomM instance (use `http://ip:port` or a domain).
-- `USER` / `PASS` — API credentials for RomM.
+- **RomM API auth (choose one):**
+  - `ROMM_CLIENT_TOKEN` — *(preferred, RomM 4.8+)* A Client API Token so the bot connects without storing a user's password. Create one in the RomM web UI under your user profile → **API Tokens** (or `POST /api/client-tokens`), granting the scopes `roms.read platforms.read firmware.read users.read users.write me.write`. It must be created by an admin user, since scopes are capped by the creating user's permissions (user-manager commands need `users.write`). When set, `ROMM_USER`/`ROMM_PASS` are not required.
+  - `ROMM_USER` / `ROMM_PASS` — Username/password fallback used when no client token is set. Legacy `USER` / `PASS` still work, but `USER` can collide with the operating system username.
 
 **Common optional settings (defaults shown where applicable):**
 - `ADMIN_ID` — User OR role ID allowed to run admin commands (scan, sync users, etc.).
@@ -173,6 +179,7 @@ GGREQUESTZ_API_KEY=ggr_api_key
 - `/igdb [option]` — View list of games from IGDB: `upcoming`, `recent`, `popular`, or `exclusive`, generally or by platform with option to request.
 - `/user_manager` — Manage Romm and Discord users (linking, new account prompting, etc.) (admin only).
 - `/refresh_recent_metadata` — Refresh recently added game notifiction metadata/covers (admin only).
+- **`/ra-leaderboard [game]`** — RetroAchievements leaderboard. With no argument it ranks users across the server by total achievements earned (hardcore and games-mastered shown as columns); pass a game name for a per-game board. Discord-linked users show their server name with a 🔗 marker. Requires the bot's RomM token to have the `users.read` scope (already in the default `ROMM_CLIENT_TOKEN` scope list and the OAuth grant).
 
 ---
 

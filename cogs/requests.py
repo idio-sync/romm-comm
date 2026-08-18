@@ -12,10 +12,9 @@ from pathlib import Path
 from .search import Search
 from .igdb_client import IGDBClient
 from collections import defaultdict
-from .search import ROM_View
-from urllib.parse import quote
+from .search import ROM_View, build_rom_download_url
 import aiohttp
-from bot import is_admin
+from admin_checks import is_admin
 
 logger = logging.getLogger(__name__)
 
@@ -1614,13 +1613,14 @@ class ExistingGameWithIGDBView(discord.ui.View):
         super().__init__(timeout=180)
         self.bot = bot
         self.existing_matches = existing_matches
+        self.igdb_matches = igdb_matches
         self.platform_name = platform_name
         self.game_name = game_name
         self.author_id = author_id
         self.selected_rom = None
         self.selected_igdb = None
         self.message = None
-        
+
         # Filter IGDB matches to remove games that already exist
         self.filtered_igdb_matches = self._filter_igdb_matches(existing_matches, igdb_matches)
         
@@ -1787,13 +1787,18 @@ class ExistingGameWithIGDBView(discord.ui.View):
         # Process as a new request
         request_cog = self.bot.get_cog('Request')
         if request_cog:
-            await request_cog.process_request(
+            platform_name, mapping_id, platform_exists = await request_cog.get_platform_request_context(
+                self.platform_name
+            )
+            await request_cog.process_request_with_platform(
                 interaction,
-                self.platform_name,
+                platform_name,
                 self.selected_igdb['name'],  # Use IGDB name
                 None,  # No additional details
                 self.selected_igdb,
-                self.message
+                self.message,
+                mapping_id,
+                platform_exists
             )
             self.stop()
         
@@ -1829,6 +1834,19 @@ class ExistingGameWithIGDBView(discord.ui.View):
         # Copy download components from ROM_View
         for item in rom_view.children:
             if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                if isinstance(item, discord.ui.Select) and item.custom_id == "file_select":
+                    async def file_select_callback(
+                        interaction,
+                        source_view=rom_view,
+                        host_view=self
+                    ):
+                        await source_view.file_select_callback(
+                            interaction,
+                            target_view=host_view
+                        )
+
+                    item.callback = file_select_callback
+
                 self.add_item(item)
         
         if cover_file:
@@ -1978,7 +1996,7 @@ class ExistingGameView(discord.ui.View):
         # Copy over the file select dropdown if it exists
         file_select = None
         for item in rom_view.children:
-            if isinstance(item, discord.ui.Select) and item.custom_id == "rom_file_select":
+            if isinstance(item, discord.ui.Select) and item.custom_id == "file_select":
                 file_select = item
                 break
         
@@ -1994,6 +2012,17 @@ class ExistingGameView(discord.ui.View):
         
         # Add file select if available
         if file_select:
+            async def file_select_callback(
+                interaction,
+                source_view=rom_view,
+                host_view=self
+            ):
+                await source_view.file_select_callback(
+                    interaction,
+                    target_view=host_view
+                )
+
+            file_select.callback = file_select_callback
             self.add_item(file_select)
         
         # Add all three buttons on the same row
@@ -2002,7 +2031,6 @@ class ExistingGameView(discord.ui.View):
             if isinstance(item, discord.ui.Button) and "Download" in item.label:
                 item.row = button_row
                 self.add_item(item)
-                break
         
         # Re-add "Request Different Version" and "Cancel" buttons
         request_different = discord.ui.Button(
@@ -2164,6 +2192,31 @@ class Request(commands.Cog):
         except Exception:
             # If DB fails, fallback to using the original name
             return platform_name
+
+    async def get_platform_request_context(self, platform_name: str) -> Tuple[str, Optional[int], bool]:
+        """Return display name, mapping ID, and RomM availability for request creation."""
+        if not platform_name:
+            return platform_name, None, False
+
+        try:
+            async with self.db.get_connection() as db:
+                cursor = await db.execute(
+                    """SELECT id, display_name, in_romm
+                       FROM platform_mappings
+                       WHERE LOWER(display_name) = LOWER(?) OR LOWER(folder_name) = LOWER(?)
+                       LIMIT 1""",
+                    (platform_name, platform_name)
+                )
+                result = await cursor.fetchone()
+
+                if result:
+                    mapping_id, display_name, in_romm = result
+                    return display_name, mapping_id, bool(in_romm)
+
+        except Exception as e:
+            logger.warning(f"Could not resolve request platform context for '{platform_name}': {e}")
+
+        return platform_name, None, False
     
     @property
     def igdb_enabled(self) -> bool:
@@ -2478,7 +2531,8 @@ class Request(commands.Cog):
                                     logger.info(f"✅ Synced fulfillment to ggrequestz for request #{req_id} (GGR ID: {ggr_request_id})")
                                 else:
                                     logger.error(f"❌ Failed to sync fulfillment to ggrequestz: {result.get('error')}")
-                    
+                
+                if notifications:
                     logger.info(f"Sending DMs with links for {len(notifications)} user(s).")
                     for user_id, fulfilled_games in notifications.items():
                         try:
@@ -2501,8 +2555,7 @@ class Request(commands.Cog):
                                 link_parts = [f"{romm_emoji} [**View in RomM**]({romm_url})"]
                                 
                                 if filename:
-                                    safe_filename = quote(filename)
-                                    download_url = f"{self.bot.config.DOMAIN}/api/roms/{rom_id}/content/{safe_filename}?"
+                                    download_url = build_rom_download_url(self.bot.config.DOMAIN, rom_id, filename)
                                     link_parts.append(f"⬇️ [**Download**]({download_url})")
                                 
                                 # Join the links with a separator and add them as a single line
@@ -2546,291 +2599,20 @@ class Request(commands.Cog):
             return []
 
     async def process_request(self, ctx_or_interaction, platform_name, game, details, selected_game, message):
-        """Process and save the request"""
-        try:
-            # Handle both ctx and interaction objects
-            if hasattr(ctx_or_interaction, 'user'):
-                author = ctx_or_interaction.user
-                author_name = str(ctx_or_interaction.user)
-                
-                async def respond(content=None, embed=None, embeds=None):
-                    kwargs = {}
-                    if content is not None:
-                        kwargs['content'] = content
-                    if embed is not None:
-                        kwargs['embed'] = embed
-                    elif embeds is not None:
-                        kwargs['embeds'] = embeds
-                    
-                    try:
-                        if ctx_or_interaction.response.is_done():
-                            return await ctx_or_interaction.followup.send(**kwargs)
-                        else:
-                            return await ctx_or_interaction.response.send_message(**kwargs)
-                    except discord.errors.InteractionResponded:
-                        return await ctx_or_interaction.followup.send(**kwargs)
-            else:
-                author = ctx_or_interaction.author
-                author_name = str(ctx_or_interaction.author)
-                
-                async def respond(content=None, embed=None, embeds=None):
-                    kwargs = {}
-                    if content is not None:
-                        kwargs['content'] = content
-                    if embed is not None:
-                        kwargs['embed'] = embed
-                    elif embeds is not None:
-                        kwargs['embeds'] = embeds
-                        
-                    return await ctx_or_interaction.respond(**kwargs)
-            
-            # FIRST: Gather all data from database
-            existing_request_id = None
-            user_already_requested = False
-            pending_count = 0
-            
-            async with self.db.get_connection() as db:
-                igdb_id = None
-                if selected_game and selected_game.get('id'):
-                    igdb_id = selected_game['id']
-                # Get existing requests
-                cursor = await db.execute(
-                    """
-                    SELECT id, user_id, username, game_name, igdb_id 
-                    FROM requests 
-                    WHERE platform = ? 
-                    AND status = 'pending'
-                    AND (igdb_id = ? OR igdb_id IS NULL)
-                    """,
-                    (platform_name, igdb_id)
-                )
-                existing_requests = await cursor.fetchall()
-                
-                # Check pending count
-                cursor = await db.execute(
-                    "SELECT COUNT(*) FROM requests WHERE user_id = ? AND status = 'pending'",
-                    (author.id,)
-                )
-                pending_count = (await cursor.fetchone())[0]
-                
-                # Check if there's a similar pending request
-                existing_request_id = None
-                user_already_requested = False
-                
-                for req_id, req_user_id, req_username, req_game, req_igdb_id in existing_requests:
-                    # If IGDB IDs match, it's definitely the same game
-                    if igdb_id and req_igdb_id and igdb_id == req_igdb_id:
-                        existing_request_id = req_id
-                        original_requester_id = req_user_id
-                        original_requester_name = req_username
-                        
-                        if req_user_id == author.id:
-                            user_already_requested = True
-                            break
-                    # Otherwise use name similarity
-                    elif self.calculate_similarity(game.lower(), req_game.lower()) > 0.8:
-                        existing_request_id = req_id
-                        original_requester_id = req_user_id
-                        original_requester_name = req_username
-                        
-                        if req_user_id == author.id:
-                            user_already_requested = True
-                            break
-                    
-                    # Check if user is already a subscriber
-                    if existing_request_id:
-                        cursor = await db.execute(
-                            """
-                            SELECT COUNT(*) FROM request_subscribers 
-                            WHERE request_id = ? AND user_id = ?
-                            """,
-                            (req_id, author.id)
-                        )
-                        is_subscriber = (await cursor.fetchone())[0] > 0
-                        
-                        if is_subscriber:
-                            user_already_requested = True
-                        break
-                    
-                # If user has already requested this game
-                if user_already_requested:
-                    embed = discord.Embed(
-                        title="📋 Already Requested",
-                        description="You have already requested this game.",
-                        color=discord.Color.orange()
-                    )
-                    
-                    await respond(embed=embed)
-                    return
-                    
-                if pending_count >= 25:
-                    await respond(content="❌ You already have 25 pending requests...")
-                    return
-                    
-                    search_cog = self.bot.get_cog('Search')
-                    platform_display = platform_name
-                    if search_cog:
-                        platform_display = search_cog.get_platform_with_emoji(platform_name)
-                    
-                    embed.add_field(name="Game", value=game, inline=True)
-                    embed.add_field(name="Platform", value=platform_display, inline=True)
-                    embed.add_field(name="Request ID", value=f"#{existing_request_id}", inline=True)
-                    embed.add_field(name="Status", value="⏳ Still Pending", inline=True)
-                    
-                    embed.set_footer(text="You'll receive a DM when this game is added to the collection")
-                    
-                    if selected_game and selected_game.get('cover_url'):
-                        embed.set_thumbnail(url=selected_game['cover_url'])
-                    else:
-                        embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
-                    
-                    await respond(embed=embed)
-                    return
-                
-                # If someone else has requested this game
-                if existing_request_id and author.id != original_requester_id:
-                    # Add user as a subscriber to existing request
-                    await db.execute(
-                        """
-                        INSERT INTO request_subscribers (request_id, user_id, username)
-                        VALUES (?, ?, ?)
-                        """,
-                        (existing_request_id, author.id, author_name)
-                    )
-                    await db.commit()
-                    
-                    # Count total subscribers
-                    cursor = await db.execute(
-                        "SELECT COUNT(*) FROM request_subscribers WHERE request_id = ?",
-                        (existing_request_id,)
-                    )
-                    subscriber_count = (await cursor.fetchone())[0]
-                    
-                    embed = discord.Embed(
-                        title="📋 Request Already Exists",
-                        description=f"This game has already been requested by **{original_requester_name}**",
-                        color=discord.Color.blue()
-                    )
-                    
-                    search_cog = self.bot.get_cog('Search')
-                    platform_display = platform_name
-                    if search_cog:
-                        platform_display = search_cog.get_platform_with_emoji(platform_name)
-                    
-                    embed.add_field(name="Game", value=game, inline=True)
-                    embed.add_field(name="Platform", value=platform_display, inline=True)
-                    embed.add_field(name="Request ID", value=f"#{existing_request_id}", inline=True)
-                    
-                    embed.add_field(
-                        name="✅ You've been added to the notification list",
-                        value=f"You and {subscriber_count} other user(s) will be notified when this request is fulfilled.",
-                        inline=False
-                    )
-                    
-                    if selected_game and selected_game.get('cover_url'):
-                        embed.set_thumbnail(url=selected_game['cover_url'])
-                    else:
-                        embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
-                    
-                    embed.set_footer(text="You'll receive a DM when this game is added to the collection")
-                    
-                    await respond(embed=embed)
-                    return
-                
-                # Check user's pending request limit
-                cursor = await db.execute(
-                    "SELECT COUNT(*) FROM requests WHERE user_id = ? AND status = 'pending'",
-                    (author.id,)
-                )
-                pending_count = (await cursor.fetchone())[0]
-
-                if pending_count >= 25:
-                    await respond(content="❌ You already have 25 pending requests. Please wait for them to be fulfilled or cancel some.")
-                    return
-
-                # Add IGDB metadata to details if available
-                if selected_game:
-                    alt_names_str = ""
-                    if selected_game.get('alternative_names'):
-                        alt_names = [f"{alt['name']} ({alt['comment']}" if alt.get('comment') else alt['name'] 
-                                   for alt in selected_game['alternative_names']]
-                        alt_names_str = f"\nAlternative Names: {', '.join(alt_names)}"
-
-                    igdb_details = (
-                        f"IGDB Metadata:\n"
-                        f"Game: {selected_game['name']}{alt_names_str}\n"
-                        f"Release Date: {selected_game['release_date']}\n"
-                        f"Platforms: {', '.join(selected_game['platforms'])}\n"
-                        f"Developers: {', '.join(selected_game['developers']) if selected_game['developers'] else 'Unknown'}\n"
-                        f"Publishers: {', '.join(selected_game['publishers']) if selected_game['publishers'] else 'Unknown'}\n"
-                        f"Genres: {', '.join(selected_game['genres']) if selected_game['genres'] else 'Unknown'}\n"
-                        f"Game Modes: {', '.join(selected_game['game_modes']) if selected_game['game_modes'] else 'Unknown'}\n"
-                        f"Summary: {selected_game['summary']}\n"
-                        f"Cover URL: {selected_game.get('cover_url', 'None')}\n"
-                    )
-                    if details:
-                        details = f"{details}\n\n{igdb_details}"
-                    else:
-                        details = igdb_details
-
-                # Insert the new request
-                async with self.db.get_connection() as db:
-                    
-                    cursor = await db.execute(
-                        """
-                        INSERT INTO requests (user_id, username, platform, game_name, details, igdb_id)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        """,
-                        (author.id, author_name, platform_name, game, details, igdb_id)
-                    )
-                    await db.commit()
-                    request_id = cursor.lastrowid
-                    
-                    logger.info(f"Request created - Discord: {author_name} (ID: {author.id}) | Game: '{game}' | Platform: {platform_name} | Request ID: #{request_id}")
-
-                if message and selected_game:
-                    view = GameSelectView(self.bot, matches=[selected_game], platform_name=platform_name)
-                    embed = view.create_game_embed(selected_game)
-                    embed.set_footer(text=f"Request #{request_id} submitted by {author_name}")
-                    await message.edit(embed=embed)
-                else:
-                    # Create basic embed for manual submissions
-                    embed = discord.Embed(
-                        title=f"✅ Request Submitted",
-                        description=f"Your request for **{game}** has been submitted!",
-                        color=discord.Color.green()
-                    )
-                    
-                    search_cog = self.bot.get_cog('Search')
-                    platform_display = platform_name
-                    if search_cog:
-                        platform_display = search_cog.get_platform_with_emoji(platform_name)
-                    
-                    embed.add_field(name="Game", value=game, inline=True)
-                    embed.add_field(name="Platform", value=platform_display, inline=True)
-                    embed.add_field(name="Status", value="⏳ Pending", inline=True)
-                    embed.add_field(name="Request ID", value=f"#{request_id}", inline=True)
-                    
-                    if details and "IGDB Metadata:" not in details:
-                        embed.add_field(name="Details", value=details[:1024], inline=False)
-                    
-                    embed.set_footer(text=f"Request submitted by {author_name}")
-                    embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
-                    
-                    await respond(embed=embed)
-
-        except Exception as e:
-            logger.error(f"Error processing request: {e}")
-            try:
-                if 'respond' in locals():
-                    await respond(content="❌ An error occurred while processing the request.")
-                else:
-                    if hasattr(ctx_or_interaction, 'user'):
-                        await ctx_or_interaction.followup.send("❌ An error occurred while processing the request.")
-                    else:
-                        await ctx_or_interaction.respond("❌ An error occurred while processing the request.")
-            except Exception as error_e:
-                logger.error(f"Could not send error message to user: {error_e}")
+        """Compatibility wrapper for callers that do not have platform metadata."""
+        platform_display_name, mapping_id, platform_exists = await self.get_platform_request_context(
+            platform_name
+        )
+        return await self.process_request_with_platform(
+            ctx_or_interaction,
+            platform_display_name,
+            game,
+            details,
+            selected_game,
+            message,
+            mapping_id,
+            platform_exists
+        )
     
     async def process_request_with_platform(self, ctx_or_interaction, platform_display_name, 
                                        game, details, selected_game, message, 
@@ -3221,11 +3003,35 @@ class Request(commands.Cog):
             else:
                 selected_game = select_view.selected_game
                 # Process request with IGDB data including ID
-                await self.process_request(ctx, platform_display_name, game, details, selected_game, select_view.message)
+                platform_name, mapping_id, platform_exists = await self.get_platform_request_context(
+                    platform_display_name
+                )
+                await self.process_request_with_platform(
+                    ctx,
+                    platform_name,
+                    game,
+                    details,
+                    selected_game,
+                    select_view.message,
+                    mapping_id,
+                    platform_exists
+                )
                 return
         
         # Process manual request (no IGDB ID)
-        await self.process_request(ctx, platform_display_name, game, details, None, None)
+        platform_name, mapping_id, platform_exists = await self.get_platform_request_context(
+            platform_display_name
+        )
+        await self.process_request_with_platform(
+            ctx,
+            platform_name,
+            game,
+            details,
+            None,
+            None,
+            mapping_id,
+            platform_exists
+        )
     
     async def _sync_statuses_from_ggrequestz(self, user_id: Optional[int] = None):
         """Sync request statuses from ggrequestz to Discord database"""
@@ -3274,12 +3080,14 @@ class Request(commands.Cog):
                     
                     ggr_status = ggr_request.get('status')
                     
-                    # Map ggrequestz status to Discord status
+                    # Map ggrequestz status to Discord status.
+                    # Local canonical statuses are: pending, fulfilled, reject, cancelled.
+                    # 'approved' has no local equivalent, so it is intentionally omitted
+                    # (status_mapping.get returns None -> no local update).
                     status_mapping = {
                         'pending': 'pending',
-                        'approved': 'approved',
                         'fulfilled': 'fulfilled',
-                        'rejected': 'rejected',
+                        'rejected': 'reject',
                         'cancelled': 'cancelled'
                     }
                     

@@ -126,8 +126,9 @@ class MasterDatabase:
                     # Migration failure is not critical for new installations
                     logger.warning("Continuing despite migration failure")
                     
-            # Migrate for GGRequestz support (adds column if needed)
+            # Ensure current request schema for existing installations
             await self.migrate_for_ggrequestz()
+            await self.migrate_user_link_schema()
             
             logger.debug("Initializing platform mappings...")
             await self.initialize_platform_mappings()
@@ -411,36 +412,59 @@ class MasterDatabase:
             raise
     
     async def migrate_for_ggrequestz(self):
-        """Add GGRequestz integration support to existing databases"""
+        """Ensure existing request databases have all current columns and indexes."""
         try:
             async with aiosqlite.connect(self.db_path) as db:
-                # Check if column already exists
                 cursor = await db.execute("PRAGMA table_info(requests)")
                 columns = await cursor.fetchall()
                 column_names = [col[1] for col in columns]
-                
-                if 'ggr_request_id' in column_names:
-                    logger.debug("GGRequestz column already exists")
-                    return True
-                
-                # Add column
-                logger.info("Adding ggr_request_id column for GGRequestz integration...")
-                await db.execute(
-                    "ALTER TABLE requests ADD COLUMN ggr_request_id INTEGER"
-                )
-                
-                # Add index
+
+                required_columns = {
+                    'platform_mapping_id': 'INTEGER',
+                    'igdb_game_name': 'TEXT',
+                    'ggr_request_id': 'INTEGER',
+                }
+
+                for column_name, column_type in required_columns.items():
+                    if column_name not in column_names:
+                        logger.info(f"Adding requests.{column_name} column")
+                        await db.execute(
+                            f"ALTER TABLE requests ADD COLUMN {column_name} {column_type}"
+                        )
+
                 await db.execute(
                     "CREATE INDEX IF NOT EXISTS idx_ggr_request_id ON requests(ggr_request_id)"
                 )
                 
                 await db.commit()
                 
-                logger.info("✅ GGRequestz migration completed successfully")
+                logger.info("✅ Request schema migration completed successfully")
                 return True
                 
         except Exception as e:
             logger.error(f"GGRequestz migration failed: {e}")
+            return False
+
+    async def migrate_user_link_schema(self):
+        """Ensure existing user link databases have ownership tracking columns."""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute("PRAGMA table_info(user_links)")
+                columns = await cursor.fetchall()
+                column_names = [col[1] for col in columns]
+
+                if 'created_by_bot' not in column_names:
+                    logger.info("Adding user_links.created_by_bot column")
+                    await db.execute(
+                        "ALTER TABLE user_links ADD COLUMN created_by_bot BOOLEAN DEFAULT 0"
+                    )
+
+                await db.commit()
+                logger.info("✅ User link schema migration completed successfully")
+                return True
+
+        except Exception as e:
+            logger.error(f"User link schema migration failed: {e}")
             return False
     
     async def _create_recent_roms_tables(self, db):
@@ -530,7 +554,7 @@ class MasterDatabase:
         await db.execute('CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status)')
         await db.execute('CREATE INDEX IF NOT EXISTS idx_requests_user ON requests(user_id)')
         await db.execute('CREATE INDEX IF NOT EXISTS idx_platform_mappings_name ON platform_mappings(display_name)')
-        # await db.execute('CREATE INDEX IF NOT EXISTS idx_ggr_request_id ON requests(ggr_request_id)')
+        await db.execute('CREATE INDEX IF NOT EXISTS idx_ggr_request_id ON requests(ggr_request_id)')
 
         logger.debug("Request table indexes created")
     
@@ -545,6 +569,7 @@ class MasterDatabase:
                 romm_id INTEGER NOT NULL,
                 discord_username TEXT,
                 discord_avatar TEXT,
+                created_by_bot BOOLEAN DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -619,7 +644,7 @@ class MasterDatabase:
                 cursor = await db.execute(
                     """
                     SELECT discord_id, romm_username, romm_id, discord_username, 
-                           discord_avatar, created_at, updated_at
+                           discord_avatar, created_by_bot, created_at, updated_at
                     FROM user_links 
                     WHERE discord_id = ?
                     """,
@@ -634,8 +659,9 @@ class MasterDatabase:
                         'romm_id': row[2],
                         'discord_username': row[3],
                         'discord_avatar': row[4],
-                        'created_at': row[5],
-                        'updated_at': row[6]
+                        'created_by_bot': bool(row[5]),
+                        'created_at': row[6],
+                        'updated_at': row[7]
                     }
                 return None
         except Exception as e:
@@ -644,7 +670,8 @@ class MasterDatabase:
 
     async def add_user_link(self, discord_id: int, romm_username: str, 
                            romm_id: int, discord_username: str = None, 
-                           discord_avatar: str = None) -> bool:
+                           discord_avatar: str = None,
+                           created_by_bot: bool = False) -> bool:
         """Add or update a user link"""
         try:
             async with self.get_connection() as db:
@@ -652,10 +679,10 @@ class MasterDatabase:
                     """
                     INSERT OR REPLACE INTO user_links 
                     (discord_id, romm_username, romm_id, discord_username, 
-                     discord_avatar, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                     discord_avatar, created_by_bot, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     """,
-                    (discord_id, romm_username, romm_id, discord_username, discord_avatar)
+                    (discord_id, romm_username, romm_id, discord_username, discord_avatar, int(created_by_bot))
                 )
                 await db.commit()
                 logger.info(f"Added/updated user link for Discord ID {discord_id}")
@@ -686,7 +713,7 @@ class MasterDatabase:
                 cursor = await db.execute(
                     """
                     SELECT discord_id, romm_username, romm_id, discord_username, 
-                           discord_avatar, created_at, updated_at
+                           discord_avatar, created_by_bot, created_at, updated_at
                     FROM user_links
                     """
                 )
@@ -699,8 +726,9 @@ class MasterDatabase:
                         'romm_id': row[2],
                         'discord_username': row[3],
                         'discord_avatar': row[4],
-                        'created_at': row[5],
-                        'updated_at': row[6]
+                        'created_by_bot': bool(row[5]),
+                        'created_at': row[6],
+                        'updated_at': row[7]
                     }
                     for row in rows
                 ]
@@ -715,7 +743,10 @@ class MasterDatabase:
             session: Optional aiohttp session to reuse. If not provided, creates a temporary one.
         """
         url = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/igdb/platform_mapping.json"
-        platforms_file = Path('igdb') / 'platform_mapping.json'
+        platform_files = [
+            Path('.backend') / 'igdb' / 'platform_mapping.json',
+            Path('igdb') / 'platform_mapping.json',
+        ]
 
         try:
             master_platforms = None
@@ -742,7 +773,8 @@ class MasterDatabase:
             
             # Fallback to local file
             if not master_platforms:
-                if platforms_file.exists():
+                platforms_file = next((path for path in platform_files if path.exists()), None)
+                if platforms_file:
                     # Use asyncio to avoid blocking the event loop
                     def read_platforms_file():
                         with open(platforms_file, 'r') as f:
@@ -775,6 +807,7 @@ class MasterDatabase:
                     
                     # Save defaults to file for next time (use asyncio to avoid blocking)
                     def write_platforms_file():
+                        platforms_file = platform_files[0]
                         platforms_file.parent.mkdir(exist_ok=True)
                         with open(platforms_file, 'w') as f:
                             json.dump(master_platforms, f, indent=2)

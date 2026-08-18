@@ -4,6 +4,7 @@ import os
 from dotenv import load_dotenv
 import aiohttp
 import asyncio
+import json
 from datetime import datetime
 import sys
 from typing import Dict, Optional, Any, List
@@ -28,33 +29,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger('romm_bot')
-
-# Filter out Discord's connection messages
-
-
-def is_admin():
-    """
-    Decorator to check if the user is an admin.
-
-    Use this decorator on slash commands that should be restricted to admins.
-    The actual admin check logic is delegated to bot.is_admin().
-
-    Example:
-        @bot.slash_command()
-        @is_admin()
-        async def admin_command(ctx):
-            ...
-    """
-    async def predicate(ctx: discord.ApplicationContext):
-        logger.debug(f"Admin check for command: {ctx.command.name} by user: {ctx.author} (ID: {ctx.author.id})")
-        is_admin_result = ctx.bot.is_admin(ctx.author)
-        if not is_admin_result:
-            logger.warning(f"Admin check FAILED for user {ctx.author} (ID: {ctx.author.id}) on command {ctx.command.name}")
-        else:
-            logger.debug(f"Admin check PASSED for user {ctx.author} on command {ctx.command.name}")
-        return is_admin_result
-    return commands.check(predicate)
-
 
 logging.getLogger('discord').setLevel(logging.WARNING)
 
@@ -99,8 +73,9 @@ class RateLimit:
 class SocketIOManager:
     """Shared Socket.IO connection manager for all cogs"""
     
-    def __init__(self, config):
-        self.config = config
+    def __init__(self, bot):
+        self.bot = bot
+        self.config = bot.config
         self.sio = socketio.AsyncClient(
             logger=False,
             engineio_logger=False,
@@ -114,7 +89,87 @@ class SocketIOManager:
         self._connection_errors = 0
         self._last_successful_connect = time.time()
         self._health_monitor_task = None
-        
+        self._session_cookie = None
+        self._register_event_handlers()
+
+    async def _fetch_session_cookie(self) -> Optional[str]:
+        """Log in via /api/login to obtain a RomM session cookie.
+
+        RomM resolves the identity of a Socket.IO client from the server-side
+        session attached to the handshake cookie, not from the Authorization
+        header. Privileged socket events (scan, scan:stop) are rejected without
+        it, so the handshake has to carry a real session cookie. Client API
+        tokens cannot open a session, so this needs ROMM_USER / ROMM_PASS.
+        """
+        if not (self.config.USER and self.config.PASS):
+            logger.warning(
+                "No ROMM_USER / ROMM_PASS configured, so no RomM session can be "
+                "opened; RomM will reject scan commands from this bot"
+            )
+            return None
+
+        base_url = self.config.API_BASE_URL.rstrip('/')
+        auth = aiohttp.BasicAuth(self.config.USER, self.config.PASS)
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(f"{base_url}/api/login", auth=auth) as response:
+                    if response.status != 200:
+                        logger.warning(
+                            f"Session login failed (status {response.status}); "
+                            "scan commands will be rejected by RomM"
+                        )
+                        return None
+
+                    for cookie_header in response.headers.getall('Set-Cookie', []):
+                        match = re.search(r'romm_session=([^;]+)', cookie_header)
+                        if match:
+                            logger.debug("Obtained RomM session cookie for Socket.IO")
+                            return f"romm_session={match.group(1)}"
+
+                    logger.warning("Login succeeded but no romm_session cookie was returned")
+                    return None
+        except Exception as e:
+            logger.warning(f"Could not obtain RomM session cookie: {e}")
+            return None
+
+    def _register_event_handlers(self):
+        """Register the one-and-only set of Socket.IO handlers and re-broadcast
+        each as a bot event. Cogs subscribe via @commands.Cog.listener instead of
+        competing for the single-handler-per-event socket client."""
+        self.sio.on('connect', self._on_sio_connect)
+        self.sio.on('disconnect', self._on_sio_disconnect)
+        self.sio.on('connect_error', self._on_sio_connect_error)
+        self.sio.on('scan:scanning_platform', self._on_sio_scan_platform)
+        self.sio.on('scan:scanning_rom', self._on_sio_scan_rom)
+        self.sio.on('scan:done', self._on_sio_scan_done)
+        self.sio.on('scan:done_ko', self._on_sio_scan_error)
+
+    async def _on_sio_connect(self):
+        logger.debug("Socket.IO connect event; broadcasting romm_connect")
+        self.bot.dispatch('romm_connect')
+
+    async def _on_sio_disconnect(self, *args):
+        logger.debug("Socket.IO disconnect event; broadcasting romm_disconnect")
+        self.bot.dispatch('romm_disconnect')
+
+    async def _on_sio_connect_error(self, *args):
+        data = args[0] if args else None
+        logger.error(f"Socket.IO connect error: {data}")
+        self.bot.dispatch('romm_connect_error', data)
+
+    async def _on_sio_scan_platform(self, data=None):
+        self.bot.dispatch('romm_scan_platform', data)
+
+    async def _on_sio_scan_rom(self, data=None):
+        self.bot.dispatch('romm_scan_rom', data)
+
+    async def _on_sio_scan_done(self, stats=None):
+        self.bot.dispatch('romm_scan_done', stats)
+
+    async def _on_sio_scan_error(self, error_message=None):
+        self.bot.dispatch('romm_scan_error', error_message)
+
     async def connect(self):
         """Connect to RomM Socket.IO server"""
         async with self._connection_lock:
@@ -129,15 +184,28 @@ class SocketIOManager:
                     logger.debug(f"SocketIO Manager connecting (attempt {attempt + 1}/{max_retries})...")
                     
                     base_url = self.config.API_BASE_URL.rstrip('/')
-                    auth_string = f"{self.config.USER}:{self.config.PASS}"
-                    auth_bytes = auth_string.encode('ascii')
-                    base64_auth = base64.b64encode(auth_bytes).decode('ascii')
-                    
-                    headers = {
-                        'Authorization': f'Basic {base64_auth}',
-                        'User-Agent': 'RommBot/1.0'
-                    }
-                    
+                    if self.config.ROMM_CLIENT_TOKEN:
+                        # Client API tokens authenticate via Bearer, same as the HTTP API.
+                        headers = {
+                            'Authorization': f'Bearer {self.config.ROMM_CLIENT_TOKEN}',
+                            'User-Agent': 'RommBot/1.0'
+                        }
+                    else:
+                        auth_string = f"{self.config.USER}:{self.config.PASS}"
+                        auth_bytes = auth_string.encode('ascii')
+                        base64_auth = base64.b64encode(auth_bytes).decode('ascii')
+                        headers = {
+                            'Authorization': f'Basic {base64_auth}',
+                            'User-Agent': 'RommBot/1.0'
+                        }
+
+                    # RomM authorizes privileged socket events (scan, scan:stop)
+                    # from the session cookie only, never from the Authorization
+                    # header, so refresh it on every connection attempt.
+                    self._session_cookie = await self._fetch_session_cookie()
+                    if self._session_cookie:
+                        headers['Cookie'] = self._session_cookie
+
                     await self.sio.connect(
                         base_url,
                         headers=headers,
@@ -268,8 +336,28 @@ class Config:
         self.SHOW_API_SUCCESS = self.parse_bool(os.getenv('SHOW_API_SUCCESS', 'false'), False)
         self.CACHE_TTL = int(os.getenv('CACHE_TTL', '3900'))  # 65 minutes default
         self.API_TIMEOUT = int(os.getenv('API_TIMEOUT', '30'))  # 30 seconds default
-        self.USER = os.getenv('USER')
-        self.PASS = os.getenv('PASS')
+        explicit_user = os.getenv('ROMM_USER') or os.getenv('ROMM_USERNAME')
+        explicit_pass = os.getenv('ROMM_PASS') or os.getenv('ROMM_PASSWORD')
+        legacy_user = os.getenv('USER')
+        legacy_pass = os.getenv('PASS')
+
+        self.USER = explicit_user
+        self.PASS = explicit_pass
+
+        if not explicit_user and not explicit_pass:
+            self.USER = legacy_user
+            self.PASS = legacy_pass
+            if legacy_user or legacy_pass:
+                logger.warning("USER/PASS are deprecated for RomM credentials; use ROMM_USER/ROMM_PASS instead")
+        elif explicit_user and not explicit_pass and legacy_pass:
+            self.PASS = legacy_pass
+            logger.warning("PASS is deprecated for RomM credentials; use ROMM_PASS instead")
+
+        # RomM client API token (preferred over USER/PASS when set).
+        # Create one in the RomM web UI (user profile -> API tokens) or via
+        # POST /api/client-tokens. Sent as `Authorization: Bearer <token>`.
+        self.ROMM_CLIENT_TOKEN = os.getenv('ROMM_CLIENT_TOKEN') or None
+
         self.REQUESTS_ENABLED = self.parse_bool(os.getenv('REQUESTS_ENABLED', 'true'), True)
 
         # Cog-specific config (centralized here to avoid scattered os.getenv calls)
@@ -288,8 +376,17 @@ class Config:
 
     def validate(self):
         """Validate configuration values."""
-        required = {'TOKEN', 'GUILD_ID', 'API_BASE_URL', 'USER', 'PASS'}
-        missing = [k for k, v in vars(self).items() if k in required and not v]
+        required = {
+            'TOKEN': self.TOKEN,
+            'GUILD': self.GUILD_ID,
+            'API_URL': self.API_BASE_URL,
+        }
+        # RomM API auth: a client token replaces username/password.
+        # When no client token is set, fall back to requiring ROMM_USER/ROMM_PASS.
+        if not self.ROMM_CLIENT_TOKEN:
+            required['ROMM_USER'] = self.USER
+            required['ROMM_PASS'] = self.PASS
+        missing = [k for k, v in required.items() if not v]
         
         if missing:
             raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
@@ -454,6 +551,10 @@ class RommBot(discord.Bot):
     async def ensure_valid_token(self) -> bool:
         """Ensure we have a valid OAuth token, refreshing if necessary."""
         async with self.token_lock:
+            # Client API token is a static credential: no OAuth grant or refresh needed.
+            if self.config.ROMM_CLIENT_TOKEN:
+                self.access_token = self.config.ROMM_CLIENT_TOKEN
+                return True
             # Check if token is expired or missing
             if not self.access_token or time.time() >= self.token_expiry:
                 logger.debug("Token expired or missing, refreshing...")
@@ -470,7 +571,7 @@ class RommBot(discord.Bot):
         """Get CSRF token from the heartbeat endpoint."""
         try:
             session = await self.ensure_session()
-            heartbeat_url = f"{self.config.API_BASE_URL}/heartbeat"
+            heartbeat_url = f"{self.config.API_BASE_URL}/api/heartbeat"
             
             async with session.get(heartbeat_url) as response:
                 if response.status != 200:
@@ -566,8 +667,15 @@ class RommBot(discord.Bot):
                         return None
 
                 if response.status == 401:
+                    # A client API token can't be refreshed; a 401 means it is invalid/revoked.
+                    if self.config.ROMM_CLIENT_TOKEN:
+                        logger.error(
+                            "Got 401 using ROMM_CLIENT_TOKEN - the client token may be "
+                            "invalid, expired, or revoked. Verify it in RomM."
+                        )
+                        return None
                     logger.debug("Got 401, attempting to refresh token")
-                    if await self.ensure_valid_token():
+                    if await self.refresh_oauth_token():
                         headers["Authorization"] = f"Bearer {self.access_token}"
                         async with session.request(method, url, **request_kwargs) as retry_response:
                             return await handle_response(retry_response)
@@ -722,7 +830,7 @@ class RommBot(discord.Bot):
             logger.debug("About to initialize SocketIO manager...")
             
             try:
-                self.socketio_manager = SocketIOManager(self.config)
+                self.socketio_manager = SocketIOManager(self)
                 logger.debug(f"SocketIOManager created successfully")
                 
                 logger.debug("Attempting to connect to SocketIO...")
@@ -739,10 +847,10 @@ class RommBot(discord.Bot):
             
             # Initialize OAuth tokens AFTER database
             logger.debug("Initializing OAuth tokens...")
-            if not await self.get_oauth_token():
-                logger.warning("Failed to obtain OAuth tokens, some features may not work")
+            if not await self.ensure_valid_token():
+                logger.warning("Failed to obtain RomM API token, some features may not work")
             else:
-                logger.info("✅ OAuth tokens initialized successfully")
+                logger.info("✅ RomM API token initialized successfully")
                                        
         except Exception as e:
             logger.error("=" * 50)
@@ -761,7 +869,8 @@ class RommBot(discord.Bot):
             'cogs.scan', 
             'cogs.requests',
             'cogs.user_manager',
-            'cogs.recent_roms'
+            'cogs.recent_roms',
+            'cogs.achievements'
         ]
         
         # Dependencies for each cog
@@ -773,7 +882,8 @@ class RommBot(discord.Bot):
             'cogs.scan': ['socketio'],
             'cogs.requests': ['aiosqlite'],
             'cogs.user_manager': ['aiohttp','aiosqlite'],
-            'cogs.recent_roms': ['aiosqlite']
+            'cogs.recent_roms': ['aiosqlite'],
+            'cogs.achievements': []
         }
 
         for cog in core_cogs:
@@ -927,6 +1037,9 @@ class RommBot(discord.Bot):
     @tasks.loop(minutes=10)
     async def refresh_token_task(self):
         """Periodically refresh the OAuth token to keep it valid."""
+        # Client API tokens are static and never need refreshing.
+        if self.config.ROMM_CLIENT_TOKEN:
+            return
         if self.access_token:
             await self.ensure_valid_token()
 

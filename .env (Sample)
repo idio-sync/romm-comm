@@ -4,8 +4,8 @@
 TOKEN=YOURBOTTOKEN                        # Bot token from Discord developer panel
 GUILD=YOURSERVERID                        # ID of your discord server
 API_URL=http://romm_ip:romm_port          # Your local Romm URL (IP and port)
-USER=username                             # Romm user id that will be used for API lookups
-PASS=password                             # Romm password that will be used for API lookups
+ROMM_USER=username                        # RomM user id that will be used for API lookups
+ROMM_PASS=password                        # RomM password that will be used for API lookups
 
 # Optional Settings
 ADMIN_ID=YOURADMINID                      # Discord ID that can run admin commands

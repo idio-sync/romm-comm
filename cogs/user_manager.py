@@ -9,7 +9,7 @@ import aiohttp
 import aiosqlite
 import time
 
-from bot import is_admin
+from admin_checks import is_admin
 
 logger = logging.getLogger('romm_bot.users')
 
@@ -241,7 +241,7 @@ class UserManagementView(discord.ui.View):
         for user in sorted(users_data, key=lambda u: u.get('username', '').lower()):
             username = user.get('username', 'Unknown')
             user_id = user.get('id')
-            role = user.get('role', 'VIEWER')
+            role = user.get('role', 'user')
             
             # Check if linked
             is_linked = (username.lower() in linked_usernames) or (user_id in linked_romm_ids)
@@ -927,7 +927,7 @@ class UserManagementView(discord.ui.View):
         if self.selected_romm_user:
             embed.add_field(
                 name="Selected RomM User",
-                value=f"`{self.selected_romm_user['username']}`\nRole: {self.selected_romm_user.get('role', 'VIEWER')}",
+                value=f"`{self.selected_romm_user['username']}`\nRole: {self.selected_romm_user.get('role', 'user')}",
                 inline=True
             )
         else:
@@ -1104,8 +1104,10 @@ class UserManager(commands.Cog):
         if not username:
             return f"user_{str(hash(display_name))[-8:]}"
             
-        # Check if username exists and make unique if needed
-        users = await self.bot.fetch_api_endpoint('users')
+        # Check if username exists and make unique if needed.
+        # bypass_cache so two near-simultaneous onboards don't both read a stale
+        # user list and compute the same "unique" username.
+        users = await self.bot.fetch_api_endpoint('users', bypass_cache=True)
         if users:
             existing_usernames = [user.get('username', '') for user in users]
             original_username = username
@@ -1197,7 +1199,7 @@ class UserManager(commands.Cog):
             logger.error(f"Error finding user {username}: {e}", exc_info=True)
             return None
     
-    async def send_invite_link(self, member: discord.Member, role: str = "viewer") -> bool:
+    async def send_invite_link(self, member: discord.Member, role: str = "user") -> bool:
         """Send a standardized invite link to a Discord member."""
         try:
             existing_link = await self.db_manager.get_user_link(member.id)
@@ -1292,6 +1294,26 @@ class UserManager(commands.Cog):
             user = await self.find_user_by_username(user_link['romm_username'])
             if not user:
                 logger.warning(f"User not found in RomM: {user_link['romm_username']}")
+                return False
+
+            if not user_link.get('created_by_bot', False):
+                logger.warning(
+                    f"Preserving RomM account for {member.display_name}: linked account was not created by this bot"
+                )
+
+                log_channel = self.bot.get_channel(self.log_channel_id)
+                if log_channel:
+                    await log_channel.send(
+                        embed=discord.Embed(
+                            title="RomM Account Preserved",
+                            description=(
+                                f"Auto-register role was removed from {member.mention}, but linked "
+                                f"RomM account `{user_link['romm_username']}` was not bot-created.\n"
+                                "The account was left unchanged for manual review."
+                            ),
+                            color=discord.Color.yellow()
+                        )
+                    )
                 return False
             
             # Check if user is a RomM admin
@@ -1417,13 +1439,14 @@ class UserManager(commands.Cog):
                         new_username = await self.sanitize_username(member.display_name)
                         logger.info(f"Attempting to update username from {existing_username} to {new_username}")
                         
-                        # Use bot's helper for update
-                        update_params = {"username": new_username}
+                        # PUT /api/users/{id} takes form data, not query params
+                        update_form = aiohttp.FormData()
+                        update_form.add_field('username', new_username)
                         
                         result = await self.bot.make_authenticated_request(
                             method="PUT",
                             endpoint=f"users/{existing_user['id']}",
-                            params=update_params,
+                            form_data=update_form,
                             require_csrf=True
                         )
                         
@@ -1572,18 +1595,19 @@ class UserManager(commands.Cog):
             username = await self.sanitize_username(member.display_name)
             password = await self.generate_secure_password()
             
-            # Prepare form data
-            form_data = aiohttp.FormData()
-            form_data.add_field('username', username)
-            form_data.add_field('password', password)
-            form_data.add_field('email', 'none')  # Required field
-            form_data.add_field('role', 'VIEWER')
+            # POST /api/users takes a JSON body, not form data
+            user_payload = {
+                'username': username,
+                'password': password,
+                'email': 'none',  # Required field
+                'role': 'user',
+            }
             
             # Create user using bot's helper (it handles CSRF automatically)
             response_data = await self.bot.make_authenticated_request(
                 method="POST",
                 endpoint="users",
-                form_data=form_data,
+                data=user_payload,
                 require_csrf=True
             )
             
@@ -1594,7 +1618,8 @@ class UserManager(commands.Cog):
                     username,
                     response_data['id'],
                     member.display_name,
-                    member.avatar.key if member.avatar else None
+                    member.avatar.key if member.avatar else None,
+                    created_by_bot=True
                 )
                 
                 # Send DM with credentials
