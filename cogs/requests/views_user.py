@@ -7,6 +7,7 @@ import discord
 from .embeds import build_request_embed
 from .notifications import cancelled_message, notify_subscribers
 from .repo import RequestsRepo
+from .responders import report_action
 
 logger = logging.getLogger(__name__)
 
@@ -194,8 +195,11 @@ class UserRequestsView(discord.ui.View):
                 request_id = self.request_data['id']
                 reason = self.reason.value or "User cancelled"
                 
-                try:
+                async with report_action(
+                    modal_interaction.followup, "cancelling the request"
+                ) as action:
                     await self.view.repo.mark_cancelled(request_id, reason=reason)
+                    action.committed("cancellation")
 
                     # Update the request in our list
                     updated_request = dict(self.request_data)
@@ -247,12 +251,6 @@ class UserRequestsView(discord.ui.View):
                         cancelled_message(display_game_name),
                     )
 
-                except Exception as e:
-                    logger.error(f"Error cancelling request: {e}")
-                    await modal_interaction.followup.send(
-                        "❌ An error occurred while cancelling the request.",
-                        ephemeral=True
-                    )
         
         modal = CancelConfirmModal(self, current_request)
         await interaction.response.send_modal(modal)
@@ -289,8 +287,11 @@ class UserRequestsView(discord.ui.View):
                 request_id = self.request_data['id']
                 note = self.note.value
                 
-                try:
+                async with report_action(
+                    modal_interaction.followup, "adding the note"
+                ) as action:
                     await self.view.repo.set_notes(request_id, note)
+                    action.committed("note")
                     
                     # Update the request in our list
                     updated_request = dict(self.request_data)
@@ -324,12 +325,6 @@ class UserRequestsView(discord.ui.View):
                         ephemeral=True
                     )
                     
-                except Exception as e:
-                    logger.error(f"Error adding note: {e}")
-                    await modal_interaction.followup.send(
-                        "❌ An error occurred while adding the note.",
-                        ephemeral=True
-                    )
         
         modal = NoteModal(self, current_request)
         await interaction.response.send_modal(modal)

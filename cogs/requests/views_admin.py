@@ -14,6 +14,7 @@ from .notifications import (
     requester_rejected_message,
 )
 from .repo import RequestsRepo
+from .responders import report_action
 
 logger = logging.getLogger(__name__)
 
@@ -167,10 +168,11 @@ class RequestAdminView(discord.ui.View):
         current_request = self.requests[self.current_index]
         request_id = current_request['id']
         
-        try:
+        async with report_action(interaction.followup, "fulfilling the request") as action:
             await self.repo.mark_fulfilled(
                 request_id, by_id=interaction.user.id, by_name=str(interaction.user)
             )
+            action.committed("fulfilment")
 
             logger.info(
                 f"Request fulfilled manually - Admin: {interaction.user} | Request ID: #{request_id} | Discord: "
@@ -243,9 +245,6 @@ class RequestAdminView(discord.ui.View):
                 self.bot, self.repo, request_id, fulfilled_message(display_game_name)
             )
 
-        except Exception as e:
-            logger.error(f"Error fulfilling request: {e}")
-            await interaction.followup.send("❌ An error occurred while fulfilling the request.", ephemeral=True)
 
     async def reject_callback(self, interaction: discord.Interaction):
         """Show modal for rejection reason then reject"""
@@ -276,13 +275,16 @@ class RequestAdminView(discord.ui.View):
                 request_id = self.request_data['id']
                 reason = self.reason.value or None
                 
-                try:
+                async with report_action(
+                    modal_interaction.followup, "rejecting the request"
+                ) as action:
                     await self.view.repo.mark_rejected(
                         request_id,
                         by_id=modal_interaction.user.id,
                         by_name=str(modal_interaction.user),
                         reason=reason,
                     )
+                    action.committed("rejection")
 
                     logger.info(
                         f"Request rejected - Admin: {modal_interaction.user} | Request ID: #{request_id} | Discord: "
@@ -347,12 +349,6 @@ class RequestAdminView(discord.ui.View):
                         rejected_message(display_game_name, reason),
                     )
 
-                except Exception as e:
-                    logger.error(f"Error rejecting request: {e}")
-                    await modal_interaction.followup.send(
-                        "❌ An error occurred while rejecting the request.", 
-                        ephemeral=True
-                    )
         
         modal = RejectModal(self, current_request)
         await interaction.response.send_modal(modal)
@@ -389,8 +385,11 @@ class RequestAdminView(discord.ui.View):
                 request_id = self.request_data['id']
                 note = self.note.value
                 
-                try:
+                async with report_action(
+                    modal_interaction.followup, "adding the note"
+                ) as action:
                     await self.view.repo.set_notes(request_id, note)
+                    action.committed("note")
                     
                     # Update the request in our list
                     updated_request = dict(self.request_data)
@@ -405,12 +404,6 @@ class RequestAdminView(discord.ui.View):
                         view=self.view
                     )
                     
-                except Exception as e:
-                    logger.error(f"Error adding note: {e}")
-                    await modal_interaction.followup.send(
-                        "❌ An error occurred while adding the note.",
-                        ephemeral=True
-                    )
         
         modal = NoteModal(self, current_request)
         await interaction.response.send_modal(modal)

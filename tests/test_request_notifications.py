@@ -523,3 +523,63 @@ class RowStorageAfterActionTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FailureReportingTests(unittest.IsolatedAsyncioTestCase):
+    """The real fulfil callback, failing on either side of the write.
+
+    The unit tests cover report_action; these check the callback hands it the
+    right boundary - that `committed()` really is called after mark_fulfilled
+    and not before.
+    """
+
+    def build(self, repo_raises=None, edit_raises=None):
+        requester = FakeUser(42)
+        bot = FakeBot([requester])
+        view = RequestAdminView(bot, [request_row()], admin_id=1, db=None)
+        view.repo = FakeRepo()
+        view.message = type("M", (), {"id": 1})()
+
+        if repo_raises:
+            async def boom(*args, **kwargs):
+                raise repo_raises
+            view.repo.mark_fulfilled = boom
+
+        return view, bot, edit_raises
+
+    async def run_fulfil(self, view, edit_raises=None):
+        interaction = FakeInteraction()
+        if edit_raises:
+            async def boom(**kwargs):
+                raise edit_raises
+            interaction.followup.edit_message = boom
+
+        with instant_dms(), self.assertLogs("cogs.requests", level="ERROR"):
+            await view.fulfill_callback(interaction)
+        return interaction.followup.sent
+
+    async def test_a_write_that_fails_says_the_action_failed(self):
+        view, _, _ = self.build(repo_raises=RuntimeError("database is down"))
+
+        sent = await self.run_fulfil(view)
+
+        self.assertTrue(any("error occurred while fulfilling" in s for s in sent), sent)
+        self.assertEqual([], view.repo.fulfilled)
+
+    async def test_a_failure_after_the_write_does_not_call_it_a_failure(self):
+        """The regression this exists for: the request really was fulfilled.
+
+        The failure is the embed edit rather than a DM, because notify()
+        swallows its own transport errors - so only something genuinely
+        unexpected reaches the callback's guard, which is the design.
+        """
+        view, _, _ = self.build()
+
+        sent = await self.run_fulfil(view, edit_raises=RuntimeError("Discord hiccup"))
+
+        self.assertEqual(1, len(view.repo.fulfilled), "the write should have landed")
+        self.assertFalse(
+            any("error occurred while fulfilling" in s for s in sent),
+            f"told the admin it failed after it succeeded: {sent}",
+        )
+        self.assertTrue(any("went through" in s for s in sent), sent)
