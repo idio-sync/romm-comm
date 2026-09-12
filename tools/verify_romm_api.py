@@ -156,19 +156,25 @@ async def main():
             show('platforms', repr(platforms)[:120])
 
         # --- 5. How this bot sees a missing route -------------------------
-        section('5. Unknown route - how a 404 surfaces')
+        section('5. Unknown route - how a missing endpoint surfaces')
         status, body = await get(session, base_url, headers, 'roms/definitely-not-a-route')
         show('status', f'HTTP {status}',
-             'the bot logs this and returns None, which is what /random falls back on')
+             'non-200 becomes None in fetch_api_endpoint, which is what /random falls back on')
+        print('    A pre-5.2.0 server answers GET /roms/random the same way, since')
+        print('    /roms/{id} tries to parse "random" as an int. Either way: not 200.')
 
         # --- 6. with_total, the remaining suggested change ----------------
-        section('6. GET /roms?limit=1&with_total=false')
-        status, body = await get(session, base_url, headers, 'roms?limit=1&with_total=false')
-        show('status', f'HTTP {status}')
-        if isinstance(body, dict):
-            show('total', repr(body.get('total')),
-                 'null confirms the count was skipped')
-            show('items returned', len(body.get('items') or []))
+        section('6. Skipping the result-set count on GET /roms')
+        # with_total alone is not enough: building the rom id index computes the
+        # total anyway, so the count only goes away when both are off.
+        for label, query in (
+            ('with_total=false', 'roms?limit=1&with_total=false'),
+            ('both flags off', 'roms?limit=1&with_total=false&with_rom_id_index=false'),
+        ):
+            status, body = await get(session, base_url, headers, query)
+            total = body.get('total') if isinstance(body, dict) else '?'
+            show(label, f'HTTP {status}, total={total!r}',
+                 'null means the count was skipped' if total is None else 'count still computed')
 
         # --- 7. Invite link shape (opt-in: this creates a token) ----------
         section('7. POST /users/invite-link')
