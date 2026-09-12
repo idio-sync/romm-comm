@@ -393,6 +393,43 @@ class PlatformMappingsRepo:
             row = await cursor.fetchone()
             return bool(row['in_romm']) if row else False
 
+    async def igdb_slug_for(self, display_name: str) -> Optional[str]:
+        """The IGDB slug for a platform, matched case-insensitively."""
+        async with self.db.get_connection() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT igdb_slug
+                FROM platform_mappings
+                WHERE LOWER(display_name) = LOWER(?)
+                LIMIT 1
+                """,
+                (display_name,)
+            )
+            row = await cursor.fetchone()
+            return row['igdb_slug'] if row else None
+
+    async def search_for_autocomplete(self, user_input: str, limit: int = 25) -> List[Any]:
+        """Platforms whose display or folder name contains `user_input`.
+
+        Ordered so platforms RomM actually has come first.
+        """
+        pattern = f'%{user_input.lower()}%'
+        async with self.db.get_connection() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT display_name, in_romm, folder_name
+                FROM platform_mappings
+                WHERE LOWER(display_name) LIKE ?
+                OR LOWER(folder_name) LIKE ?
+                ORDER BY
+                    in_romm DESC,
+                    display_name
+                LIMIT ?
+                """,
+                (pattern, pattern, limit)
+            )
+            return await cursor.fetchall()
+
     async def list_for_autocomplete(self) -> List[Any]:
         async with self.db.get_connection() as conn:
             cursor = await conn.execute(

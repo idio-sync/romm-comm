@@ -1314,6 +1314,10 @@ class IGDBHandler(commands.Cog):
     
     def __init__(self, bot):
         self.bot = bot
+        # Imported here, not at module scope: cogs.requests imports this
+        # module, so a top-level import would close the cycle.
+        from .requests.repo import PlatformMappingsRepo
+        self.platforms_repo = PlatformMappingsRepo(bot.db)
         self.igdb: Optional[IGDBClient] = None
         bot.loop.create_task(self.setup())
     
@@ -1329,30 +1333,15 @@ class IGDBHandler(commands.Cog):
     async def platform_autocomplete(self, ctx: discord.AutocompleteContext):
         """Autocomplete for platforms using the database"""
         try:
-            user_input = ctx.value.lower()
-            
-            async with self.bot.db.get_connection() as db:
-                cursor = await db.execute('''
-                    SELECT display_name, in_romm, folder_name
-                    FROM platform_mappings
-                    WHERE LOWER(display_name) LIKE ?
-                    OR LOWER(folder_name) LIKE ?
-                    ORDER BY 
-                        in_romm DESC,
-                        display_name
-                    LIMIT 25
-                ''', (f'%{user_input}%', f'%{user_input}%'))
-                
-                results = await cursor.fetchall()
-            
-            choices = []
-            for display_name, in_romm, folder_name in results:
-                choices.append(discord.OptionChoice(
-                    name=display_name[:100],
-                    value=display_name
-                ))
-            
-            return choices
+            results = await self.platforms_repo.search_for_autocomplete(ctx.value)
+
+            return [
+                discord.OptionChoice(
+                    name=row['display_name'][:100],
+                    value=row['display_name']
+                )
+                for row in results
+            ]
             
         except Exception as e:
             logger.error(f"Error in platform autocomplete: {e}")
@@ -1361,16 +1350,7 @@ class IGDBHandler(commands.Cog):
     async def get_platform_slug(self, platform_name: str) -> Optional[str]:
         """Get IGDB platform slug from database"""
         try:
-            async with self.bot.db.get_connection() as db:
-                cursor = await db.execute('''
-                    SELECT igdb_slug
-                    FROM platform_mappings
-                    WHERE LOWER(display_name) = LOWER(?)
-                    LIMIT 1
-                ''', (platform_name,))
-                
-                result = await cursor.fetchone()
-                return result['igdb_slug'] if result else None
+            return await self.platforms_repo.igdb_slug_for(platform_name)
                 
         except Exception as e:
             logger.error(f"Error getting platform slug: {e}")

@@ -35,11 +35,11 @@ REPOSITORIES = {
 # Still to move. Each entry is a debt with a reason, not an exemption.
 ALLOWED = {
     Path("cogs/requests/cog.py"): (
-        "the request-creation path interleaves its INSERT with the ggrequestz "
-        "call inside one 336-line method; it moves when that method is split"
+        "the request-creation path is done; what is left is the platform-mapping "
+        "sync and the scan-completion listener, which both need repository "
+        "methods that do not exist yet"
     ),
     Path("cogs/emoji_manager.py"): "no repository for emoji_sync_state yet",
-    Path("cogs/igdb_client.py"): "no repository for platform_mappings reads yet",
     Path("cogs/recent_roms.py"): "no repository for posted_roms yet",
     Path("cogs/user_manager.py"): "no repository for user_links yet",
 }
