@@ -1,10 +1,11 @@
+import asyncio
+import base64
+import logging
+from typing import List, Tuple
+
+import aiohttp
 import discord
 from discord.ext import commands
-import aiohttp
-import asyncio
-from typing import Dict, List, Tuple
-import logging
-import base64
 
 logger = logging.getLogger(__name__)
 

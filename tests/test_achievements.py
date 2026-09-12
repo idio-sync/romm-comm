@@ -1,6 +1,6 @@
 import unittest
 
-from cogs.achievements import compute_global_leaderboard, compute_game_leaderboard
+from cogs.achievements import compute_game_leaderboard, compute_global_leaderboard
 
 
 def _user(uid, username, results, ra_username="ra"):

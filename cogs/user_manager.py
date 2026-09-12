@@ -1,20 +1,18 @@
-import discord
-from discord.ext import commands, tasks
-from typing import Optional, Dict, Any, List
+import asyncio
+import base64
+import json
 import logging
 import secrets
 import string
-import asyncio
-import aiohttp
-import aiosqlite
-import time
-import json
-import base64
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
+import aiohttp
+import discord
 from dateutil import parser as date_parser
+from discord.ext import commands, tasks
 
 from admin_checks import is_admin
 
@@ -67,7 +65,7 @@ def parse_timestamp(value) -> Optional[datetime]:
             return None
     
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return parsed
 
 
@@ -231,7 +229,7 @@ class UserManagementView(discord.ui.View):
         """Populate the Discord user dropdown with pagination"""
         # Step 1: Fetch and sort the full list ONCE if we haven't already
         if not self.full_member_list:
-            # MODIFIED: Always fetch all members from the guild, ignoring the role ID
+            # Every guild member is listed here; role filtering happens at link time.
             members = self.guild.members
             # Store the full sorted list
             self.full_member_list = sorted(members, key=lambda m: m.display_name.lower())
@@ -1436,7 +1434,7 @@ class UserManager(commands.Cog):
         expires_at = parse_timestamp(pending.get('expires_at'))
         if expires_at is None:
             return True
-        return datetime.now(timezone.utc) < expires_at
+        return datetime.now(UTC) < expires_at
 
     async def record_pending_invite(self, member: discord.Member,
                                     invite_token: str, role: str) -> None:
@@ -1447,10 +1445,10 @@ class UserManager(commands.Cog):
         re-invited forever and role removal cannot deprovision them.
         """
         claims = invite_token_claims(invite_token)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         try:
-            expires_at = datetime.fromtimestamp(float(claims.get('exp')), tz=timezone.utc)
+            expires_at = datetime.fromtimestamp(float(claims.get('exp')), tz=UTC)
         except (TypeError, ValueError, OverflowError, OSError):
             expires_at = now + timedelta(seconds=DEFAULT_INVITE_TTL_SECONDS)
 
@@ -1485,7 +1483,7 @@ class UserManager(commands.Cog):
 
         links = await self.db_manager.get_all_user_links()
         linked_ids = {link['romm_id'] for link in links}
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Which unlinked accounts each outstanding invite could account for.
         candidates = {}
@@ -1821,7 +1819,7 @@ class UserManager(commands.Cog):
                         view.stop()
                         self.temp_storage[member.id] = None
                         
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     await dm_channel.send("No response received. Creating new account instead...")
                     view.stop()
                     self.temp_storage[member.id] = None

@@ -1,13 +1,10 @@
+import logging
+from datetime import datetime
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
 import discord
 from discord.ext import commands
-import socketio
-import asyncio
-from datetime import datetime
-import logging
-import base64
-import json
-from typing import Optional, Dict, Any, List
-from enum import Enum
 
 from admin_checks import is_admin
 
@@ -435,7 +432,7 @@ class Scan(commands.Cog):
         
         user_input = ctx.value.lower() if ctx.value else ""
         return [
-            cmd for cmd in commands.keys()
+            cmd for cmd in commands
             if user_input in cmd.lower() or user_input in commands[cmd].lower()
         ]
 

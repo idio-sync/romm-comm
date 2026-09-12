@@ -1,15 +1,14 @@
-import aiosqlite
 import asyncio
-import os
-import logging
-from pathlib import Path
-from typing import Optional, Dict, Any, List
-import shutil
-from datetime import datetime
-from contextlib import asynccontextmanager
-import aiohttp
 import json
+import logging
+import os
+import shutil
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import aiohttp
+import aiosqlite
 
 logger = logging.getLogger('romm_bot.database')
 
@@ -886,7 +885,7 @@ class MasterDatabase:
                 if platforms_file:
                     # Use asyncio to avoid blocking the event loop
                     def read_platforms_file():
-                        with open(platforms_file, 'r') as f:
+                        with open(platforms_file) as f:
                             return json.load(f)
                     master_platforms = await asyncio.to_thread(read_platforms_file)
                     logger.info(f"Loaded {len(master_platforms)} platforms from local file")

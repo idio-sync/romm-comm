@@ -1,5 +1,5 @@
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 
 class ImportBoundaryTests(unittest.TestCase):

@@ -3,7 +3,6 @@ import logging
 import discord
 from discord.ext import commands
 
-
 logger = logging.getLogger("romm_bot.admin_checks")
 
 

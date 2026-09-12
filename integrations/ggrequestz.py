@@ -1,13 +1,13 @@
 # integrations/ggrequestz.py
 
-import discord
-from discord.ext import commands
-import aiohttp
-import logging
-import os
 import asyncio
 import json
-from typing import Optional, Dict, Any
+import logging
+import os
+from typing import Any, Dict, Optional
+
+import aiohttp
+from discord.ext import commands
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ class GGRequestzIntegration(commands.Cog):
         # Wait for setup to complete (with timeout)
         try:
             await asyncio.wait_for(self._setup_complete.wait(), timeout=30.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error("Timeout waiting for GGRequestz session initialization")
             return False
         return self.session is not None and not self.session.closed
@@ -268,7 +268,7 @@ class GGRequestzIntegration(commands.Cog):
             
             # Build description
             description_parts = [
-                f"**Requested via Discord Bot**",
+                "**Requested via Discord Bot**",
                 f"• Discord User: {username} (ID: {user_id})",
                 f"• Game: {game_name}",
                 f"• Platform: {platform}",

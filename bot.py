@@ -1,21 +1,22 @@
-import discord
-from discord.ext import commands, tasks
-import os
-from dotenv import load_dotenv
-import aiohttp
 import asyncio
+import base64
 import json
-from datetime import datetime
-import sys
-from typing import Dict, Optional, Any, List
 import logging
-from collections import defaultdict
-import time
+import os
 import re
-from database_manager import MasterDatabase
+import time
+from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict, Optional
+
+import aiohttp
+import discord
 import socketio
-import base64 
+from discord.ext import commands, tasks
+from dotenv import load_dotenv
+
+from database_manager import MasterDatabase
 
 # Load environment variables from .env file
 load_dotenv()
@@ -276,7 +277,7 @@ class SocketIOManager:
                         consecutive_failures += 1
                         logger.warning(f"API check failed ({consecutive_failures}/{max_failures})")
                         
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     consecutive_failures += 1
                     logger.warning(f"API timeout after {health_check_timeout}s ({consecutive_failures}/{max_failures})")
                 except Exception as e:
@@ -393,11 +394,10 @@ class Config:
         
         try:
             self.GUILD_ID = int(self.GUILD_ID)
-            # MODIFIED: Only convert CHANNEL_ID if it's not None or empty
+            # CHANNEL_ID is optional; only coerce it when one was supplied.
             if self.CHANNEL_ID:
                 self.CHANNEL_ID = int(self.CHANNEL_ID)
         except ValueError:
-            # MODIFIED: Updated error message for clarity
             raise ValueError("GUILD_ID must be a numeric value. If provided, CHANNEL_ID must also be numeric.")
 
 class RommBot(discord.Bot):
@@ -739,7 +739,7 @@ class RommBot(discord.Bot):
             logger.debug(f"✓ User ID match! User {user} is admin")
             return True
         else:
-            logger.debug(f"✗ User ID does not match")
+            logger.debug("✗ User ID does not match")
         
         # Check roles if user has them
         if hasattr(user, 'roles'):
@@ -840,7 +840,7 @@ class RommBot(discord.Bot):
             
             try:
                 self.socketio_manager = SocketIOManager(self)
-                logger.debug(f"SocketIOManager created successfully")
+                logger.debug("SocketIOManager created successfully")
                 
                 logger.debug("Attempting to connect to SocketIO...")
                 connect_result = await self.socketio_manager.connect()
@@ -1112,7 +1112,7 @@ class RommBot(discord.Bot):
                         if response.status in [401, 403]:
                             return None
                             
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if attempt < max_retries:
                     wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
                     logger.warning(f"Request timeout, retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries + 1})")

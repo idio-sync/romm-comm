@@ -1,20 +1,17 @@
+import asyncio
+import logging
+import re
+from collections import defaultdict
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+
 import discord
 from discord.ext import commands
-import logging
-from datetime import datetime
-from typing import Optional, Dict, List, Tuple
-import json
-import os
-import aiosqlite
-import asyncio
-import re
-from pathlib import Path
-from .search import Search
-from .igdb_client import IGDBClient
-from collections import defaultdict
-from .search import ROM_View, build_rom_download_url
-import aiohttp
+
 from admin_checks import is_admin
+
+from .igdb_client import IGDBClient
+from .search import ROM_View, build_rom_download_url
 
 logger = logging.getLogger(__name__)
 
@@ -1047,9 +1044,6 @@ class UserRequestsView(discord.ui.View):
             text=f"Request {self.current_index + 1}/{total} • Requested by {req[2]} • Use buttons to navigate"
         )
         
-        logger.debug(f"DEBUG: Looking up platform - name='{req[3]}', mapping_id={platform_mapping_id}")
-        logger.debug(f"DEBUG: Available keys in cache: {list(self.platform_status.keys())}")
-        
         return embed
     
     async def back_callback(self, interaction: discord.Interaction):
@@ -1820,7 +1814,6 @@ class ExistingGameWithIGDBView(discord.ui.View):
         except Exception as e:
             logger.error(f"Error fetching ROM details: {e}")
         
-        from .search import ROM_View
         rom_view = ROM_View(self.bot, [rom_data], self.author_id, self.platform_name)
         rom_view.remove_item(rom_view.select)
         rom_view._selected_rom = rom_data
@@ -1967,7 +1960,6 @@ class ExistingGameView(discord.ui.View):
     
     async def create_full_rom_view(self, rom_data):
         """Create a full ROM view similar to search results"""
-        from .search import ROM_View
         
         # Fetch detailed ROM data if not already fetched
         try:
@@ -2903,7 +2895,7 @@ class Request(commands.Cog):
                     if send_response:
                         # Create basic embed for manual submissions
                         embed = discord.Embed(
-                            title=f"✅ Request Submitted",
+                            title="✅ Request Submitted",
                             description=f"Your request for **{game}** has been submitted!",
                             color=discord.Color.green()
                         )
@@ -3394,9 +3386,6 @@ class Request(commands.Cog):
                             result = await cursor.fetchone()
                             platform_status[f"name:{platform_name}"] = bool(result[0]) if result else False
                 
-                logger.info(f"DEBUG: Cached platform statuses: {platform_status}")
-                logger.info(f"DEBUG: First request platform: req[3]='{requests[0][3]}', mapping_id={requests[0][14] if len(requests[0]) > 14 else None}")
-                
                 # Count statuses for summary
                 status_counts = {
                     'pending': 0,
@@ -3517,9 +3506,6 @@ class Request(commands.Cog):
                             )
                             result = await cursor.fetchone()
                             platform_status[f"name:{platform_name}"] = bool(result[0]) if result else False
-                
-                logger.info(f"DEBUG: Cached platform statuses: {platform_status}")
-                logger.info(f"DEBUG: First request platform: req[3]='{requests[0][3]}', mapping_id={requests[0][14] if len(requests[0]) > 14 else None}")
                 
                 # Create paginated view
                 view = RequestAdminView(self.bot, requests, ctx.author.id, self.bot.db)

@@ -1,11 +1,12 @@
-from typing import List, Dict, Optional
 import asyncio
-import aiohttp
+import json
 import logging
-from datetime import datetime, timedelta
 import os
 import re
-import json
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+
+import aiohttp
 import discord
 from discord.ext import commands
 
@@ -651,14 +652,14 @@ class IGDBGameView(discord.ui.View):
                 # Sort by release date (newest first)
                 self.all_games.sort(key=lambda g: g.get('release_date', ''), reverse=True)
                 # Log first 3 games after sort
-                logger.debug(f"After 'newest' sort, first 3 games:") 
+                logger.debug("After 'newest' sort, first 3 games:") 
                 for i, game in enumerate(self.all_games[:3]): 
                     logger.debug(f"  {i+1}. {game.get('name')} - {game.get('release_date')}") 
             else:  # highest_rated
                 # Sort by rating (highest first)
                 self.all_games.sort(key=lambda g: (g.get('rating') or 0), reverse=True)
                 # Log first 3 games after sort
-                logger.debug(f"After 'highest_rated' sort, first 3 games:")
+                logger.debug("After 'highest_rated' sort, first 3 games:")
                 for i, game in enumerate(self.all_games[:3]):  
                     logger.debug(f"  {i+1}. {game.get('name')} - Rating: {game.get('rating')}") 
         

@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import discord
 
@@ -294,7 +294,7 @@ def build_reconciler(pending, users, links=None, guild=None):
 
 class ReconcilePendingInvitesTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.now = datetime.now(timezone.utc)
+        self.now = datetime.now(UTC)
         self.sent = self.now - timedelta(hours=1)
         self.expires = self.now + timedelta(days=7)
 
@@ -414,7 +414,7 @@ class ReconcilePendingInvitesTests(unittest.IsolatedAsyncioTestCase):
 
 class OutstandingInviteTests(unittest.IsolatedAsyncioTestCase):
     async def test_live_invite_blocks_a_second_send(self):
-        expires = datetime.now(timezone.utc) + timedelta(days=1)
+        expires = datetime.now(UTC) + timedelta(days=1)
         manager = build_invite_manager(
             invite_data={'token': 'abc123'},
             pending={1234: {'discord_id': 1234, 'expires_at': expires.isoformat()}},
@@ -427,7 +427,7 @@ class OutstandingInviteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], manager.dm.sent)
 
     async def test_expired_invite_allows_a_fresh_send(self):
-        expired = datetime.now(timezone.utc) - timedelta(days=1)
+        expired = datetime.now(UTC) - timedelta(days=1)
         manager = build_invite_manager(
             invite_data={'token': 'abc123'},
             pending={1234: {'discord_id': 1234, 'expires_at': expired.isoformat()}},

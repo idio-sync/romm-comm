@@ -1,23 +1,18 @@
-import discord
-from discord.ext import commands, tasks
-import logging
-from datetime import datetime, timedelta, timezone
-import socketio
-from typing import Dict, List, Optional, Set, Union, Tuple
-import json
-import os
-from pathlib import Path
 import asyncio
-from collections import defaultdict
-import aiosqlite
-import re
-from urllib.parse import quote
-import base64
-from PIL import Image
-from io import BytesIO
-import aiohttp
+import logging
+import os
 import time
+from collections import defaultdict
+from datetime import UTC, datetime, timedelta
+from io import BytesIO
+from typing import Dict, List, Optional, Set, Tuple
+from urllib.parse import quote
+
+import aiohttp
+import discord
 from dateutil.parser import parse as parse_datetime
+from discord.ext import commands, tasks
+from PIL import Image
 
 from admin_checks import is_admin
 
@@ -462,7 +457,7 @@ class RecentRomsMonitor(commands.Cog):
                 return
 
         try:
-            batch_id = datetime.now(timezone.utc).isoformat()
+            batch_id = datetime.now(UTC).isoformat()
             
             # Get cutoff time from scan state
             cutoff_time = None
@@ -503,9 +498,9 @@ class RecentRomsMonitor(commands.Cog):
                     
                     # Ensure timezone-aware (convert to UTC if needed)
                     if created_at.tzinfo is None:
-                        created_at = created_at.replace(tzinfo=timezone.utc)
+                        created_at = created_at.replace(tzinfo=UTC)
                     else:
-                        created_at = created_at.astimezone(timezone.utc)
+                        created_at = created_at.astimezone(UTC)
                     
                     # Remove timezone info for comparison (both should be UTC now)
                     created_at = created_at.replace(tzinfo=None)
@@ -676,7 +671,7 @@ class RecentRomsMonitor(commands.Cog):
                     else:
                         logger.warning(f"Failed to download cover: HTTP {response.status} (attempt {attempt + 1}/{max_retries})")
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(f"Cover download timeout (attempt {attempt + 1}/{max_retries})")
             except Exception as e:
                 logger.error(f"Error downloading cover (attempt {attempt + 1}/{max_retries}): {e}")
@@ -1174,7 +1169,7 @@ class RecentRomsMonitor(commands.Cog):
         # Create embed
         if is_bulk:
             embed = discord.Embed(
-                title=f"📦 Bulk Collection Update",
+                title="📦 Bulk Collection Update",
                 description=f"{len(roms)} games have been added to the collection",
                 color=discord.Color.orange()
             )

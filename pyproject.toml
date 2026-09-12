@@ -1,0 +1,48 @@
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+extend-exclude = [".backend", "docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+# Everything below is a real violation we have chosen not to fix yet, kept
+# separate from the rules that are clean so CI stays a meaningful gate.
+# Delete an entry, run `ruff check`, fix what it reports.
+ignore = [
+    # --- formatting: 214 violations. Belongs to a dedicated `ruff format` pass.
+    "E501",   # line-too-long
+    "E701",   # multiple-statements-on-one-line
+
+    # --- typing modernization: ~260 violations. py-cord introspects slash
+    # command annotations at registration time, so Dict -> dict and
+    # Optional[X] -> X | None need to be done deliberately and smoke-tested
+    # against a live guild, not swept in with an autofix.
+    "UP006", "UP007", "UP035", "UP045",
+
+    # --- str-mixin enums (ScanType, ScanCommands). StrEnum changes what
+    # str(member) returns, and these members are formatted into SocketIO
+    # payloads, so the swap is not behaviour-preserving.
+    "UP042",
+
+    # --- dead locals: 20 violations, several of which are assignments whose
+    # right-hand side has side effects (e.g. `synced = await sync_commands()`).
+    # Each needs a human read; removing the statement wholesale would be wrong.
+    "F841",
+
+    # --- readability rewrites, no behaviour change, low value until the large
+    # functions they sit inside have been split up.
+    "SIM102", "SIM105", "SIM108", "SIM114", "SIM117",
+    "B007", "B904", "B905",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["cogs", "integrations", "admin_checks", "bot", "database_manager"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+    # py-cord imports audioop, removed in 3.13; nothing we can do from here.
+    "ignore:'audioop' is deprecated:DeprecationWarning",
+]

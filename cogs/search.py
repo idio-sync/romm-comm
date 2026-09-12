@@ -1,22 +1,20 @@
-from discord.ext import commands
-import discord
-import logging
-import re
-from datetime import datetime
-from typing import Dict, List, Optional, Union, Tuple
-import random
-import qrcode
-from PIL import Image
-import io
-import aiohttp
-from io import BytesIO
 import asyncio
-import time
-from urllib.parse import quote
+import logging
+import random
+import re
 from collections import defaultdict
+from datetime import datetime
+from io import BytesIO
+from typing import Dict, List, Optional, Tuple, Union
+from urllib.parse import quote
+
+import aiohttp
+import discord
+import qrcode
+from discord.ext import commands
+from PIL import Image
 
 # Set up logging
-import logging
 logger = logging.getLogger(__name__)
 
 
@@ -1052,7 +1050,7 @@ class ROM_View(discord.ui.View):
                 task.cancel()
                 try:
                     await task
-                except (asyncio.CancelledError, asyncio.TimeoutError):
+                except (TimeoutError, asyncio.CancelledError):
                     # Both exceptions are expected when cancelling tasks
                     pass
 
@@ -1070,7 +1068,7 @@ class ROM_View(discord.ui.View):
                     
                     await self.handle_qr_trigger(interaction, trigger_type)
                     
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # Individual task timed out
                     logger.debug("QR code trigger watch timed out")
                 except Exception as e:
@@ -1079,7 +1077,7 @@ class ROM_View(discord.ui.View):
                 # Both tasks timed out (no task completed)
                 logger.debug("QR code trigger watch timed out")
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # Overall timeout from wait()
             logger.debug("QR code trigger watch timed out")
         except Exception as e:
@@ -1100,7 +1098,7 @@ class ROM_View(discord.ui.View):
                 task.result()
             except asyncio.CancelledError:
                 pass  # Task was cancelled, this is fine
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass  # Task timed out normally, this is fine
             except Exception as e:
                 logger.error(f"Unexpected error in QR trigger task: {e}")
@@ -2006,7 +2004,7 @@ class Search(commands.Cog):
                 # If we're on a broader search, filter results to match original intent
                 if attempt != search_term and all_results:
                     # Filter to games that contain all important words from original search
-                    important_words = [w.lower() for w in words if not w.lower() in ['the', 'of', 'and']]
+                    important_words = [w.lower() for w in words if w.lower() not in ['the', 'of', 'and']]
                     search_results = [
                         rom for rom in all_results
                         if all(word in rom['name'].lower() for word in important_words)

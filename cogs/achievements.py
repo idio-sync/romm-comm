@@ -1,7 +1,8 @@
 import logging
+from urllib.parse import quote_plus
+
 import discord
 from discord.ext import commands
-from urllib.parse import quote_plus
 
 logger = logging.getLogger(__name__)
 

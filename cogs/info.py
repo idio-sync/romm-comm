@@ -1,9 +1,8 @@
+import logging
+from typing import Any, Dict
+
 import discord
 from discord.ext import commands
-from discord.commands import slash_command
-from datetime import datetime
-from typing import Dict, Any
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -357,7 +356,7 @@ class Info(commands.Cog):
             embed.add_field(
                 name="Accessing Content",
                 value=(
-                    f" Your RomM content will now be available in:\n"
+                    " Your RomM content will now be available in:\n"
                     "• The `New Games` tab in Tinfoil\n"
                     "• The `File Browser` section you just configured"
                 ),
@@ -367,7 +366,7 @@ class Info(commands.Cog):
             # Add footer with note
             embed.set_footer(
                 text=(
-                    f"Need help? Check the RomM documentation "
+                    "Need help? Check the RomM documentation "
                     "or ask for support on GitHub/Discord"
                 )
             )

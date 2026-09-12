@@ -1,6 +1,6 @@
 import asyncio
-from datetime import datetime
 import unittest
+from datetime import datetime
 
 from cogs.recent_roms import RecentRomsMonitor
 

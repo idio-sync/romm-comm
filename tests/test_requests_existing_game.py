@@ -1,5 +1,5 @@
-import unittest
 import asyncio
+import unittest
 from unittest.mock import patch
 
 import discord
