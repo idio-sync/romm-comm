@@ -299,6 +299,15 @@ class RequestsRepo:
 
     # ------------------------------------------------------------ subscribers
 
+    async def subscriber_ids(self, request_id: int) -> List[int]:
+        """Discord ids watching a request, besides the original requester."""
+        async with self.db.get_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT user_id FROM request_subscribers WHERE request_id = ?",
+                (request_id,)
+            )
+            return [row['user_id'] for row in await cursor.fetchall()]
+
     async def subscribers_for_requests(self, request_ids: Sequence[int]) -> List[Any]:
         """Subscribers across several requests, for batch notification."""
         if not request_ids:

@@ -38,6 +38,14 @@ def _is_cursor_fetch(node):
     )
 
 
+# Attributes that hold a list of rows. Unlike a local, an attribute is
+# assigned in one method and read in another, so provenance cannot be traced
+# within a single function - these are named instead. An earlier version of
+# this test tracked only locals, and 16 reads of `self.requests[i][1]` sat
+# behind that gap until one of them started crashing.
+ROW_LIST_ATTRIBUTES = {"requests"}
+
+
 class RowVariableCollector(ast.NodeVisitor):
     """Track names bound to a fetch result, then flag integer reads of them.
 
@@ -65,6 +73,15 @@ class RowVariableCollector(ast.NodeVisitor):
             return node.slice.value
         return None
 
+    def _row_list_label(self, node):
+        """Name for `node` if it is something holding a list of rows."""
+        if isinstance(node, ast.Name) and node.id in self.row_list_names:
+            return node.id
+        # self.requests[...] / self.view.requests[...]
+        if isinstance(node, ast.Attribute) and node.attr in ROW_LIST_ATTRIBUTES:
+            return f".{node.attr}"
+        return None
+
     def visit_Subscript(self, node):
         index = self._integer_index(node)
         if index is not None:
@@ -72,10 +89,11 @@ class RowVariableCollector(ast.NodeVisitor):
             # row[0] - a column of a single fetched row.
             if isinstance(inner, ast.Name) and inner.id in self.row_names:
                 self.offences.append((node.lineno, f"{inner.id}[{index}]"))
-            # rows[i][0] - a column of one row out of a fetched list.
-            elif isinstance(inner, ast.Subscript) and isinstance(inner.value, ast.Name):
-                if inner.value.id in self.row_list_names:
-                    self.offences.append((node.lineno, f"{inner.value.id}[..][{index}]"))
+            # rows[i][0] - a column of one row out of a list of rows.
+            elif isinstance(inner, ast.Subscript):
+                label = self._row_list_label(inner.value)
+                if label:
+                    self.offences.append((node.lineno, f"{label}[..][{index}]"))
         self.generic_visit(node)
 
 
@@ -127,6 +145,33 @@ class RowAccessTests(unittest.TestCase):
 
         found = positional_row_reads(path)
         self.assertEqual(["row[1]", "rows[..][2]"], [expr for _, expr in found])
+
+    def test_the_detector_sees_reads_through_an_attribute(self):
+        """A list of rows kept on self is still a list of rows.
+
+        This is the shape that hid 16 positional reads: `self.requests` is
+        filled in one method and read in another, so nothing inside a single
+        function reveals where it came from.
+        """
+        import tempfile
+
+        source = "\n".join([
+            "class View:",
+            "    def show(self):",
+            "        return self.requests[self.index][1]",
+            "    def other(self):",
+            "        return self.view.requests[self.view.index][1]",
+            "    def fine(self):",
+            "        return self.requests[self.index]",
+        ])
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as handle:
+            handle.write(source)
+            path = Path(handle.name)
+
+        self.assertEqual(
+            [".requests[..][1]", ".requests[..][1]"],
+            [expr for _, expr in positional_row_reads(path)],
+        )
 
     def test_every_exemption_names_a_real_file(self):
         for filename in EXEMPT:

@@ -120,9 +120,9 @@ class UserRequestsView(discord.ui.View):
             # Fetch user avatar
             user_avatar_url = None
             try:
-                user = self.bot.get_user(self.requests[self.current_index][1])
+                user = self.bot.get_user(self.requests[self.current_index]['user_id'])
                 if not user:
-                    user = await self.bot.fetch_user(self.requests[self.current_index][1])
+                    user = await self.bot.fetch_user(self.requests[self.current_index]['user_id'])
                 if user and user.avatar:
                     user_avatar_url = user.avatar.url
                 elif user:
@@ -146,9 +146,9 @@ class UserRequestsView(discord.ui.View):
             # Fetch user avatar
             user_avatar_url = None
             try:
-                user = self.bot.get_user(self.requests[self.current_index][1])
+                user = self.bot.get_user(self.requests[self.current_index]['user_id'])
                 if not user:
-                    user = await self.bot.fetch_user(self.requests[self.current_index][1])
+                    user = await self.bot.fetch_user(self.requests[self.current_index]['user_id'])
                 if user and user.avatar:
                     user_avatar_url = user.avatar.url
                 elif user:
@@ -208,9 +208,9 @@ class UserRequestsView(discord.ui.View):
                     # Fetch user avatar
                     user_avatar_url = None
                     try:
-                        user = self.view.bot.get_user(self.view.requests[self.view.current_index][1])
+                        user = self.view.bot.get_user(self.view.requests[self.view.current_index]['user_id'])
                         if not user:
-                            user = await self.view.bot.fetch_user(self.view.requests[self.view.current_index][1])
+                            user = await self.view.bot.fetch_user(self.view.requests[self.view.current_index]['user_id'])
                         if user and user.avatar:
                             user_avatar_url = user.avatar.url
                         elif user:
@@ -285,9 +285,9 @@ class UserRequestsView(discord.ui.View):
                     # Fetch user avatar
                     user_avatar_url = None
                     try:
-                        user = self.view.bot.get_user(self.view.requests[self.view.current_index][1])
+                        user = self.view.bot.get_user(self.view.requests[self.view.current_index]['user_id'])
                         if not user:
-                            user = await self.view.bot.fetch_user(self.view.requests[self.view.current_index][1])
+                            user = await self.view.bot.fetch_user(self.view.requests[self.view.current_index]['user_id'])
                         if user and user.avatar:
                             user_avatar_url = user.avatar.url
                         elif user:
