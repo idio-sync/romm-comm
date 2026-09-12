@@ -1748,7 +1748,11 @@ class Search(commands.Cog):
             endpoint = f'{endpoint}?platform_ids={platform_id}'
 
         try:
-            rom = await self.bot.fetch_api_endpoint(endpoint)
+            # Never serve this from cache: the endpoint exists to be
+            # non-deterministic, and fetch_api_endpoint keys its cache on the
+            # endpoint string, so a cached pick would be the same ROM for the
+            # whole TTL.
+            rom = await self.bot.fetch_api_endpoint(endpoint, bypass_cache=True)
         except Exception as e:
             logger.debug(f"roms/random unavailable: {e}")
             return None

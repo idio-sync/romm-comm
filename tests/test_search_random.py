@@ -10,9 +10,11 @@ class FakeBot:
         self.responses = responses or {}
         self.cache = cache if cache is not None else {}
         self.calls = []
+        self.cache_bypassed = {}
 
     async def fetch_api_endpoint(self, endpoint, bypass_cache=False):
         self.calls.append(endpoint)
+        self.cache_bypassed[endpoint] = bypass_cache
         value = self.responses.get(endpoint)
         if isinstance(value, Exception):
             raise value
@@ -73,6 +75,15 @@ class FetchRandomRomTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(["roms/random", "roms/7"], cog.bot.calls)
         self.assertIn("files", rom, "the embed needs the detailed record")
+
+    async def test_the_pick_is_never_served_from_cache(self):
+        # fetch_api_endpoint keys its cache on the endpoint string, so caching
+        # this one would hand back the same ROM for the whole TTL.
+        cog = build_search({"roms/random": SIMPLE_ROM, "roms/7": DETAILED_ROM})
+
+        await cog.fetch_random_rom()
+
+        self.assertTrue(cog.bot.cache_bypassed["roms/random"])
 
     async def test_simple_rom_is_kept_when_the_detail_fetch_fails(self):
         cog = build_search({"roms/random": SIMPLE_ROM, "roms/7": None})
