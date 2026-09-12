@@ -7,7 +7,7 @@ import string
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
 import discord
@@ -22,6 +22,37 @@ logger = logging.getLogger('romm_bot.users')
 # one of the more aggressively rate limited things a bot can do, and a burst of
 # them is what draws attention to an account.
 BULK_INVITE_DELAY_SECONDS = 1.0
+
+
+def build_unlink_options_embed(discord_user, romm_username: str) -> discord.Embed:
+    """The three ways an account can be unlinked, and what each leaves behind."""
+    embed = discord.Embed(
+        title="🔗 Unlink Account Options",
+        description=(
+            f"How would you like to unlink {discord_user.mention} from RomM user "
+            f"`{romm_username}`?"
+        ),
+        color=discord.Color.blue()
+    )
+    embed.add_field(
+        name="🔓 Unlink Only",
+        value="Remove Discord-RomM connection but keep the RomM account active",
+        inline=False
+    )
+    embed.add_field(
+        name="🔒 Unlink & Disable",
+        value=(
+            "Remove connection AND disable the RomM account "
+            "(user cannot login but account is preserved)"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="🗑️ Unlink & Delete",
+        value="Remove connection AND delete the RomM account completely",
+        inline=False
+    )
+    return embed
 
 
 class InviteOutcome(Enum):
@@ -526,294 +557,279 @@ class UserManagementView(discord.ui.View):
         else:
             await interaction.followup.send("❌ Failed to link accounts", ephemeral=True)
        
+    async def _resolve_romm_user(self, link: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """The RomM user behind a link, by stored id or by username lookup."""
+        romm_id = link.get('romm_id')
+        if romm_id:
+            return {'id': romm_id, 'username': link['romm_username']}
+        return await self.cog.find_user_by_username(link['romm_username'])
+
+    async def _is_admin_account(self, user: Optional[Dict[str, Any]]) -> bool:
+        """Whether a RomM user holds the admin role.
+
+        Admin accounts are refused for every unlink option, so that losing a
+        Discord link cannot lock the server's own administrator out.
+        """
+        if not user:
+            return False
+        users_data = await self.bot.fetch_api_endpoint('users')
+        if not users_data:
+            return False
+        full_user = next((u for u in users_data if u.get('id') == user['id']), None)
+        return bool(full_user) and full_user.get('role', '').upper() == 'ADMIN'
+
+    async def _unlink_and_refresh(self, discord_user) -> None:
+        """Drop the link and put the view back in its unselected state."""
+        await self.cog.db_manager.delete_user_link(discord_user.id)
+        await self.populate_discord_users()
+        self.selected_discord_user = None
+        self.update_button_states()
+
+    async def _log_action(self, title: str, description: str, color: discord.Color) -> None:
+        """Record an unlink in the audit channel, if one is configured."""
+        log_channel = self.bot.get_channel(self.cog.log_channel_id)
+        if log_channel:
+            await log_channel.send(
+                embed=discord.Embed(title=title, description=description, color=color)
+            )
+
+    async def _disable_romm_account(
+        self, user: Optional[Dict[str, Any]], romm_username: str
+    ) -> Tuple[bool, Optional[str]]:
+        """Disable a RomM account. Returns (succeeded, error)."""
+        if not user or 'id' not in user:
+            logger.error(f"User not found in RomM: {romm_username}")
+            return False, "Could not find user in RomM"
+
+        try:
+            logger.info(f"Attempting to disable RomM user: ID={user['id']}, Username={romm_username}")
+
+            # Create a FormData object
+            form_data = aiohttp.FormData()
+            form_data.add_field('enabled', 'false')  # API expects a string 'false' for form data
+
+            result = await self.bot.make_authenticated_request(
+                method="PUT",
+                endpoint=f"users/{user['id']}",
+                form_data=form_data,
+                require_csrf=True
+            )
+
+            if result is not None:
+                logger.info(f"Successfully disabled RomM user {romm_username}")
+                return True, None
+
+            logger.error(f"Failed to disable user {romm_username}: Failed to disable user")
+            return False, "Failed to disable user"
+
+        except Exception as e:
+            logger.error(f"Exception while disabling user {romm_username}: {e}", exc_info=True)
+            return False, str(e)
+
+    async def _delete_romm_account(
+        self, user: Optional[Dict[str, Any]], romm_username: str
+    ) -> Tuple[bool, Optional[str]]:
+        """Delete a RomM account outright. Returns (succeeded, error)."""
+        if not user or 'id' not in user:
+            logger.error(f"User not found in RomM: {romm_username}")
+            return False, "Could not find user in RomM"
+
+        try:
+            logger.info(f"Attempting to delete RomM user: ID={user['id']}, Username={romm_username}")
+
+            result = await self.bot.make_authenticated_request(
+                method="DELETE",
+                endpoint=f"users/{user['id']}",
+                require_csrf=True
+            )
+
+            # make_authenticated_request already turns a no-content success
+            # into {}, so anything but None means it went through.
+            if result is not None:
+                logger.info(f"Successfully deleted RomM user {romm_username}")
+                return True, None
+
+            logger.error(f"Failed to delete user {romm_username}: API returned unexpected response")
+            return False, "API returned unexpected response"
+
+        except Exception as e:
+            logger.error(f"Exception while deleting user {romm_username}: {e}", exc_info=True)
+            return False, str(e)
+
+    def _unlink_anyway_view(self, discord_user) -> discord.ui.View:
+        """Offer to drop the link after the RomM side of the operation failed."""
+        retry_view = discord.ui.View(timeout=30)
+
+        unlink_anyway_btn = discord.ui.Button(
+            label="Unlink Anyway",
+            style=discord.ButtonStyle.primary
+        )
+        cancel_btn = discord.ui.Button(
+            label="Cancel",
+            style=discord.ButtonStyle.secondary
+        )
+
+        async def unlink_anyway_callback(inter: discord.Interaction):
+            await inter.response.defer()
+            await self._unlink_and_refresh(discord_user)
+            await inter.followup.send(
+                f"✅ Unlinked {discord_user.mention} from RomM (account may still exist in RomM)",
+                ephemeral=True
+            )
+            retry_view.stop()
+
+        async def cancel_callback(inter: discord.Interaction):
+            await inter.response.defer()
+            retry_view.stop()
+
+        unlink_anyway_btn.callback = unlink_anyway_callback
+        cancel_btn.callback = cancel_callback
+
+        retry_view.add_item(unlink_anyway_btn)
+        retry_view.add_item(cancel_btn)
+        return retry_view
+
     async def unlink_account_callback(self, interaction: discord.Interaction):
         """Unlink selected Discord user from RomM with options"""
         await interaction.response.defer()
-        
+
         if not self.selected_discord_user:
             await interaction.followup.send("Please select a Discord user", ephemeral=True)
             return
-        
+
         # Store the Discord user before any operations
         discord_user = self.selected_discord_user
-        
-        # Get the existing link
+
         link = await self.cog.db_manager.get_user_link(discord_user.id)
         if not link:
             await interaction.followup.send("This user has no linked account", ephemeral=True)
             return
-        
-        # Get the RomM user details
+
         romm_username = link['romm_username']
-        romm_id = link.get('romm_id')  # Get the stored RomM ID if available
-        
-        # Try to find the user in the API if we don't have the ID
-        user = None
-        if romm_id:
-            # If we have the ID stored, we can use it directly
-            user = {'id': romm_id, 'username': romm_username}
-        else:
-            # Fall back to finding by username
-            user = await self.cog.find_user_by_username(romm_username)
-        
-        # Check if it's an admin account
-        if user:
-            # Fetch full user data if needed to check admin status
-            users_data = await self.bot.fetch_api_endpoint('users')
-            if users_data:
-                full_user = next((u for u in users_data if u.get('id') == user['id']), None)
-                if full_user and full_user.get('role', '').upper() == 'ADMIN':
-                    await interaction.followup.send(
-                        "⚠️ Cannot unlink, disable, or delete admin accounts for safety. Remove admin role in RomM first.",
-                        ephemeral=True
-                    )
-                    return
-        
-        # Show confirmation with options
+        user = await self._resolve_romm_user(link)
+
+        if await self._is_admin_account(user):
+            await interaction.followup.send(
+                "⚠️ Cannot unlink, disable, or delete admin accounts for safety. "
+                "Remove admin role in RomM first.",
+                ephemeral=True
+            )
+            return
+
         confirm_view = UnlinkConfirmView()
-        
-        embed = discord.Embed(
-            title="🔗 Unlink Account Options",
-            description=f"How would you like to unlink {discord_user.mention} from RomM user `{romm_username}`?",
-            color=discord.Color.blue()
-        )
-        embed.add_field(
-            name="🔓 Unlink Only",
-            value="Remove Discord-RomM connection but keep the RomM account active",
-            inline=False
-        )
-        embed.add_field(
-            name="🔒 Unlink & Disable",
-            value="Remove connection AND disable the RomM account (user cannot login but account is preserved)",
-            inline=False
-        )
-        embed.add_field(
-            name="🗑️ Unlink & Delete", 
-            value="Remove connection AND delete the RomM account completely",
-            inline=False
-        )
-        
         confirm_msg = await interaction.followup.send(
-            embed=embed,
+            embed=build_unlink_options_embed(discord_user, romm_username),
             view=confirm_view,
             ephemeral=True
         )
-        
+
         await confirm_view.wait()
-        
+
         if not confirm_view.action:
             await confirm_msg.edit(content="Operation cancelled.", embed=None, view=None)
-            return
-        
-        # Process based on selected action
-        if confirm_view.action == 'unlink_only':
-            # Just remove the link from database
-            await self.cog.db_manager.delete_user_link(discord_user.id)
-            
-            # Refresh the view
-            await self.populate_discord_users()
-            self.selected_discord_user = None
-            self.update_button_states()
-            
+        elif confirm_view.action == 'unlink_only':
+            await self._unlink_only(confirm_msg, discord_user, romm_username)
+        elif confirm_view.action == 'unlink_disable':
+            await self._unlink_and_disable(confirm_msg, discord_user, romm_username, user)
+        elif confirm_view.action == 'unlink_delete':
+            await self._unlink_and_delete(confirm_msg, discord_user, romm_username, user)
+
+        await interaction.edit_original_response(embed=self.create_status_embed(), view=self)
+
+    async def _unlink_only(self, confirm_msg, discord_user, romm_username: str) -> None:
+        """Drop the link and leave the RomM account alone."""
+        await self._unlink_and_refresh(discord_user)
+
+        await confirm_msg.edit(
+            content=(
+                f"✅ Successfully unlinked {discord_user.mention} from RomM user "
+                f"`{romm_username}`\nThe RomM account remains active."
+            ),
+            embed=None,
+            view=None
+        )
+
+        await self._log_action(
+            "🔓 Account Unlinked",
+            f"{discord_user.mention} unlinked from `{romm_username}` (account preserved)",
+            discord.Color.blue(),
+        )
+
+    async def _unlink_and_disable(self, confirm_msg, discord_user, romm_username: str, user) -> None:
+        """Drop the link and leave the RomM account in place but unusable.
+
+        A failed disable still unlinks: the admin asked for the link to go, and
+        the RomM side can be dealt with separately.
+        """
+        disabled, error_msg = await self._disable_romm_account(user, romm_username)
+
+        await self._unlink_and_refresh(discord_user)
+
+        if not disabled:
             await confirm_msg.edit(
-                content=f"✅ Successfully unlinked {discord_user.mention} from RomM user `{romm_username}`\nThe RomM account remains active.",
+                content=(
+                    f"❌ Failed to disable RomM account for `{romm_username}`\n"
+                    f"Error: {error_msg or 'Unknown error'}\n\n"
+                    "The accounts have been unlinked, but the RomM account may still be active."
+                ),
                 embed=None,
                 view=None
             )
-            
-            # Log the action
-            log_channel = self.bot.get_channel(self.cog.log_channel_id)
-            if log_channel:
-                await log_channel.send(
-                    embed=discord.Embed(
-                        title="🔓 Account Unlinked",
-                        description=f"{discord_user.mention} unlinked from `{romm_username}` (account preserved)",
-                        color=discord.Color.blue()
-                    )
-                )
-        
-        elif confirm_view.action == 'unlink_disable':
-            # Disable the RomM account
-            disable_success = False
-            error_msg = None
-            
-            if user and 'id' in user:
-                try:
-                    logger.info(f"Attempting to disable RomM user: ID={user['id']}, Username={romm_username}")
-                    
-                    # Create a FormData object
-                    form_data = aiohttp.FormData()
-                    form_data.add_field('enabled', 'false') # API expects a string 'false' for form data
-                    
-                    # Pass the form_data object instead of params
-                    result = await self.bot.make_authenticated_request(
-                        method="PUT",
-                        endpoint=f"users/{user['id']}",
-                        form_data=form_data,
-                        require_csrf=True
-                    )
-                    
-                    if result is not None:
-                        disable_success = True
-                        logger.info(f"Successfully disabled RomM user {romm_username}")
-                    else:
-                        error_msg = "Failed to disable user"
-                        logger.error(f"Failed to disable user {romm_username}: {error_msg}")
-                        
-                except Exception as e:
-                    error_msg = str(e)
-                    logger.error(f"Exception while disabling user {romm_username}: {e}", exc_info=True)
-            else:
-                error_msg = "Could not find user in RomM"
-                logger.error(f"User not found in RomM: {romm_username}")
-            
-            if disable_success:
-                # Remove from database
-                await self.cog.db_manager.delete_user_link(discord_user.id)
-                
-                # Refresh the view
-                await self.populate_discord_users()
-                self.selected_discord_user = None
-                self.update_button_states()
-                
-                await confirm_msg.edit(
-                    content=f"✅ Successfully unlinked {discord_user.mention} and disabled RomM account `{romm_username}`\nThe account exists but cannot login.",
-                    embed=None,
-                    view=None
-                )
-                
-                # Log the action
-                log_channel = self.bot.get_channel(self.cog.log_channel_id)
-                if log_channel:
-                    await log_channel.send(
-                        embed=discord.Embed(
-                            title="🔒 Account Unlinked & Disabled",
-                            description=f"{discord_user.mention} unlinked from `{romm_username}` (account disabled)",
-                            color=discord.Color.yellow()
-                        )
-                    )
-            else:
-                # Disable failed but we can still offer to unlink
-                await confirm_msg.edit(
-                    content=(
-                        f"❌ Failed to disable RomM account for `{romm_username}`\n"
-                        f"Error: {error_msg or 'Unknown error'}\n\n"
-                        "The accounts have been unlinked, but the RomM account may still be active."
-                    ),
-                    embed=None,
-                    view=None
-                )
-                
-                # Still unlink even if disable failed
-                await self.cog.db_manager.delete_user_link(discord_user.id)
-                await self.populate_discord_users()
-                self.selected_discord_user = None
-                self.update_button_states()
-            
-        elif confirm_view.action == 'unlink_delete':
-            # Try to delete the RomM account
-            delete_success = False
-            error_msg = None
-            
-            if user and 'id' in user:
-                try:
-                    # Log the deletion attempt
-                    logger.info(f"Attempting to delete RomM user: ID={user['id']}, Username={romm_username}")
-                    
-                    # Use the delete method with proper error handling
-                    result = await self.bot.make_authenticated_request(
-                        method="DELETE",
-                        endpoint=f"users/{user['id']}",
-                        require_csrf=True
-                    )
-                    
-                    # Check if deletion was successful
-                    if result is not None or result == {}:  # API might return empty dict on success
-                        delete_success = True
-                        logger.info(f"Successfully deleted RomM user {romm_username}")
-                    else:
-                        error_msg = "API returned unexpected response"
-                        logger.error(f"Failed to delete user {romm_username}: {error_msg}")
-                        
-                except Exception as e:
-                    error_msg = str(e)
-                    logger.error(f"Exception while deleting user {romm_username}: {e}", exc_info=True)
-            else:
-                error_msg = "Could not find user in RomM"
-                logger.error(f"User not found in RomM: {romm_username}")
-            
-            if delete_success:
-                # Remove from database
-                await self.cog.db_manager.delete_user_link(discord_user.id)
-                
-                # Refresh the view
-                await self.populate_discord_users()
-                self.selected_discord_user = None
-                self.update_button_states()
-                
-                await confirm_msg.edit(
-                    content=f"✅ Successfully unlinked {discord_user.mention} and deleted RomM account `{romm_username}`",
-                    embed=None,
-                    view=None
-                )
-                
-                # Log the deletion
-                log_channel = self.bot.get_channel(self.cog.log_channel_id)
-                if log_channel:
-                    await log_channel.send(
-                        embed=discord.Embed(
-                            title="🗑️ Account Unlinked & Deleted",
-                            description=f"{discord_user.mention} unlinked from `{romm_username}` (account deleted)",
-                            color=discord.Color.red()
-                        )
-                    )
-            else:
-                # Deletion failed but we can still offer to unlink
-                retry_view = discord.ui.View(timeout=30)
-                
-                unlink_anyway_btn = discord.ui.Button(
-                    label="Unlink Anyway",
-                    style=discord.ButtonStyle.primary
-                )
-                cancel_btn = discord.ui.Button(
-                    label="Cancel",
-                    style=discord.ButtonStyle.secondary
-                )
-                
-                async def unlink_anyway_callback(inter: discord.Interaction):
-                    await inter.response.defer()
-                    await self.cog.db_manager.delete_user_link(discord_user.id)
-                    await self.populate_discord_users()
-                    self.selected_discord_user = None
-                    self.update_button_states()
-                    await inter.followup.send(
-                        f"✅ Unlinked {discord_user.mention} from RomM (account may still exist in RomM)",
-                        ephemeral=True
-                    )
-                    retry_view.stop()
-                
-                async def cancel_callback(inter: discord.Interaction):
-                    await inter.response.defer()
-                    retry_view.stop()
-                
-                unlink_anyway_btn.callback = unlink_anyway_callback
-                cancel_btn.callback = cancel_callback
-                
-                retry_view.add_item(unlink_anyway_btn)
-                retry_view.add_item(cancel_btn)
-                
-                await confirm_msg.edit(
-                    content=(
-                        f"❌ Failed to delete RomM account for `{romm_username}`\n"
-                        f"Error: {error_msg or 'Unknown error'}\n\n"
-                        "Would you like to unlink the accounts anyway? "
-                        "(The RomM account will remain active)"
-                    ),
-                    embed=None,
-                    view=retry_view
-                )
-        
-        await interaction.edit_original_response(embed=self.create_status_embed(), view=self)
+            return
+
+        await confirm_msg.edit(
+            content=(
+                f"✅ Successfully unlinked {discord_user.mention} and disabled RomM account "
+                f"`{romm_username}`\nThe account exists but cannot login."
+            ),
+            embed=None,
+            view=None
+        )
+
+        await self._log_action(
+            "🔒 Account Unlinked & Disabled",
+            f"{discord_user.mention} unlinked from `{romm_username}` (account disabled)",
+            discord.Color.yellow(),
+        )
+
+    async def _unlink_and_delete(self, confirm_msg, discord_user, romm_username: str, user) -> None:
+        """Drop the link and delete the RomM account.
+
+        Unlike the disable path, a failure here leaves the link in place and
+        asks first - deleting is the irreversible option, so a half-finished
+        one should not be assumed.
+        """
+        deleted, error_msg = await self._delete_romm_account(user, romm_username)
+
+        if not deleted:
+            await confirm_msg.edit(
+                content=(
+                    f"❌ Failed to delete RomM account for `{romm_username}`\n"
+                    f"Error: {error_msg or 'Unknown error'}\n\n"
+                    "Would you like to unlink the accounts anyway? "
+                    "(The RomM account will remain active)"
+                ),
+                embed=None,
+                view=self._unlink_anyway_view(discord_user)
+            )
+            return
+
+        await self._unlink_and_refresh(discord_user)
+
+        await confirm_msg.edit(
+            content=(
+                f"✅ Successfully unlinked {discord_user.mention} and deleted RomM account "
+                f"`{romm_username}`"
+            ),
+            embed=None,
+            view=None
+        )
+
+        await self._log_action(
+            "🗑️ Account Unlinked & Deleted",
+            f"{discord_user.mention} unlinked from `{romm_username}` (account deleted)",
+            discord.Color.red(),
+        )
     
     async def send_invite_callback(self, interaction: discord.Interaction):
         """Send an invite link to the selected Discord user by calling the main cog method."""
