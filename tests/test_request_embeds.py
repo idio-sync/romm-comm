@@ -14,6 +14,7 @@ import tempfile
 import unittest
 
 from cogs.requests import REQUEST_COLUMNS, RequestAdminView, UserRequestsView
+from cogs.requests.embeds import DEFAULT_THUMBNAIL, parse_request_details
 from database_manager import MasterDatabase
 
 
@@ -99,6 +100,45 @@ class RequestColumnsTests(unittest.TestCase):
         self.assertIsNone(row["platform_mapping_id"])
 
 
+class ParseRequestDetailsTests(unittest.TestCase):
+    """The details column carries structured data as free text.
+
+    Now that parsing is a pure function rather than the opening 30 lines of a
+    233-line method, it can be tested directly instead of through an embed.
+    """
+
+    def test_plain_details_fall_back_to_the_requested_name(self):
+        parsed = parse_request_details("PAL copy please", fallback_name="GoldenEye 007")
+        self.assertEqual("GoldenEye 007", parsed.igdb_name)
+        self.assertEqual({}, parsed.game_data)
+        self.assertIsNone(parsed.cover_url)
+
+    def test_igdb_metadata_block_is_extracted(self):
+        details = "\n".join([
+            "IGDB Metadata:",
+            "Game: GoldenEye 007 (1997)",
+            "Genres: Shooter, Adventure",
+            "Release Date: 1997-08-25",
+            "Cover URL: https://images.igdb.com/cover.jpg",
+        ])
+        parsed = parse_request_details(details, fallback_name="ignored")
+        self.assertEqual("GoldenEye 007", parsed.igdb_name)
+        self.assertEqual("Shooter, Adventure", parsed.game_data["Genres"])
+        self.assertEqual("https://images.igdb.com/cover.jpg", parsed.cover_url)
+
+    def test_version_request_and_notes_are_split(self):
+        details = "\n".join(["Version Request: PAL", "Additional Notes: boxed if possible"])
+        parsed = parse_request_details(details, fallback_name="x")
+        self.assertEqual("PAL", parsed.version_request)
+        self.assertEqual("boxed if possible", parsed.additional_notes)
+
+    def test_empty_details_do_not_raise(self):
+        for value in ("", None):
+            parsed = parse_request_details(value, fallback_name="x")
+            self.assertEqual("x", parsed.igdb_name)
+            self.assertIsNone(parsed.version_request)
+
+
 class EmbedBuilderTests(unittest.TestCase):
     """Both views build the same embed; assert against both so they cannot drift."""
 
@@ -153,6 +193,11 @@ class EmbedBuilderTests(unittest.TestCase):
             self.assertEqual("an-admin", self.field(embed, "✍️ Fulfilled By"))
             self.assertEqual("Added from the weekly drop", self.field(embed, "Admin Notes"))
             self.assertEqual("Yes", self.field(embed, "🤖 Auto-Fulfilled"))
+
+    def test_falls_back_to_the_project_thumbnail(self):
+        row = insert_and_fetch()
+        for embed in self.build_both(row):
+            self.assertEqual(DEFAULT_THUMBNAIL, embed.thumbnail.url)
 
     def test_rejected_request_labels_the_actor_as_rejecter(self):
         row = insert_and_fetch(status="reject", fulfilled_by=99, fulfiller_name="an-admin")
