@@ -8,13 +8,21 @@ Also covers navigating a view after a request has been actioned, which broke
 when rows started being stored back as dicts.
 """
 
+import contextlib
 import sqlite3
 import unittest
 
 import discord
 
+from cogs.requests.embeds import STATUS_EMOJI
+from cogs.requests.notifications import (
+    cancelled_message,
+    fulfilled_message,
+    rejected_message,
+)
 from cogs.requests.repo import REQUEST_COLUMNS
 from cogs.requests.views_admin import RequestAdminView
+from cogs.requests.views_user import UserRequestsView
 
 _ROW_CONN = sqlite3.connect(":memory:")
 _ROW_CONN.row_factory = sqlite3.Row
@@ -79,14 +87,22 @@ class FakeBot:
 
 
 class FakeRepo:
-    """Only what the fulfil path asks of the repository."""
+    """Only what the request-ending paths ask of the repository."""
 
     def __init__(self, subscriber_ids=()):
         self._subscriber_ids = list(subscriber_ids)
         self.fulfilled = []
+        self.rejected = []
+        self.cancelled = []
 
     async def mark_fulfilled(self, request_id, *, by_id, by_name):
         self.fulfilled.append((request_id, by_id, by_name))
+
+    async def mark_rejected(self, request_id, *, by_id, by_name, reason):
+        self.rejected.append((request_id, reason))
+
+    async def mark_cancelled(self, request_id, *, reason):
+        self.cancelled.append((request_id, reason))
 
     async def get_ggr_request_id(self, request_id):
         return None
@@ -98,6 +114,7 @@ class FakeRepo:
 class FakeResponse:
     def __init__(self):
         self.deferred = False
+        self.modal = None
 
     async def defer(self):
         self.deferred = True
@@ -107,6 +124,9 @@ class FakeResponse:
 
     async def edit_message(self, *args, **kwargs):
         return None
+
+    async def send_modal(self, modal):
+        self.modal = modal
 
 
 class FakeFollowup:
@@ -128,8 +148,20 @@ class FakeInteraction:
         self.message = None
 
 
-async def no_sleep(_seconds):
-    return None
+@contextlib.contextmanager
+def instant_dms():
+    """Skip the one-second pacing between DMs."""
+    import cogs.requests.notifications as module
+
+    async def no_sleep(_seconds):
+        return None
+
+    original = module.asyncio.sleep
+    module.asyncio.sleep = no_sleep
+    try:
+        yield
+    finally:
+        module.asyncio.sleep = original
 
 
 class SubscriberNotificationTests(unittest.IsolatedAsyncioTestCase):
@@ -142,14 +174,8 @@ class SubscriberNotificationTests(unittest.IsolatedAsyncioTestCase):
         view.repo = FakeRepo(subscriber_ids)
         view.message = type("M", (), {"id": 1})()
 
-        import cogs.requests.views_admin as module
-
-        original_sleep = module.asyncio.sleep
-        module.asyncio.sleep = no_sleep
-        try:
+        with instant_dms():
             await view.fulfill_callback(FakeInteraction())
-        finally:
-            module.asyncio.sleep = original_sleep
 
         return requester, view, bot
 
@@ -191,7 +217,7 @@ class SubscriberNotificationTests(unittest.IsolatedAsyncioTestCase):
         ))
         reachable = FakeUser(102)
 
-        with self.assertLogs("cogs.requests.views_admin", level="WARNING"):
+        with self.assertLogs("cogs.requests.notifications", level="WARNING"):
             await self.fulfil(subscriber_ids=[101, 102], extra_users=[blocked, reachable])
 
         self.assertEqual([], blocked.messages)
@@ -200,7 +226,7 @@ class SubscriberNotificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_an_unknown_subscriber_does_not_stop_the_rest(self):
         reachable = FakeUser(102)
 
-        with self.assertLogs("cogs.requests.views_admin", level="WARNING"):
+        with self.assertLogs("cogs.requests.notifications", level="WARNING"):
             await self.fulfil(subscriber_ids=[999, 102], extra_users=[reachable])
 
         self.assertEqual(1, len(reachable.messages))
@@ -209,6 +235,107 @@ class SubscriberNotificationTests(unittest.IsolatedAsyncioTestCase):
         _, _, bot = await self.fulfil(subscriber_ids=[])
 
         self.assertEqual([42], bot.fetched)
+
+
+class RejectionNotificationTests(unittest.IsolatedAsyncioTestCase):
+    """A rejected request is a dead end for everyone waiting on it."""
+
+    async def reject(self, subscriber_ids=(), extra_users=(), reason="not obtainable"):
+        requester = FakeUser(42)
+        bot = FakeBot([requester, *extra_users])
+
+        view = RequestAdminView(bot, [request_row()], admin_id=1, db=None)
+        view.repo = FakeRepo(subscriber_ids)
+        view.message = type("M", (), {"id": 1})()
+
+        interaction = FakeInteraction()
+        await view.reject_callback(interaction)
+        modal = interaction.response.modal
+        modal.reason.value = reason
+
+        with instant_dms():
+            await modal.callback(FakeInteraction())
+
+        return requester, view
+
+    async def test_the_requester_keeps_their_own_wording(self):
+        requester, _ = await self.reject()
+
+        self.assertIn("Your request for 'GoldenEye 007' has been rejected", requester.messages[0])
+
+    async def test_subscribers_are_told_and_pointed_at_request(self):
+        watcher = FakeUser(101)
+        await self.reject(subscriber_ids=[101], extra_users=[watcher])
+
+        message = watcher.messages[0]
+        self.assertIn("The request you're following for 'GoldenEye 007' was rejected", message)
+        self.assertIn("Reason: not obtainable", message)
+        self.assertIn("/request", message)
+
+    async def test_no_reason_means_no_reason_line(self):
+        watcher = FakeUser(101)
+        await self.reject(subscriber_ids=[101], extra_users=[watcher], reason="")
+
+        self.assertNotIn("Reason:", watcher.messages[0])
+        self.assertIn("/request", watcher.messages[0])
+
+
+class CancellationNotificationTests(unittest.IsolatedAsyncioTestCase):
+    """The requester walking away strands everyone who joined their wait list."""
+
+    async def cancel(self, subscriber_ids=(), extra_users=()):
+        bot = FakeBot([FakeUser(42), *extra_users])
+
+        view = UserRequestsView(bot, [request_row()], user_id=42, db=None)
+        view.repo = FakeRepo(subscriber_ids)
+        view.message = type("M", (), {"id": 1})()
+
+        interaction = FakeInteraction(user_id=42)
+        await view.cancel_callback(interaction)
+        modal = interaction.response.modal
+        modal.reason.value = "changed my mind"
+
+        with instant_dms():
+            await modal.callback(FakeInteraction(user_id=42))
+
+        return view
+
+    async def test_subscribers_are_told_who_cancelled_and_what_to_do(self):
+        watcher = FakeUser(101)
+        await self.cancel(subscriber_ids=[101], extra_users=[watcher])
+
+        message = watcher.messages[0]
+        self.assertIn("was cancelled by the person who made it", message)
+        self.assertIn("GoldenEye 007", message)
+        self.assertIn("/request", message)
+
+    async def test_the_request_is_still_cancelled(self):
+        view = await self.cancel()
+
+        self.assertEqual([(7, "changed my mind")], view.repo.cancelled)
+
+
+class MessageWordingTests(unittest.TestCase):
+    """The three messages a subscriber can receive, side by side."""
+
+    def test_none_of_them_call_it_the_reader_s_own_request(self):
+        for message in (
+            fulfilled_message("X"),
+            rejected_message("X"),
+            cancelled_message("X"),
+        ):
+            self.assertIn("The request you're following", message)
+            self.assertNotIn("Your request", message)
+
+    def test_only_the_dead_ends_suggest_requesting_it_yourself(self):
+        self.assertNotIn("/request", fulfilled_message("X"))
+        self.assertIn("/request", rejected_message("X"))
+        self.assertIn("/request", cancelled_message("X"))
+
+    def test_each_carries_the_status_emoji_the_embeds_use(self):
+        self.assertTrue(fulfilled_message("X").startswith(STATUS_EMOJI["fulfilled"]))
+        self.assertTrue(rejected_message("X").startswith(STATUS_EMOJI["reject"]))
+        self.assertTrue(cancelled_message("X").startswith(STATUS_EMOJI["cancelled"]))
 
 
 class RowStorageAfterActionTests(unittest.IsolatedAsyncioTestCase):

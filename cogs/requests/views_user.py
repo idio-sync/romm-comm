@@ -5,6 +5,7 @@ import logging
 import discord
 
 from .embeds import build_request_embed
+from .notifications import cancelled_message, notify_subscribers
 from .repo import RequestsRepo
 
 logger = logging.getLogger(__name__)
@@ -195,7 +196,19 @@ class UserRequestsView(discord.ui.View):
                 
                 try:
                     await self.view.repo.mark_cancelled(request_id, reason=reason)
-                    
+
+                    # Everyone who joined the wait list for this request is
+                    # now waiting on something that no longer exists. Tell
+                    # them, and that they can file their own.
+                    igdb_game_name = self.request_data['igdb_game_name']
+                    display_game_name = igdb_game_name or self.request_data['game_name']
+                    await notify_subscribers(
+                        self.view.bot,
+                        self.view.repo,
+                        request_id,
+                        cancelled_message(display_game_name),
+                    )
+
                     # Update the request in our list
                     updated_request = dict(self.request_data)
                     updated_request['status'] = 'cancelled'

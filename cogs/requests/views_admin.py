@@ -1,11 +1,16 @@
 """The admin-facing request browser."""
 
-import asyncio
 import logging
 
 import discord
 
 from .embeds import build_request_embed
+from .notifications import (
+    fulfilled_message,
+    notify,
+    notify_subscribers,
+    rejected_message,
+)
 from .repo import RequestsRepo
 
 logger = logging.getLogger(__name__)
@@ -149,35 +154,6 @@ class RequestAdminView(discord.ui.View):
             embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
             await interaction.response.edit_message(embed=embed, view=self)
     
-    async def _notify(self, user_id: int, message: str) -> bool:
-        """DM one user. A closed inbox is not an error worth propagating."""
-        try:
-            user = await self.bot.fetch_user(user_id)
-            await user.send(message)
-            return True
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
-            logger.warning(f"Could not DM user {user_id}: {e}")
-            return False
-
-    async def _notify_subscribers(self, request_id: int, display_game_name: str) -> None:
-        """Tell everyone on a request's wait list that it landed.
-
-        Each DM is attempted independently, so one person with DMs closed does
-        not cut the rest of the list short, and they are paced the way the
-        scan notifications are.
-        """
-        subscriber_ids = await self.repo.subscriber_ids(request_id)
-        if not subscriber_ids:
-            return
-
-        message = f"✅ The request you're following for '{display_game_name}' has been fulfilled!"
-        logger.info(f"Notifying {len(subscriber_ids)} subscriber(s) of request #{request_id}")
-
-        for index, user_id in enumerate(subscriber_ids):
-            if index:
-                await asyncio.sleep(1)  # Same pacing as the scan notifications.
-            await self._notify(user_id, message)
-
     async def fulfill_callback(self, interaction: discord.Interaction):
         """Mark current request as fulfilled"""
         if not self.bot.is_admin(interaction.user):
@@ -220,7 +196,8 @@ class RequestAdminView(discord.ui.View):
             display_game_name = igdb_game_name if igdb_game_name else current_request['game_name']
 
             # Notify original requester
-            await self._notify(
+            await notify(
+                self.bot,
                 current_request['user_id'],
                 f"✅ Your request for '{display_game_name}' has been fulfilled!"
             )
@@ -228,7 +205,9 @@ class RequestAdminView(discord.ui.View):
             # Notify everyone who joined the wait list for this request. They
             # were promised this DM when they subscribed, and until now it was
             # never sent.
-            await self._notify_subscribers(request_id, display_game_name)
+            await notify_subscribers(
+                self.bot, self.repo, request_id, fulfilled_message(display_game_name)
+            )
 
             # Update the request in our list
             updated_request = dict(current_request)
@@ -317,19 +296,25 @@ class RequestAdminView(discord.ui.View):
                             else:
                                 logger.error(f"❌ Failed to sync rejection to ggrequestz: {sync_result.get('error')}")
 
-                    # Notify user
-                    try:
-                        # Prioritize the stored IGDB name, fall back to the user's requested name
-                        igdb_game_name = self.request_data['igdb_game_name']
-                        display_game_name = igdb_game_name if igdb_game_name else self.request_data['game_name']
+                    # Prioritize the stored IGDB name, fall back to the user's requested name
+                    igdb_game_name = self.request_data['igdb_game_name']
+                    display_game_name = igdb_game_name if igdb_game_name else self.request_data['game_name']
 
-                        user = await self.view.bot.fetch_user(self.request_data['user_id'])
-                        message = f"❌ Your request for '{display_game_name}' has been rejected."
-                        if reason:
-                            message += f"\nReason: {reason}"
-                        await user.send(message)
-                    except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
-                        logger.warning(f"Could not DM user {self.request_data['user_id']}: {e}")
+                    # Notify user
+                    message = f"❌ Your request for '{display_game_name}' has been rejected."
+                    if reason:
+                        message += f"\nReason: {reason}"
+                    await notify(self.view.bot, self.request_data['user_id'], message)
+
+                    # And everyone waiting on it. A rejected request stops
+                    # blocking duplicates, so they are told they can file
+                    # their own rather than left waiting on a dead one.
+                    await notify_subscribers(
+                        self.view.bot,
+                        self.view.repo,
+                        request_id,
+                        rejected_message(display_game_name, reason),
+                    )
 
                     # Update the request in our list
                     updated_request = dict(self.request_data)
