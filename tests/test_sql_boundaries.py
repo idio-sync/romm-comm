@@ -36,7 +36,6 @@ REPOSITORIES = {
 ALLOWED = {
     Path("cogs/emoji_manager.py"): "no repository for emoji_sync_state yet",
     Path("cogs/recent_roms.py"): "no repository for posted_roms yet",
-    Path("cogs/user_manager.py"): "no repository for user_links yet",
 }
 
 

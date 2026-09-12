@@ -173,3 +173,70 @@ class PendingInviteTests(unittest.IsolatedAsyncioTestCase):
         invites = await manager.get_all_pending_invites()
         self.assertEqual(1, len(invites), "one outstanding invite per member")
         self.assertEqual("second", invites[0]["jti"])
+
+
+class UserLinkDiscordInfoTests(unittest.IsolatedAsyncioTestCase):
+    """Caching a linked member's Discord display name and avatar.
+
+    These back store_discord_info_for_existing_links, which backfills links
+    made before the bot cached that information.
+    """
+
+    async def make_db(self):
+        directory = tempfile.mkdtemp()
+        manager = MasterDatabase(os.path.join(directory, "test.db"))
+        await manager.initialize()
+        return manager
+
+    async def test_a_fresh_link_is_reported_as_missing_discord_info(self):
+        manager = await self.make_db()
+        await manager.add_user_link(42, "requester", 7)
+
+        self.assertEqual([42], await manager.get_links_missing_discord_info())
+
+    async def test_storing_the_info_takes_it_off_the_list(self):
+        manager = await self.make_db()
+        await manager.add_user_link(42, "requester", 7)
+
+        stored = await manager.set_discord_info(42, "Requester", "avatarkey")
+
+        self.assertTrue(stored)
+        self.assertEqual([], await manager.get_links_missing_discord_info())
+
+    async def test_the_stored_values_read_back(self):
+        manager = await self.make_db()
+        await manager.add_user_link(42, "requester", 7)
+        await manager.set_discord_info(42, "Requester", "avatarkey")
+
+        link = await manager.get_user_link(42)
+
+        self.assertEqual("Requester", link["discord_username"])
+        self.assertEqual("avatarkey", link["discord_avatar"])
+
+    async def test_a_member_with_no_avatar_still_counts_as_filled_in(self):
+        """The avatar is optional; the username is what the query keys on."""
+        manager = await self.make_db()
+        await manager.add_user_link(42, "requester", 7)
+        await manager.set_discord_info(42, "Requester", None)
+
+        self.assertEqual([], await manager.get_links_missing_discord_info())
+
+    async def test_an_empty_username_still_counts_as_missing(self):
+        manager = await self.make_db()
+        await manager.add_user_link(42, "requester", 7)
+        await manager.set_discord_info(42, "", None)
+
+        self.assertEqual([42], await manager.get_links_missing_discord_info())
+
+    async def test_only_links_needing_it_are_returned(self):
+        manager = await self.make_db()
+        await manager.add_user_link(42, "one", 7)
+        await manager.add_user_link(43, "two", 8)
+        await manager.set_discord_info(42, "One", None)
+
+        self.assertEqual([43], await manager.get_links_missing_discord_info())
+
+    async def test_storing_against_an_unknown_link_is_harmless(self):
+        manager = await self.make_db()
+
+        self.assertTrue(await manager.set_discord_info(9999, "Nobody", None))

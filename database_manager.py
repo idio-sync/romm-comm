@@ -755,6 +755,44 @@ class MasterDatabase:
             logger.error(f"Error getting all user links: {e}")
             return []
 
+    async def get_links_missing_discord_info(self) -> List[int]:
+        """Discord ids of links that have no cached username yet.
+
+        Links made before the bot started caching Discord display names, or
+        made by a path that did not have the member to hand.
+        """
+        try:
+            async with self.get_connection() as db:
+                cursor = await db.execute(
+                    """
+                    SELECT discord_id FROM user_links
+                    WHERE discord_username IS NULL OR discord_username = ''
+                    """
+                )
+                return [row['discord_id'] for row in await cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Error fetching links missing Discord info: {e}")
+            return []
+
+    async def set_discord_info(
+        self, discord_id: int, discord_username: str, discord_avatar: Optional[str]
+    ) -> bool:
+        """Cache a linked member's Discord display name and avatar."""
+        try:
+            async with self.get_connection() as db:
+                await db.execute(
+                    """
+                    UPDATE user_links
+                    SET discord_username = ?, discord_avatar = ?
+                    WHERE discord_id = ?
+                    """,
+                    (discord_username, discord_avatar, discord_id)
+                )
+                return True
+        except Exception as e:
+            logger.error(f"Error storing Discord info for {discord_id}: {e}")
+            return False
+
     async def add_pending_invite(self, discord_id: int, jti: Optional[str],
                                  role: str, sent_at: str,
                                  expires_at: Optional[str]) -> bool:

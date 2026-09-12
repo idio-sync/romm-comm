@@ -297,14 +297,11 @@ class UserManagementView(discord.ui.View):
         discord_to_romm = {}
         
         try:
-            async with self.cog.db_manager.get_connection() as db:
-                cursor = await db.execute("SELECT discord_id, romm_username, romm_id FROM user_links")
-                rows = await cursor.fetchall()
-                for row in rows:
-                    discord_id, romm_username, romm_id = row
-                    linked_usernames.add(romm_username.lower() if romm_username else "")
-                    linked_romm_ids.add(romm_id)
-                    discord_to_romm[discord_id] = romm_username
+            for link in await self.cog.db_manager.get_all_user_links():
+                romm_username = link['romm_username']
+                linked_usernames.add(romm_username.lower() if romm_username else "")
+                linked_romm_ids.add(link['romm_id'])
+                discord_to_romm[link['discord_id']] = romm_username
         except Exception as e:
             logger.error(f"Error fetching linked users: {e}")
         
@@ -1260,42 +1257,31 @@ class UserManager(commands.Cog):
     async def store_discord_info_for_existing_links(self):
         """Update existing links with Discord username and avatar info"""
         try:
-            async with self.db_manager.get_connection() as db:
-                # Get all links without Discord info
-                cursor = await db.execute("""
-                    SELECT discord_id FROM user_links
-                    WHERE discord_username IS NULL OR discord_username = ''
-                """)
-                rows = await cursor.fetchall()
+            discord_ids = await self.db_manager.get_links_missing_discord_info()
 
-                for row in rows:
-                    discord_id = row['discord_id']
-                    try:
-                        # Get Discord user info
-                        guild = self.bot.get_guild(self.bot.config.GUILD_ID)
-                        member = guild.get_member(discord_id) if guild else None
+            for discord_id in discord_ids:
+                try:
+                    # Get Discord user info
+                    guild = self.bot.get_guild(self.bot.config.GUILD_ID)
+                    member = guild.get_member(discord_id) if guild else None
 
-                        if member:
-                            discord_username = member.display_name
-                            discord_avatar = member.avatar.key if member.avatar else None
-                        else:
-                            # Fallback to fetch_user
-                            discord_user = await self.bot.fetch_user(discord_id)
-                            discord_username = discord_user.display_name
-                            discord_avatar = discord_user.avatar.key if discord_user.avatar else None
+                    if member:
+                        discord_username = member.display_name
+                        discord_avatar = member.avatar.key if member.avatar else None
+                    else:
+                        # Fallback to fetch_user
+                        discord_user = await self.bot.fetch_user(discord_id)
+                        discord_username = discord_user.display_name
+                        discord_avatar = discord_user.avatar.key if discord_user.avatar else None
 
-                        # Update database
-                        await db.execute("""
-                            UPDATE user_links
-                            SET discord_username = ?, discord_avatar = ?
-                            WHERE discord_id = ?
-                        """, (discord_username, discord_avatar, discord_id))
+                    await self.db_manager.set_discord_info(
+                        discord_id, discord_username, discord_avatar
+                    )
 
-                    except Exception as e:
-                        logger.warning(f"Could not update Discord info for {discord_id}: {e}")
+                except Exception as e:
+                    logger.warning(f"Could not update Discord info for {discord_id}: {e}")
 
-                # Note: get_connection() context manager handles commit automatically
-                logger.info(f"Updated Discord info for {len(rows)} existing user links")
+            logger.info(f"Updated Discord info for {len(discord_ids)} existing user links")
 
         except Exception as e:
             logger.error(f"Error updating existing links: {e}")
