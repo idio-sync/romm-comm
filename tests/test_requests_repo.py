@@ -160,13 +160,53 @@ class StatusTransitionTests(unittest.TestCase):
         self.assertEqual("changed my mind", row["notes"])
         self.assertIsNone(row["fulfilled_by"])
 
-    def test_mark_auto_fulfilled_sets_the_flag(self):
-        row = self.fulfil_and_read(
-            "mark_auto_fulfilled", by_id=9, by_name="RomM", notes="found in scan"
-        )
+    def test_mark_auto_fulfilled_closes_a_batch_without_a_fulfiller(self):
+        """A scan closed these, so no person is recorded as having done it."""
+
+        async def go(db):
+            repo = RequestsRepo(db)
+            first = await make_request(repo, game_name="One")
+            second = await make_request(repo, game_name="Two")
+            await repo.mark_auto_fulfilled([
+                (first, "found in scan"),
+                (second, "also found"),
+            ])
+            return {row["game_name"]: row for row in await repo.list_all()}
+
+        rows = run(go)
+        for name, note in (("One", "found in scan"), ("Two", "also found")):
+            self.assertEqual("fulfilled", rows[name]["status"])
+            self.assertTrue(rows[name]["auto_fulfilled"])
+            self.assertEqual(note, rows[name]["notes"])
+            self.assertIsNone(rows[name]["fulfilled_by"])
+
+    def test_an_empty_batch_touches_no_connection(self):
+        """Asserts the short-circuit, not the outcome.
+
+        executemany over an empty list changes nothing anyway, so checking the
+        rows would pass with or without the guard. What the guard buys is that
+        a scan matching no requests opens no connection at all.
+        """
+
+        class ExplodingDatabase:
+            def get_connection(self):
+                raise AssertionError("no connection should be opened")
+
+        async def go():
+            await RequestsRepo(ExplodingDatabase()).mark_auto_fulfilled([])
+
+        asyncio.run(go())
+
+    def test_apply_synced_status_overwrites_status_and_notes(self):
+        async def go(db):
+            repo = RequestsRepo(db)
+            request_id = await make_request(repo)
+            await repo.apply_synced_status(request_id, "fulfilled", "Synced from ggrequestz")
+            return (await repo.list_all())[0]
+
+        row = run(go)
         self.assertEqual("fulfilled", row["status"])
-        self.assertTrue(row["auto_fulfilled"])
-        self.assertEqual("found in scan", row["notes"])
+        self.assertEqual("Synced from ggrequestz", row["notes"])
 
     def test_set_notes_does_not_change_status(self):
         async def go(db):
@@ -210,9 +250,21 @@ class GGRequestzLinkTests(unittest.TestCase):
             linked = await make_request(repo, game_name="Linked")
             await make_request(repo, game_name="Unlinked")
             await repo.set_ggr_request_id(linked, 555)
-            return [row["game_name"] for row in await repo.list_synced_with_ggrequestz()]
+            return [row["game_name"] for row in await repo.list_open_synced_with_ggrequestz()]
 
         self.assertEqual(["Linked"], run(go))
+
+    def test_a_closed_request_has_no_status_left_to_reconcile(self):
+        async def go(db):
+            repo = RequestsRepo(db)
+            done = await make_request(repo, game_name="Done")
+            still_open = await make_request(repo, game_name="Open")
+            await repo.set_ggr_request_id(done, 1)
+            await repo.set_ggr_request_id(still_open, 2)
+            await repo.mark_fulfilled(done, by_id=9, by_name="admin")
+            return [row["game_name"] for row in await repo.list_open_synced_with_ggrequestz()]
+
+        self.assertEqual(["Open"], run(go))
 
     def test_synced_list_can_be_narrowed_to_one_user(self):
         async def go(db):
@@ -221,7 +273,8 @@ class GGRequestzLinkTests(unittest.TestCase):
             theirs = await make_request(repo, user_id=2, game_name="Theirs")
             await repo.set_ggr_request_id(mine, 1)
             await repo.set_ggr_request_id(theirs, 2)
-            return [row["game_name"] for row in await repo.list_synced_with_ggrequestz(user_id=1)]
+            rows = await repo.list_open_synced_with_ggrequestz(user_id=1)
+            return [row["game_name"] for row in rows]
 
         self.assertEqual(["Mine"], run(go))
 
@@ -231,9 +284,9 @@ class SubscriberTests(unittest.TestCase):
         async def go(db):
             repo = RequestsRepo(db)
             request_id = await make_request(repo)
-            return await repo.subscriber_ids(request_id), await repo.count_subscribers(request_id)
+            return await repo.count_subscribers(request_id)
 
-        self.assertEqual(([], 0), run(go))
+        self.assertEqual(0, run(go))
 
     def test_adding_and_listing_subscribers(self):
         async def go(db):
@@ -242,14 +295,12 @@ class SubscriberTests(unittest.TestCase):
             await repo.add_subscriber(request_id, 7, "watcher")
             await repo.add_subscriber(request_id, 8, "other")
             return (
-                sorted(await repo.subscriber_ids(request_id)),
                 await repo.count_subscribers(request_id),
                 await repo.is_subscribed(request_id, 7),
                 await repo.is_subscribed(request_id, 99),
             )
 
-        ids, count, subscribed, not_subscribed = run(go)
-        self.assertEqual([7, 8], ids)
+        count, subscribed, not_subscribed = run(go)
         self.assertEqual(2, count)
         self.assertTrue(subscribed)
         self.assertFalse(not_subscribed)
@@ -272,6 +323,21 @@ class SubscriberTests(unittest.TestCase):
             return await RequestsRepo(db).subscribers_for_requests([])
 
         self.assertEqual([], run(go))
+
+
+class ScanListenerTests(unittest.TestCase):
+    """Queries the scan-completion listener runs."""
+
+    def test_list_pending_with_igdb_returns_only_open_requests(self):
+        async def go(db):
+            repo = RequestsRepo(db)
+            done = await make_request(repo, game_name="Done")
+            await make_request(repo, game_name="Open", igdb_id=555)
+            await repo.mark_fulfilled(done, by_id=9, by_name="admin")
+            rows = await repo.list_pending_with_igdb()
+            return [(row["game_name"], row["igdb_id"]) for row in rows]
+
+        self.assertEqual([("Open", 555)], run(go))
 
 
 class PlatformMappingTests(unittest.TestCase):
@@ -317,6 +383,63 @@ class PlatformMappingTests(unittest.TestCase):
             )
 
         self.assertEqual((True, False, False), run(go))
+
+    def test_find_by_any_name_matches_display_or_folder_name(self):
+        """RomM reports platforms under several spellings; any should match."""
+
+        async def go(db):
+            await self._seed(db)
+            repo = PlatformMappingsRepo(db)
+            return [
+                (await repo.find_by_any_name(["Nintendo 64"]))["display_name"],
+                (await repo.find_by_any_name(["n64"]))["display_name"],
+                (await repo.find_by_any_name(["nope", "N64"]))["display_name"],
+                await repo.find_by_any_name(["nope"]),
+                await repo.find_by_any_name([]),
+                await repo.find_by_any_name([None, ""]),
+            ]
+
+        by_display, by_folder, by_second, missing, empty, blanks = run(go)
+        self.assertEqual("Nintendo 64", by_display)
+        self.assertEqual("Nintendo 64", by_folder)
+        self.assertEqual("Nintendo 64", by_second)
+        self.assertIsNone(missing)
+        self.assertIsNone(empty)
+        self.assertIsNone(blanks)
+
+    def test_mark_present_in_romm_records_the_romm_id(self):
+        async def go(db):
+            repo = PlatformMappingsRepo(db)
+            mapping = await repo.find_by_any_name(["Sega Saturn"])
+            await repo.mark_present_in_romm([(mapping["id"], 42)])
+            refreshed = await repo.get_by_display_name("Sega Saturn")
+            return bool(refreshed["in_romm"]), refreshed["romm_id"]
+
+        self.assertEqual((True, 42), run(go))
+
+    def test_search_for_autocomplete_puts_available_platforms_first(self):
+        async def go(db):
+            await self._seed(db)
+            repo = PlatformMappingsRepo(db)
+            rows = await repo.search_for_autocomplete("nintendo")
+            return [(row["display_name"], bool(row["in_romm"])) for row in rows]
+
+        rows = run(go)
+        self.assertTrue(rows, "expected some Nintendo platforms")
+        self.assertTrue(rows[0][1], "a platform RomM has should sort first")
+        self.assertTrue(all("nintendo" in name.lower() for name, _ in rows))
+
+    def test_igdb_slug_for_is_case_insensitive(self):
+        async def go(db):
+            repo = PlatformMappingsRepo(db)
+            return (
+                await repo.igdb_slug_for("nintendo 64"),
+                await repo.igdb_slug_for("Atari Jaguar CD Plus"),
+            )
+
+        found, missing = run(go)
+        self.assertTrue(found)
+        self.assertIsNone(missing)
 
     def test_platform_status_prefers_mapping_id_and_falls_back_to_name(self):
         async def go(db):

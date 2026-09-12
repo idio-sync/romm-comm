@@ -8,7 +8,7 @@ Rows come back as sqlite3.Row, so callers read them by column name.
 """
 
 import logging
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -140,17 +140,37 @@ class RequestsRepo:
             )
             return await cursor.fetchall()
 
-    async def list_synced_with_ggrequestz(self, user_id: Optional[int] = None) -> List[Any]:
-        """Requests that have a ggrequestz counterpart, for status reconciliation."""
-        clause = "WHERE ggr_request_id IS NOT NULL"
+    async def list_open_synced_with_ggrequestz(
+        self, user_id: Optional[int] = None
+    ) -> List[Any]:
+        """Still-open requests that have a ggrequestz counterpart.
+
+        Only pending and approved ones: a request that is already fulfilled or
+        rejected has no status left to reconcile.
+        """
+        clause = "WHERE ggr_request_id IS NOT NULL AND status IN ('pending', 'approved')"
         params: Sequence = ()
         if user_id is not None:
-            clause += " AND user_id = ?"
+            clause = (
+                "WHERE user_id = ? AND ggr_request_id IS NOT NULL "
+                "AND status IN ('pending', 'approved')"
+            )
             params = (user_id,)
         async with self.db.get_connection() as conn:
             cursor = await conn.execute(
                 f"SELECT id, ggr_request_id, status, user_id, game_name FROM requests {clause}",
                 params
+            )
+            return await cursor.fetchall()
+
+    async def list_pending_with_igdb(self) -> List[Any]:
+        """Every pending request, with what is needed to match it to a scan."""
+        async with self.db.get_connection() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT id, user_id, platform, game_name, igdb_id, igdb_game_name
+                FROM requests WHERE status = 'pending'
+                """
             )
             return await cursor.fetchall()
 
@@ -206,22 +226,39 @@ class RequestsRepo:
                 (reason, request_id)
             )
 
-    async def mark_auto_fulfilled(
-        self, request_id: int, *, by_id: int, by_name: str, notes: str
-    ) -> None:
+    async def mark_auto_fulfilled(self, fulfillments: Sequence[Tuple[int, str]]) -> None:
+        """Close requests a scan turned up, as one batch.
+
+        No fulfiller is recorded: nobody did it, the file simply appeared.
+        `fulfillments` is (request_id, notes) pairs.
+        """
+        if not fulfillments:
+            return
+        async with self.db.get_connection() as conn:
+            await conn.executemany(
+                """
+                UPDATE requests
+                SET status = 'fulfilled',
+                    updated_at = CURRENT_TIMESTAMP,
+                    notes = ?,
+                    auto_fulfilled = 1
+                WHERE id = ?
+                """,
+                [(notes, request_id) for request_id, notes in fulfillments]
+            )
+
+    async def apply_synced_status(self, request_id: int, status: str, notes: str) -> None:
+        """Adopt a status that ggrequestz reported for a mirrored request."""
         async with self.db.get_connection() as conn:
             await conn.execute(
                 """
                 UPDATE requests
-                SET status = 'fulfilled',
-                    fulfilled_by = ?,
-                    fulfiller_name = ?,
+                SET status = ?,
                     notes = ?,
-                    auto_fulfilled = 1,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
-                (by_id, by_name, notes, request_id)
+                (status, notes, request_id)
             )
 
     async def _set_resolution(
@@ -261,15 +298,6 @@ class RequestsRepo:
             )
 
     # ------------------------------------------------------------ subscribers
-
-    async def subscriber_ids(self, request_id: int) -> List[int]:
-        """Discord ids watching a request, besides the original requester."""
-        async with self.db.get_connection() as conn:
-            cursor = await conn.execute(
-                "SELECT user_id FROM request_subscribers WHERE request_id = ?",
-                (request_id,)
-            )
-            return [row['user_id'] for row in await cursor.fetchall()]
 
     async def subscribers_for_requests(self, request_ids: Sequence[int]) -> List[Any]:
         """Subscribers across several requests, for batch notification."""
@@ -430,13 +458,47 @@ class PlatformMappingsRepo:
             )
             return await cursor.fetchall()
 
-    async def list_for_autocomplete(self) -> List[Any]:
+    async def find_by_any_name(self, names: Sequence[str]) -> Optional[Any]:
+        """First mapping matching any of `names` by display or folder name.
+
+        RomM reports a platform under a name, sometimes a custom name, and its
+        folder may use hyphens where the name uses spaces - so several
+        spellings are tried at once.
+        """
+        candidates = [name for name in names if name]
+        if not candidates:
+            return None
+
+        conditions = []
+        params: List[str] = []
+        for name in candidates:
+            conditions.append("LOWER(display_name) = LOWER(?)")
+            params.append(name)
+            conditions.append("LOWER(folder_name) = LOWER(?)")
+            params.append(name)
+
         async with self.db.get_connection() as conn:
             cursor = await conn.execute(
-                "SELECT display_name, in_romm, folder_name FROM platform_mappings "
-                "ORDER BY in_romm DESC, display_name"
+                "SELECT id, display_name FROM platform_mappings "
+                f"WHERE {' OR '.join(conditions)} LIMIT 1",
+                params
             )
-            return await cursor.fetchall()
+            return await cursor.fetchone()
+
+    async def mark_present_in_romm(self, pairs: Sequence[Tuple[int, int]]) -> None:
+        """Record which platforms RomM has, and under which ids.
+
+        Takes the whole set at once: the sync walks ~170 platforms, and a
+        connection each would mean ~170 transactions where one will do.
+        `pairs` is (mapping_id, romm_id).
+        """
+        if not pairs:
+            return
+        async with self.db.get_connection() as conn:
+            await conn.executemany(
+                "UPDATE platform_mappings SET in_romm = 1, romm_id = ? WHERE id = ?",
+                [(romm_id, mapping_id) for mapping_id, romm_id in pairs]
+            )
 
     async def platform_status_for(self, requests: Iterable[Any]) -> Dict[Any, bool]:
         """Pre-fetch in_romm for a page of requests.

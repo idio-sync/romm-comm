@@ -6,6 +6,7 @@ from unittest.mock import patch
 import discord
 
 from cogs.requests import ExistingGameView, ExistingGameWithIGDBView, Request
+from cogs.requests.repo import PlatformMappingsRepo, RequestsRepo
 
 
 class FakeConfig:
@@ -347,6 +348,9 @@ class RequestAutoFulfillmentTests(unittest.IsolatedAsyncioTestCase):
         request = Request.__new__(Request)
         request.bot = bot
         request.db = bot.db
+        # Request.__init__ builds these; __new__ skips it.
+        request.repo = RequestsRepo(bot.db)
+        request.platforms_repo = PlatformMappingsRepo(bot.db)
         request.ggr = None
         request.processing_lock = asyncio.Lock()
 
@@ -371,6 +375,9 @@ class RequestAutoFulfillmentTests(unittest.IsolatedAsyncioTestCase):
         request = Request.__new__(Request)
         request.bot = bot
         request.db = bot.db
+        # Request.__init__ builds these; __new__ skips it.
+        request.repo = RequestsRepo(bot.db)
+        request.platforms_repo = PlatformMappingsRepo(bot.db)
         request.ggr = FakeGGR()
         request.processing_lock = asyncio.Lock()
 

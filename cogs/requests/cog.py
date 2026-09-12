@@ -20,7 +20,7 @@ from .embeds import (
     format_igdb_details,
 )
 from .matching import edit_distance_ratio, find_duplicate_request
-from .repo import REQUEST_COLUMNS, RequestsRepo
+from .repo import PlatformMappingsRepo, RequestsRepo
 from .responders import responder_for
 from .views_admin import RequestAdminView
 from .views_game import ExistingGameWithIGDBView, GameSelectView
@@ -40,6 +40,7 @@ class Request(commands.Cog):
         # Use master db
         self.db = bot.db
         self.repo = RequestsRepo(bot.db)
+        self.platforms_repo = PlatformMappingsRepo(bot.db)
         
         self.requests_enabled = bot.config.REQUESTS_ENABLED
         self.ggr = None
@@ -90,15 +91,8 @@ class Request(commands.Cog):
         if not platform_name:
             return None
         try:
-            async with self.db.get_connection() as db:
-                cursor = await db.execute(
-                    """SELECT display_name FROM platform_mappings 
-                       WHERE LOWER(display_name) = LOWER(?) OR LOWER(folder_name) = LOWER(?)
-                       LIMIT 1""",
-                    (platform_name, platform_name)
-                )
-                result = await cursor.fetchone()
-                return result['display_name'] if result else platform_name
+            canonical = await self.platforms_repo.display_name_for(platform_name)
+            return canonical if canonical else platform_name
         except Exception:
             # If DB fails, fallback to using the original name
             return platform_name
@@ -109,19 +103,9 @@ class Request(commands.Cog):
             return platform_name, None, False
 
         try:
-            async with self.db.get_connection() as db:
-                cursor = await db.execute(
-                    """SELECT id, display_name, in_romm
-                       FROM platform_mappings
-                       WHERE LOWER(display_name) = LOWER(?) OR LOWER(folder_name) = LOWER(?)
-                       LIMIT 1""",
-                    (platform_name, platform_name)
-                )
-                result = await cursor.fetchone()
-
-                if result:
-                    mapping_id, display_name, in_romm = result
-                    return display_name, mapping_id, bool(in_romm)
+            result = await self.platforms_repo.lookup_context(platform_name)
+            if result:
+                return result['display_name'], result['id'], bool(result['in_romm'])
 
         except Exception as e:
             logger.warning(f"Could not resolve request platform context for '{platform_name}': {e}")
@@ -142,100 +126,59 @@ class Request(commands.Cog):
                 return
             
             logger.info(f"Syncing {len(raw_platforms)} platforms from Romm")
+
+            matched = []
             
-            async with self.db.get_connection() as db:
-                for platform in raw_platforms:
-                    custom_name = platform.get('custom_name', '').strip() if platform.get('custom_name') else None
-                    platform_name = platform.get('name', '')
-                    platform_id = platform.get('id')
-                    
-                    # Log what we're trying to match
-                    logger.debug(f"Syncing platform - Name: '{platform_name}', Custom: '{custom_name}', ID: {platform_id}")
-                    
-                    # Build query to match by various name combinations
-                    query_params = []
-                    conditions = []
-                    
-                    # Match by regular name
-                    if platform_name:
-                        conditions.append("LOWER(display_name) = LOWER(?)")
-                        query_params.append(platform_name)
-                        conditions.append("LOWER(folder_name) = LOWER(?)")
-                        query_params.append(platform_name)
-                        conditions.append("LOWER(folder_name) = LOWER(?)")
-                        query_params.append(platform_name.replace(' ', '-'))
-                    
-                    # Also match by custom name if it exists
-                    if custom_name:
-                        conditions.append("LOWER(display_name) = LOWER(?)")
-                        query_params.append(custom_name)
-                        conditions.append("LOWER(folder_name) = LOWER(?)")
-                        query_params.append(custom_name)
-                    
-                    if not conditions:
-                        logger.warning(f"Platform has no valid name: {platform}")
-                        continue
-                    
-                    query = f'''
-                        SELECT id, display_name FROM platform_mappings 
-                        WHERE {' OR '.join(conditions)}
-                        LIMIT 1
-                    '''
-                    
-                    cursor = await db.execute(query, query_params)
-                    result = await cursor.fetchone()
-                    
-                    if result:
-                        mapping_id, mapping_name = result
-                        # Update the mapping to show it exists in Romm
-                        await db.execute('''
-                            UPDATE platform_mappings 
-                            SET in_romm = 1, romm_id = ?
-                            WHERE id = ?
-                        ''', (platform_id, mapping_id))
-                        logger.debug(f"✓ Matched Romm platform '{custom_name or platform_name}' to mapping '{mapping_name}'")
-                    else:
-                        logger.warning(f"✗ No mapping found for Romm platform '{custom_name or platform_name}'")
-                
-                await db.commit()
-                logger.info("Platform sync completed")
-                
+            for platform in raw_platforms:
+                custom_name = platform.get('custom_name', '').strip() if platform.get('custom_name') else None
+                platform_name = platform.get('name', '')
+                platform_id = platform.get('id')
+
+                # Log what we're trying to match
+                logger.debug(f"Syncing platform - Name: '{platform_name}', Custom: '{custom_name}', ID: {platform_id}")
+
+                if not (platform_name or custom_name):
+                    logger.warning(f"Platform has no valid name: {platform}")
+                    continue
+
+                # RomM may report a platform under its name, a custom name, or
+                # a folder that hyphenates the name.
+                result = await self.platforms_repo.find_by_any_name([
+                    platform_name,
+                    platform_name.replace(' ', '-') if platform_name else None,
+                    custom_name,
+                ])
+
+                if result:
+                    matched.append((result['id'], platform_id))
+                    logger.debug(f"✓ Matched Romm platform '{custom_name or platform_name}' to mapping '{result['display_name']}'")
+                else:
+                    logger.warning(f"✗ No mapping found for Romm platform '{custom_name or platform_name}'")
+
+            # One transaction for the whole sync, as it was before.
+            await self.platforms_repo.mark_present_in_romm(matched)
+            logger.info("Platform sync completed")
+
+
         except Exception as e:
             logger.error(f"Error syncing Romm platforms: {e}", exc_info=True)
     
     async def platform_autocomplete_all(self, ctx: discord.AutocompleteContext):
         """Autocomplete for all platforms, not just those in Romm"""
         try:
-            user_input = ctx.value.lower()
-            
-            # Use the master database's connection method
-            async with self.db.get_connection() as db:
-                cursor = await db.execute('''
-                    SELECT display_name, in_romm, folder_name
-                    FROM platform_mappings
-                    WHERE LOWER(display_name) LIKE ?
-                    OR LOWER(folder_name) LIKE ?
-                    ORDER BY 
-                        in_romm DESC,
-                        display_name
-                    LIMIT 25
-                ''', (f'%{user_input}%', f'%{user_input}%'))
-                
-                results = await cursor.fetchall()
-            
-            # Process results
+            results = await self.platforms_repo.search_for_autocomplete(ctx.value)
+
             choices = []
-            for display_name, in_romm, folder_name in results:
-                if in_romm:
-                    label = display_name
-                else:
-                    label = f"[+] {display_name}"
-                
+            for row in results:
+                display_name = row['display_name']
+                # A platform RomM does not have yet is still offered, with a
+                # marker, because requesting it is what adds it.
+                label = display_name if row['in_romm'] else f"[+] {display_name}"
                 choices.append(discord.OptionChoice(
                     name=label[:100],
                     value=display_name
                 ))
-            
+
             return choices
             
         except Exception as e:
@@ -318,24 +261,16 @@ class Request(commands.Cog):
                 pending_requests = []
                 all_subscribers = defaultdict(list)
                 
-                async with self.db.get_connection() as db:
-                    cursor = await db.execute("""
-                        SELECT id, user_id, platform, game_name, igdb_id, igdb_game_name 
-                        FROM requests WHERE status = 'pending'
-                    """)
-                    pending_requests = await cursor.fetchall()
-                    
-                    if not pending_requests:
-                        return
-                    
-                    request_ids = [req['id'] for req in pending_requests]
-                    placeholders = ','.join('?' * len(request_ids))
-                    cursor = await db.execute(
-                        f"SELECT request_id, user_id FROM request_subscribers WHERE request_id IN ({placeholders})",
-                        request_ids
-                    )
-                    for req_id, user_id in await cursor.fetchall():
-                        all_subscribers[req_id].append(user_id)
+                pending_requests = await self.repo.list_pending_with_igdb()
+
+                if not pending_requests:
+                    return
+
+                subscriber_rows = await self.repo.subscribers_for_requests(
+                    [req['id'] for req in pending_requests]
+                )
+                for row in subscriber_rows:
+                    all_subscribers[row['request_id']].append(row['user_id'])
                 
                 fulfillments = []
                 notifications = defaultdict(list)
@@ -366,44 +301,31 @@ class Request(commands.Cog):
                             logger.info(f"Request #{req_id} ('{req_game}') matched to new game '{new_game['name']}'.")
                             break 
                 
-                if fulfillments:
-                    async with self.db.get_connection() as db:
-                        await db.executemany(
-                            """UPDATE requests 
-                               SET status = 'fulfilled', updated_at = CURRENT_TIMESTAMP, 
-                                   notes = ?, auto_fulfilled = 1
-                               WHERE id = ?""",
-                            [(f"Automatically fulfilled - Found: {f['game_name']}", f['req_id']) for f in fulfillments]
-                        )
-                        await db.commit()
+                await self.repo.mark_auto_fulfilled([
+                    (f['req_id'], f"Automatically fulfilled - Found: {f['game_name']}")
+                    for f in fulfillments
+                ])
                 
                 # Sync status to ggrequestz
                 if self.ggr and self.ggr.enabled:
                     for fulfillment in fulfillments:
                         req_id = fulfillment['req_id']
                         
-                        # Get the ggr_request_id for this Discord request
-                        async with self.db.get_connection() as db:
-                            cursor = await db.execute(
-                                "SELECT ggr_request_id FROM requests WHERE id = ?",
-                                (req_id,)
+                        ggr_request_id = await self.repo.get_ggr_request_id(req_id)
+
+                        if ggr_request_id:
+                            # Update status in ggrequestz
+                            result = await self.ggr.update_request_status(
+                                ggr_request_id=ggr_request_id,
+                                status='fulfilled',
+                                admin_name='Auto-Fulfillment Bot',
+                                notes=f"Automatically fulfilled - Found: {fulfillment['game_name']}"
                             )
-                            result = await cursor.fetchone()
-                            
-                            if result and result['ggr_request_id']:
-                                ggr_request_id = result['ggr_request_id']
-                                # Update status in ggrequestz
-                                result = await self.ggr.update_request_status(
-                                    ggr_request_id=ggr_request_id,
-                                    status='fulfilled',
-                                    admin_name='Auto-Fulfillment Bot',
-                                    notes=f"Automatically fulfilled - Found: {fulfillment['game_name']}"
-                                )
                                 
-                                if result.get('success'):
-                                    logger.info(f"✅ Synced fulfillment to ggrequestz for request #{req_id} (GGR ID: {ggr_request_id})")
-                                else:
-                                    logger.error(f"❌ Failed to sync fulfillment to ggrequestz: {result.get('error')}")
+                            if result.get('success'):
+                                logger.info(f"✅ Synced fulfillment to ggrequestz for request #{req_id} (GGR ID: {ggr_request_id})")
+                            else:
+                                logger.error(f"❌ Failed to sync fulfillment to ggrequestz: {result.get('error')}")
                 
                 if notifications:
                     logger.info(f"Sending DMs with links for {len(notifications)} user(s).")
@@ -449,23 +371,13 @@ class Request(commands.Cog):
     async def check_pending_requests(self, platform: str, game_name: str) -> List[Tuple[int, int, str]]:
         """Check if there are any pending requests for this game"""
         try:
-            async with self.db.get_connection() as db:
-                cursor = await db.execute(
-                    """
-                    SELECT id, user_id, game_name 
-                    FROM requests 
-                    WHERE platform = ? AND status = 'pending'
-                    """,
-                    (platform,)
-                )
-                pending_requests = await cursor.fetchall()
+            pending_requests = await self.repo.list_pending_for_platform(platform)
 
-                fulfilled_requests = []
-                for req_id, user_id, req_game in pending_requests:
-                    if edit_distance_ratio(game_name.lower(), req_game.lower()) > 0.8:
-                        fulfilled_requests.append((req_id, user_id, req_game))
-
-                return fulfilled_requests
+            return [
+                (row['id'], row['user_id'], row['game_name'])
+                for row in pending_requests
+                if edit_distance_ratio(game_name.lower(), row['game_name'].lower()) > 0.8
+            ]
 
         except Exception as e:
             logger.error(f"Error checking pending requests: {e}")
@@ -718,26 +630,16 @@ class Request(commands.Cog):
     async def get_request_igdb_data(self, request_id: int) -> Optional[Dict]:
         """Retrieve IGDB data for a request if IGDB ID was stored"""
         try:
-            async with self.db.get_connection() as db:
-                cursor = await db.execute(
-                    "SELECT igdb_id, game_name, platform FROM requests WHERE id = ?",
-                    (request_id,)
-                )
-                result = await cursor.fetchone()
-                
-                if result and result['igdb_id']:
-                    igdb_id = result['igdb_id']
-                    game_name = result['game_name']
-                    platform_name = result['platform']
-                    
-                    # You can now use this IGDB ID for direct API calls
-                    # For example, fetch fresh data from IGDB by ID
-                    if self.igdb_enabled:
-                        # This would require adding a method to IGDBClient to fetch by ID
-                        # return await self.igdb.get_game_by_id(igdb_id)
-                        return {"igdb_id": igdb_id, "game_name": game_name, "platform": platform_name}
-                
-                return None
+            result = await self.repo.get_igdb_info(request_id)
+
+            if result and result['igdb_id'] and self.igdb_enabled:
+                return {
+                    "igdb_id": result['igdb_id'],
+                    "game_name": result['game_name'],
+                    "platform": result['platform'],
+                }
+
+            return None
                 
         except Exception as e:
             logger.error(f"Error retrieving IGDB data for request: {e}")
@@ -802,80 +704,49 @@ class Request(commands.Cog):
             return
         
         try:
-            async with self.db.get_connection() as db:
-                # Build query based on whether we're syncing for a specific user or all
-                if user_id:
-                    cursor = await db.execute(
-                        """
-                        SELECT id, ggr_request_id, status, user_id, game_name 
-                        FROM requests 
-                        WHERE user_id = ?
-                        AND ggr_request_id IS NOT NULL 
-                        AND status IN ('pending', 'approved')
-                        """,
-                        (user_id,)
+            discord_requests = await self.repo.list_open_synced_with_ggrequestz(user_id)
+                
+            if not discord_requests:
+                return
+                
+            logger.debug(f"Syncing {len(discord_requests)} requests from ggrequestz")
+                
+            for discord_req in discord_requests:
+                discord_id, ggr_id, discord_status, req_user_id, game_name = discord_req
+                    
+                # Get current status from ggrequestz
+                ggr_request = await self.ggr.get_request_by_id(ggr_id)
+                    
+                if not ggr_request:
+                    continue
+                    
+                ggr_status = ggr_request.get('status')
+                    
+                # Map ggrequestz status to Discord status.
+                # Local canonical statuses are: pending, fulfilled, reject, cancelled.
+                # 'approved' has no local equivalent, so it is intentionally omitted
+                # (status_mapping.get returns None -> no local update).
+                status_mapping = {
+                    'pending': 'pending',
+                    'fulfilled': 'fulfilled',
+                    'rejected': 'reject',
+                    'cancelled': 'cancelled'
+                }
+                    
+                mapped_status = status_mapping.get(ggr_status)
+                    
+                # If status changed, update Discord database
+                if mapped_status and mapped_status != discord_status:
+                    logger.info(f"Syncing status for request #{discord_id}: {discord_status} → {mapped_status}")
+                        
+                    notes = ggr_request.get('admin_notes', '')
+                    update_note = f"Synced from ggrequestz: {notes}" if notes else "Synced from ggrequestz"
+                        
+                    await self.repo.apply_synced_status(
+                        discord_id, mapped_status, update_note
                     )
-                else:
-                    cursor = await db.execute(
-                        """
-                        SELECT id, ggr_request_id, status, user_id, game_name 
-                        FROM requests 
-                        WHERE ggr_request_id IS NOT NULL 
-                        AND status IN ('pending', 'approved')
-                        """
-                    )
-                
-                discord_requests = await cursor.fetchall()
-                
-                if not discord_requests:
-                    return
-                
-                logger.debug(f"Syncing {len(discord_requests)} requests from ggrequestz")
-                
-                for discord_req in discord_requests:
-                    discord_id, ggr_id, discord_status, req_user_id, game_name = discord_req
-                    
-                    # Get current status from ggrequestz
-                    ggr_request = await self.ggr.get_request_by_id(ggr_id)
-                    
-                    if not ggr_request:
-                        continue
-                    
-                    ggr_status = ggr_request.get('status')
-                    
-                    # Map ggrequestz status to Discord status.
-                    # Local canonical statuses are: pending, fulfilled, reject, cancelled.
-                    # 'approved' has no local equivalent, so it is intentionally omitted
-                    # (status_mapping.get returns None -> no local update).
-                    status_mapping = {
-                        'pending': 'pending',
-                        'fulfilled': 'fulfilled',
-                        'rejected': 'reject',
-                        'cancelled': 'cancelled'
-                    }
-                    
-                    mapped_status = status_mapping.get(ggr_status)
-                    
-                    # If status changed, update Discord database
-                    if mapped_status and mapped_status != discord_status:
-                        logger.info(f"Syncing status for request #{discord_id}: {discord_status} → {mapped_status}")
                         
-                        notes = ggr_request.get('admin_notes', '')
-                        update_note = f"Synced from ggrequestz: {notes}" if notes else "Synced from ggrequestz"
-                        
-                        await db.execute(
-                            """
-                            UPDATE requests 
-                            SET status = ?, 
-                                notes = ?,
-                                updated_at = CURRENT_TIMESTAMP 
-                            WHERE id = ?
-                            """,
-                            (mapped_status, update_note, discord_id)
-                        )
-                        await db.commit()
-                        
-                        logger.info(f"✅ Synced status for request #{discord_id} from ggrequestz")
+                    logger.info(f"✅ Synced status for request #{discord_id} from ggrequestz")
         
         except Exception as e:
             logger.error(f"Error syncing statuses from ggrequestz: {e}", exc_info=True)
@@ -900,182 +771,177 @@ class Request(commands.Cog):
             # Clean platform name (remove [NEW] prefix if present)
             platform_clean = platform.replace("[NEW] ", "")
             # Check if platform exists in our mappings
-            async with self.db.get_connection() as db:
-                cursor = await db.execute('''
-                    SELECT id, in_romm, romm_id, folder_name, igdb_slug, moby_slug
-                    FROM platform_mappings
-                    WHERE display_name = ?
-                ''', (platform_clean,))
+            platform_mapping = await self.platforms_repo.get_by_display_name(
+                platform_clean
+            )
                 
-                platform_mapping = await cursor.fetchone()
+            if not platform_mapping:
+                # Platform not in our master list - ask for confirmation
+                await ctx.respond(
+                    f"⚠️ '{platform}' is not in our platform database. "
+                    "Please use a platform from the autocomplete list or contact an admin to add a new platform.",
+                    ephemeral=True
+                )
+                return
                 
-                if not platform_mapping:
-                    # Platform not in our master list - ask for confirmation
-                    await ctx.respond(
-                        f"⚠️ '{platform}' is not in our platform database. "
-                        "Please use a platform from the autocomplete list or contact an admin to add a new platform.",
-                        ephemeral=True
+            mapping_id, in_romm, romm_id, folder_name, igdb_slug, moby_slug = platform_mapping
+            platform_display_name = platform_clean
+                
+            # If platform exists in Romm, check for existing games
+            if in_romm and romm_id:
+                # Get the actual Romm platform data
+                raw_platforms = await self.bot.fetch_api_endpoint('platforms')
+                if raw_platforms:
+                    for p in raw_platforms:
+                        if p.get('id') == romm_id:
+                            platform_display_name = self.bot.get_platform_display_name(p)
+                            break
+                    
+                # Check if game exists in current collection
+                exists, matches = await self.check_if_game_exists(platform_display_name, game)
+                    
+                if exists:
+                    # Game exists in collection - but also fetch IGDB matches
+                    search_cog = self.bot.get_cog('Search')
+                    platform_with_emoji = search_cog.get_platform_with_emoji(platform_display_name) if search_cog else platform_display_name
+                        
+                    # Fetch IGDB matches regardless of existing games
+                    igdb_matches = []
+                    if self.igdb_enabled:
+                        try:
+                            igdb_platform_slug = None
+                            if platform_mapping:
+                                igdb_platform_slug = platform_mapping['igdb_slug']
+                            igdb_matches = await self.igdb.search_game(game, igdb_platform_slug)
+                        except Exception as e:
+                            logger.error(f"Error fetching IGDB data: {e}")
+                        
+                    # Create combined view showing both existing games AND IGDB options
+                    view = ExistingGameWithIGDBView(
+                        self.bot, 
+                        matches,           # Existing games in collection
+                        igdb_matches,      # IGDB search results
+                        platform_display_name, 
+                        game, 
+                        ctx.author.id
                     )
-                    return
-                
-                mapping_id, in_romm, romm_id, folder_name, igdb_slug, moby_slug = platform_mapping
-                platform_display_name = platform_clean
-                
-                # If platform exists in Romm, check for existing games
-                if in_romm and romm_id:
-                    # Get the actual Romm platform data
-                    raw_platforms = await self.bot.fetch_api_endpoint('platforms')
-                    if raw_platforms:
-                        for p in raw_platforms:
-                            if p.get('id') == romm_id:
-                                platform_display_name = self.bot.get_platform_display_name(p)
-                                break
-                    
-                    # Check if game exists in current collection
-                    exists, matches = await self.check_if_game_exists(platform_display_name, game)
-                    
-                    if exists:
-                        # Game exists in collection - but also fetch IGDB matches
-                        search_cog = self.bot.get_cog('Search')
-                        platform_with_emoji = search_cog.get_platform_with_emoji(platform_display_name) if search_cog else platform_display_name
                         
-                        # Fetch IGDB matches regardless of existing games
-                        igdb_matches = []
-                        if self.igdb_enabled:
-                            try:
-                                igdb_platform_slug = None
-                                if platform_mapping:
-                                    igdb_platform_slug = platform_mapping['igdb_slug']
-                                igdb_matches = await self.igdb.search_game(game, igdb_platform_slug)
-                            except Exception as e:
-                                logger.error(f"Error fetching IGDB data: {e}")
+                    # Check if any IGDB games remain after filtering
+                    has_other_games = bool(view.filtered_igdb_matches)
                         
-                        # Create combined view showing both existing games AND IGDB options
-                        view = ExistingGameWithIGDBView(
-                            self.bot, 
-                            matches,           # Existing games in collection
-                            igdb_matches,      # IGDB search results
-                            platform_display_name, 
-                            game, 
-                            ctx.author.id
-                        )
+                    embed = discord.Embed(
+                        title="Games Found in Collection",
+                        description=f"Found {len(matches)} game(s) matching '{game}' that are already available:",
+                        color=discord.Color.blue()
+                    )
                         
-                        # Check if any IGDB games remain after filtering
-                        has_other_games = bool(view.filtered_igdb_matches)
-                        
-                        embed = discord.Embed(
-                            title="Games Found in Collection",
-                            description=f"Found {len(matches)} game(s) matching '{game}' that are already available:",
-                            color=discord.Color.blue()
-                        )
-                        
-                        # Show first few existing games
-                        for i, rom in enumerate(matches[:3]):
-                            embed.add_field(
-                                name=f"✅ {rom.get('name', 'Unknown')}",
-                                value=f"Available now - {rom.get('fs_name', 'Unknown')}",
-                                inline=False
-                            )
-                        
-                        if len(matches) > 3:
-                            embed.add_field(
-                                name="...",
-                                value=f"And {len(matches) - 3} more available",
-                                inline=False
-                            )
-                        
-                        # Update instructions based on what's available
-                        instructions = ["• **Select an existing game** from the dropdown to download it"]
-                        
-                        if has_other_games:
-                            instructions.append(f"• **Request a different game** - Found {len(view.filtered_igdb_matches)} other game(s) on IGDB")
-                        
-                        instructions.append("• Click **Request Different Version** for ROM hacks, patches, or specific versions")
-                        
+                    # Show first few existing games
+                    for i, rom in enumerate(matches[:3]):
                         embed.add_field(
-                            name="What would you like to do?",
-                            value="\n".join(instructions),
+                            name=f"✅ {rom.get('name', 'Unknown')}",
+                            value=f"Available now - {rom.get('fs_name', 'Unknown')}",
                             inline=False
                         )
                         
-                        message = await ctx.respond(embed=embed, view=view)
+                    if len(matches) > 3:
+                        embed.add_field(
+                            name="...",
+                            value=f"And {len(matches) - 3} more available",
+                            inline=False
+                        )
                         
-                        if isinstance(message, discord.Interaction):
-                            view.message = await message.original_response()
-                        else:
-                            view.message = message
+                    # Update instructions based on what's available
+                    instructions = ["• **Select an existing game** from the dropdown to download it"]
                         
-                        await view.wait()
-                        return
-                
-                # Search IGDB for game metadata if enabled
-                igdb_matches = []
-                if self.igdb_enabled:
-                    try:
-                        # Get IGDB slug from mapping to use for platform filtering
-                        igdb_platform_slug = None
-                        if platform_mapping:
-                            igdb_platform_slug = platform_mapping['igdb_slug']
+                    if has_other_games:
+                        instructions.append(f"• **Request a different game** - Found {len(view.filtered_igdb_matches)} other game(s) on IGDB")
                         
-                        # Pass platform slug for filtering if available
-                        igdb_matches = await self.igdb.search_game(game, igdb_platform_slug)
-                    except Exception as e:
-                        logger.error(f"Error fetching IGDB data: {e}")
-                
-                # Game doesn't exist OR user wants different version - show IGDB selection
-                if igdb_matches:
-                    select_view = GameSelectView(self.bot, igdb_matches, platform_display_name)
-                    initial_embed = select_view.create_game_embed(igdb_matches[0])
-                    
-                    # Adjust message based on context
-                    intro_text = "Please select the correct game from the list below:"
-                    
-                    select_view.message = await ctx.followup.send(
-                        intro_text,
-                        embed=initial_embed,
-                        view=select_view
+                    instructions.append("• Click **Request Different Version** for ROM hacks, patches, or specific versions")
+                        
+                    embed.add_field(
+                        name="What would you like to do?",
+                        value="\n".join(instructions),
+                        inline=False
                     )
-                    
-                    await select_view.wait()
-                    
-                    if not select_view.selected_game:
-                        # Timeout
-                        timeout_view = discord.ui.View()
-                        timeout_button = discord.ui.Button(
-                            label="Selection Timed Out",
-                            style=discord.ButtonStyle.secondary,
-                            disabled=True
-                        )
-                        timeout_view.add_item(timeout_button)
-                        await select_view.message.edit(view=timeout_view)
-                        return
-                    elif select_view.selected_game == "manual":
-                        selected_game = None
+                        
+                    message = await ctx.respond(embed=embed, view=view)
+                        
+                    if isinstance(message, discord.Interaction):
+                        view.message = await message.original_response()
                     else:
-                        selected_game = select_view.selected_game
-                        await self.process_request_with_platform(
-                            ctx, 
-                            platform_display_name, 
-                            game, 
-                            details, 
-                            selected_game, 
-                            select_view.message,
-                            mapping_id,
-                            in_romm
-                        )
-                        return
+                        view.message = message
+                        
+                    await view.wait()
+                    return
                 
-                # No IGDB matches or manual entry selected - process without IGDB data
-                await self.process_request_with_platform(
-                    ctx, 
-                    platform_display_name, 
-                    game, 
-                    details, 
-                    None, 
-                    None,
-                    mapping_id,
-                    in_romm
+            # Search IGDB for game metadata if enabled
+            igdb_matches = []
+            if self.igdb_enabled:
+                try:
+                    # Get IGDB slug from mapping to use for platform filtering
+                    igdb_platform_slug = None
+                    if platform_mapping:
+                        igdb_platform_slug = platform_mapping['igdb_slug']
+                        
+                    # Pass platform slug for filtering if available
+                    igdb_matches = await self.igdb.search_game(game, igdb_platform_slug)
+                except Exception as e:
+                    logger.error(f"Error fetching IGDB data: {e}")
+                
+            # Game doesn't exist OR user wants different version - show IGDB selection
+            if igdb_matches:
+                select_view = GameSelectView(self.bot, igdb_matches, platform_display_name)
+                initial_embed = select_view.create_game_embed(igdb_matches[0])
+                    
+                # Adjust message based on context
+                intro_text = "Please select the correct game from the list below:"
+                    
+                select_view.message = await ctx.followup.send(
+                    intro_text,
+                    embed=initial_embed,
+                    view=select_view
                 )
+                    
+                await select_view.wait()
+                    
+                if not select_view.selected_game:
+                    # Timeout
+                    timeout_view = discord.ui.View()
+                    timeout_button = discord.ui.Button(
+                        label="Selection Timed Out",
+                        style=discord.ButtonStyle.secondary,
+                        disabled=True
+                    )
+                    timeout_view.add_item(timeout_button)
+                    await select_view.message.edit(view=timeout_view)
+                    return
+                elif select_view.selected_game == "manual":
+                    selected_game = None
+                else:
+                    selected_game = select_view.selected_game
+                    await self.process_request_with_platform(
+                        ctx, 
+                        platform_display_name, 
+                        game, 
+                        details, 
+                        selected_game, 
+                        select_view.message,
+                        mapping_id,
+                        in_romm
+                    )
+                    return
+                
+            # No IGDB matches or manual entry selected - process without IGDB data
+            await self.process_request_with_platform(
+                ctx, 
+                platform_display_name, 
+                game, 
+                details, 
+                None, 
+                None,
+                mapping_id,
+                in_romm
+            )
 
         except Exception as e:
             logger.error(f"Error submitting request: {e}")
@@ -1099,110 +965,76 @@ class Request(commands.Cog):
             # Sync statuses from ggrequestz first
             await self._sync_statuses_from_ggrequestz(ctx.author.id)
             
-            async with self.db.get_connection() as db:
-                # Fetch requests based on show_pending_only parameter
+            requests = await self.repo.list_for_user(
+                ctx.author.id, pending_only=show_pending_only
+            )
+
+            if not requests:
                 if show_pending_only:
-                    cursor = await db.execute(
-                        f"SELECT {REQUEST_COLUMNS} FROM requests WHERE user_id = ? AND status = 'pending' ORDER BY created_at DESC",
-                        (ctx.author.id,)
+                    embed = discord.Embed(
+                        title="No Pending Requests",
+                        description="You don't have any pending requests.\n\nUse `/my_requests` to view all your requests including fulfilled and cancelled ones.",
+                        color=discord.Color.green()
                     )
-                    viewing_mode = "pending"
+                    await ctx.respond(embed=embed, ephemeral=True)
                 else:
-                    cursor = await db.execute(
-                        f"SELECT {REQUEST_COLUMNS} FROM requests WHERE user_id = ? ORDER BY created_at DESC",
-                        (ctx.author.id,)
+                    embed = discord.Embed(
+                        title="No Requests",
+                        description="You haven't made any requests yet.\n\nUse `/request` to submit a ROM request!",
+                        color=discord.Color.light_grey()
                     )
-                    viewing_mode = "all"
-                
-                requests = await cursor.fetchall()
+                    embed.set_footer(text="Start by requesting a game you'd like to see added")
+                    await ctx.respond(embed=embed, ephemeral=True)
+                return
 
-                if not requests:
-                    if show_pending_only:
-                        embed = discord.Embed(
-                            title="No Pending Requests",
-                            description="You don't have any pending requests.\n\nUse `/my_requests` to view all your requests including fulfilled and cancelled ones.",
-                            color=discord.Color.green()
-                        )
-                        await ctx.respond(embed=embed, ephemeral=True)
-                    else:
-                        embed = discord.Embed(
-                            title="No Requests",
-                            description="You haven't made any requests yet.\n\nUse `/request` to submit a ROM request!",
-                            color=discord.Color.light_grey()
-                        )
-                        embed.set_footer(text="Start by requesting a game you'd like to see added")
-                        await ctx.respond(embed=embed, ephemeral=True)
-                    return
+            platform_status = await self.platforms_repo.platform_status_for(requests)
+                
+            # Count statuses for summary
+            status_counts = {
+                'pending': 0,
+                'fulfilled': 0,
+                'cancelled': 0,
+                'reject': 0
+            }
+            for req in requests:
+                status = req['status']
+                if status in status_counts:
+                    status_counts[status] += 1
 
-                # PRE-FETCH platform status for all requests
-                platform_status = {}
-                for req in requests:
-                    platform_mapping_id = req['platform_mapping_id']
-                    if platform_mapping_id and platform_mapping_id not in platform_status:
-                        cursor = await db.execute(
-                            "SELECT in_romm FROM platform_mappings WHERE id = ?",
-                            (platform_mapping_id,)
-                        )
-                        result = await cursor.fetchone()
-                        platform_status[platform_mapping_id] = bool(result['in_romm']) if result else False
-                        
-                    # Also check by name for fallback
-                    if not platform_mapping_id or platform_mapping_id not in platform_status:
-                        platform_name = req['platform']
-                        if f"name:{platform_name}" not in platform_status:
-                            cursor = await db.execute(
-                                "SELECT in_romm FROM platform_mappings WHERE LOWER(display_name) = LOWER(?)",
-                                (platform_name,)
-                            )
-                            result = await cursor.fetchone()
-                            platform_status[f"name:{platform_name}"] = bool(result['in_romm']) if result else False
+            # Create paginated view
+            view = UserRequestsView(self.bot, requests, ctx.author.id, self.bot.db)
+            view.platform_status = platform_status
+            embed = view.create_request_embed(requests[0])
                 
-                # Count statuses for summary
-                status_counts = {
-                    'pending': 0,
-                    'fulfilled': 0,
-                    'cancelled': 0,
-                    'reject': 0
-                }
-                for req in requests:
-                    status = req['status']
-                    if status in status_counts:
-                        status_counts[status] += 1
-
-                # Create paginated view
-                view = UserRequestsView(self.bot, requests, ctx.author.id, self.bot.db)
-                view.platform_status = platform_status
-                embed = view.create_request_embed(requests[0])
+            # Build status summary
+            status_parts = []
+            if status_counts['pending'] > 0:
+                status_parts.append(f"⏳ {status_counts['pending']} pending")
+            if status_counts['fulfilled'] > 0:
+                status_parts.append(f"✅ {status_counts['fulfilled']} fulfilled")
+            if status_counts['cancelled'] > 0:
+                status_parts.append(f"🚫 {status_counts['cancelled']} cancelled")
+            if status_counts['reject'] > 0:
+                status_parts.append(f"❌ {status_counts['reject']} rejected")
                 
-                # Build status summary
-                status_parts = []
-                if status_counts['pending'] > 0:
-                    status_parts.append(f"⏳ {status_counts['pending']} pending")
-                if status_counts['fulfilled'] > 0:
-                    status_parts.append(f"✅ {status_counts['fulfilled']} fulfilled")
-                if status_counts['cancelled'] > 0:
-                    status_parts.append(f"🚫 {status_counts['cancelled']} cancelled")
-                if status_counts['reject'] > 0:
-                    status_parts.append(f"❌ {status_counts['reject']} rejected")
+            status_summary = " | ".join(status_parts)
                 
-                status_summary = " | ".join(status_parts)
+            # Add viewing mode indicator to the message
+            mode_text = "⏳ **Viewing: Pending Requests Only**" if show_pending_only else "📋 **Viewing: All Your Requests**"
+            hint_text = "\n*Use `/my_requests show_pending_only:True` to see only pending requests*" if not show_pending_only else "\n*Use `/my_requests` to see all requests*"
                 
-                # Add viewing mode indicator to the message
-                mode_text = "⏳ **Viewing: Pending Requests Only**" if show_pending_only else "📋 **Viewing: All Your Requests**"
-                hint_text = "\n*Use `/my_requests show_pending_only:True` to see only pending requests*" if not show_pending_only else "\n*Use `/my_requests` to see all requests*"
+            message = await ctx.respond(
+                content=f"{mode_text}\n📊 **Summary:** {status_summary}",
+                embed=embed, 
+                view=view,
+                ephemeral=True
+            )
                 
-                message = await ctx.respond(
-                    content=f"{mode_text}\n📊 **Summary:** {status_summary}",
-                    embed=embed, 
-                    view=view,
-                    ephemeral=True
-                )
-                
-                # Store message reference for editing
-                if isinstance(message, discord.Interaction):
-                    view.message = await message.original_response()
-                else:
-                    view.message = message
+            # Store message reference for editing
+            if isinstance(message, discord.Interaction):
+                view.message = await message.original_response()
+            else:
+                view.message = message
 
         except Exception as e:
             logger.error(f"Error fetching requests: {e}")
@@ -1227,91 +1059,60 @@ class Request(commands.Cog):
             # Sync statuses from ggrequestz first
             await self._sync_statuses_from_ggrequestz()
             
-            async with self.db.get_connection() as db:
-                # Fetch requests based on show_all parameter
+            requests = (
+                await self.repo.list_all() if show_all
+                else await self.repo.list_pending()
+            )
+
+            if not requests:
                 if show_all:
-                    cursor = await db.execute(
-                        f"SELECT {REQUEST_COLUMNS} FROM requests ORDER BY created_at DESC"
-                    )
-                    viewing_mode = "all"
+                    await ctx.respond("📭 No requests found in the system.", ephemeral=True)
                 else:
-                    cursor = await db.execute(
-                        f"SELECT {REQUEST_COLUMNS} FROM requests WHERE status = 'pending' ORDER BY created_at ASC"
+                    embed = discord.Embed(
+                        title="No Pending Requests",
+                        description="There are currently no pending requests.\n\nUse `/request_admin show_all:True` to view all requests including fulfilled and rejected ones.",
+                        color=discord.Color.green()
                     )
-                    viewing_mode = "pending"
-                
-                requests = await cursor.fetchall()
+                    embed.set_footer(text="All requests have been processed!")
+                    await ctx.respond(embed=embed)
+                return
 
-                if not requests:
-                    if show_all:
-                        await ctx.respond("📭 No requests found in the system.", ephemeral=True)
-                    else:
-                        embed = discord.Embed(
-                            title="No Pending Requests",
-                            description="There are currently no pending requests.\n\nUse `/request_admin show_all:True` to view all requests including fulfilled and rejected ones.",
-                            color=discord.Color.green()
-                        )
-                        embed.set_footer(text="All requests have been processed!")
-                        await ctx.respond(embed=embed)
-                    return
+            platform_status = await self.platforms_repo.platform_status_for(requests)
+                
+            # Create paginated view
+            view = RequestAdminView(self.bot, requests, ctx.author.id, self.bot.db)
+            view.platform_status = platform_status
+                
+            # Fetch user avatar for the first request
+            user_avatar_url = None
+            try:
+                user = self.bot.get_user(requests[0]['user_id'])
+                if not user:
+                    user = await self.bot.fetch_user(requests[0]['user_id'])
+                if user and user.avatar:
+                    user_avatar_url = user.avatar.url
+                elif user:
+                    user_avatar_url = user.default_avatar.url
+            except (discord.NotFound, discord.HTTPException):
+                pass  # User not found or API error
 
-                # PRE-FETCH platform status for all requests
-                platform_status = {}
-                for req in requests:
-                    platform_mapping_id = req['platform_mapping_id']
-                    if platform_mapping_id and platform_mapping_id not in platform_status:
-                        cursor = await db.execute(
-                            "SELECT in_romm FROM platform_mappings WHERE id = ?",
-                            (platform_mapping_id,)
-                        )
-                        result = await cursor.fetchone()
-                        platform_status[platform_mapping_id] = bool(result['in_romm']) if result else False
-                        
-                    # Also check by name for fallback
-                    if not platform_mapping_id or platform_mapping_id not in platform_status:
-                        platform_name = req['platform']
-                        if f"name:{platform_name}" not in platform_status:
-                            cursor = await db.execute(
-                                "SELECT in_romm FROM platform_mappings WHERE LOWER(display_name) = LOWER(?)",
-                                (platform_name,)
-                            )
-                            result = await cursor.fetchone()
-                            platform_status[f"name:{platform_name}"] = bool(result['in_romm']) if result else False
+            embed = view.create_request_embed(requests[0], user_avatar_url)  # Pass avatar URL
                 
-                # Create paginated view
-                view = RequestAdminView(self.bot, requests, ctx.author.id, self.bot.db)
-                view.platform_status = platform_status
+            # Add viewing mode indicator to the message
+            mode_text = "📋 **Viewing: All Requests**" if show_all else "⏳ **Viewing: Pending Requests Only**"
+            hint_text = "\n *Use `/request_admin show_all:True` to see all requests*" if not show_all else ""
                 
-                # Fetch user avatar for the first request
-                user_avatar_url = None
-                try:
-                    user = self.bot.get_user(requests[0]['user_id'])
-                    if not user:
-                        user = await self.bot.fetch_user(requests[0]['user_id'])
-                    if user and user.avatar:
-                        user_avatar_url = user.avatar.url
-                    elif user:
-                        user_avatar_url = user.default_avatar.url
-                except (discord.NotFound, discord.HTTPException):
-                    pass  # User not found or API error
-
-                embed = view.create_request_embed(requests[0], user_avatar_url)  # Pass avatar URL
+            message = await ctx.respond(
+                content=f"{mode_text}",
+                embed=embed, 
+                view=view
+            )
                 
-                # Add viewing mode indicator to the message
-                mode_text = "📋 **Viewing: All Requests**" if show_all else "⏳ **Viewing: Pending Requests Only**"
-                hint_text = "\n *Use `/request_admin show_all:True` to see all requests*" if not show_all else ""
-                
-                message = await ctx.respond(
-                    content=f"{mode_text}",
-                    embed=embed, 
-                    view=view
-                )
-                
-                # Store message reference for editing
-                if isinstance(message, discord.Interaction):
-                    view.message = await message.original_response()
-                else:
-                    view.message = message
+            # Store message reference for editing
+            if isinstance(message, discord.Interaction):
+                view.message = await message.original_response()
+            else:
+                view.message = message
 
         except Exception as e:
             logger.error(f"Error in request admin command: {e}")

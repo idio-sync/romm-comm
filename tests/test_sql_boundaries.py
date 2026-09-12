@@ -34,26 +34,53 @@ REPOSITORIES = {
 
 # Still to move. Each entry is a debt with a reason, not an exemption.
 ALLOWED = {
-    Path("cogs/requests/cog.py"): (
-        "the request-creation path is done; what is left is the platform-mapping "
-        "sync and the scan-completion listener, which both need repository "
-        "methods that do not exist yet"
-    ),
     Path("cogs/emoji_manager.py"): "no repository for emoji_sync_state yet",
     Path("cogs/recent_roms.py"): "no repository for posted_roms yet",
     Path("cogs/user_manager.py"): "no repository for user_links yet",
 }
 
 
+def _literal_text(node):
+    """The fixed text of a string node, or None if it is not one.
+
+    f-strings count. An earlier version of this test only looked at
+    ast.Constant, so `f"SELECT {COLUMNS} FROM requests"` was invisible to it
+    and four queries sat in a module this test called clean.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        # Interpolations are unknowable here; the literal parts are enough to
+        # recognise a query, and a placeholder is not going to supply the
+        # missing keyword.
+        return "".join(
+            part.value for part in node.values
+            if isinstance(part, ast.Constant) and isinstance(part.value, str)
+        )
+    return None
+
+
 def sql_literals(path: Path):
-    """Every string constant in `path` that looks like a SQL statement."""
+    """Every string in `path` that looks like a SQL statement."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
+
+    # An f-string's pieces are Constants in their own right. Collect them once
+    # so they can be skipped; the enclosing JoinedStr already covers them.
+    nested_in_fstrings = {
+        id(part)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.JoinedStr)
+        for part in node.values
+    }
+
     found = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if SQL_STATEMENT.search(node.value):
-                first_line = node.value.strip().splitlines()[0].strip()
-                found.append((node.lineno, first_line[:70]))
+        if id(node) in nested_in_fstrings:
+            continue
+        text = _literal_text(node)
+        if text and SQL_STATEMENT.search(text):
+            lines = [line for line in text.strip().splitlines() if line.strip()]
+            found.append((node.lineno, lines[0].strip()[:70] if lines else ""))
     return found
 
 
@@ -85,14 +112,16 @@ class SqlBoundaryTests(unittest.TestCase):
             ),
         )
 
-    def test_the_request_views_are_sql_free(self):
+    def test_the_whole_requests_package_is_sql_free(self):
         """The part of the ratchet that has already been pulled in.
 
         Called out separately so a regression here names the actual rule
-        rather than showing up as one more line in a long list.
+        rather than showing up as one more line in a long list. Every query
+        the requests feature makes now goes through repo.py.
         """
-        for name in ("views_admin.py", "views_user.py", "views_game.py", "embeds.py"):
-            path = Path("cogs/requests") / name
+        for path in sorted(Path("cogs/requests").glob("*.py")):
+            if path.name == "repo.py":
+                continue
             self.assertEqual([], sql_literals(path), f"{path} should not contain SQL")
 
     def test_every_allowance_is_still_needed(self):
@@ -116,6 +145,28 @@ class SqlBoundaryTests(unittest.TestCase):
         # The third line is UI copy that a bare-keyword match would flag.
         self.assertEqual(
             ["SELECT a FROM t", "UPDATE t SET a = 1"],
+            [sql for _, sql in sql_literals(path)],
+        )
+
+    def test_the_detector_sees_f_string_queries(self):
+        """It did not, once, and four queries hid behind that.
+
+        Interpolating a column list is the natural way to write these, so a
+        detector that only looked at plain string constants called a module
+        clean while it still held queries.
+        """
+        import tempfile
+
+        source = (
+            "COLUMNS = 'a, b'\n"
+            "QUERY = f'SELECT {COLUMNS} FROM requests ORDER BY created_at'\n"
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as handle:
+            handle.write(source)
+            path = Path(handle.name)
+
+        self.assertEqual(
+            ["SELECT  FROM requests ORDER BY created_at"],
             [sql for _, sql in sql_literals(path)],
         )
 
