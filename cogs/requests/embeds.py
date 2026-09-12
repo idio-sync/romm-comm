@@ -270,3 +270,129 @@ def build_request_embed(
     )
 
     return embed
+
+
+def format_igdb_details(selected_game: Dict) -> str:
+    """Serialize an IGDB match into the text the details column stores.
+
+    The counterpart to parse_request_details: this writes the format, that
+    reads it. They are kept together so the two halves cannot drift.
+    """
+    alt_names_str = ""
+    if selected_game.get('alternative_names'):
+        alt_names = [
+            f"{alt['name']} ({alt['comment']})" if alt.get('comment') else alt['name']
+            for alt in selected_game['alternative_names']
+        ]
+        alt_names_str = f"\nAlternative Names: {', '.join(alt_names)}"
+
+    def joined(key: str) -> str:
+        values = selected_game.get(key)
+        return ', '.join(values) if values else 'Unknown'
+
+    return (
+        f"IGDB Metadata:\n"
+        f"Game: {selected_game['name']}{alt_names_str}\n"
+        f"Release Date: {selected_game.get('release_date', 'Unknown')}\n"
+        f"Platforms: {', '.join(selected_game.get('platforms', []))}\n"
+        f"Developers: {joined('developers')}\n"
+        f"Publishers: {joined('publishers')}\n"
+        f"Genres: {joined('genres')}\n"
+        f"Game Modes: {joined('game_modes')}\n"
+        f"Summary: {selected_game.get('summary', 'No summary available')}\n"
+        f"Cover URL: {selected_game.get('cover_url', 'None')}\n"
+    )
+
+
+def _cover_or_default(embed: discord.Embed, selected_game: Optional[Dict]) -> None:
+    if selected_game and selected_game.get('cover_url'):
+        embed.set_thumbnail(url=selected_game['cover_url'])
+    else:
+        embed.set_thumbnail(url=DEFAULT_THUMBNAIL)
+
+
+def build_already_requested_embed(
+    *, game: str, platform_display: str, request_id: int, selected_game: Optional[Dict]
+) -> discord.Embed:
+    """Shown when the requester already has this exact request open."""
+    embed = discord.Embed(
+        title="📋 Already Requested",
+        description="You have already requested this game.",
+        color=discord.Color.orange()
+    )
+    embed.add_field(name="Game", value=game, inline=True)
+    embed.add_field(name="Platform", value=platform_display, inline=True)
+    embed.add_field(name="Request ID", value=f"#{request_id}", inline=True)
+    embed.add_field(name="Status", value="⏳ Still Pending", inline=True)
+    embed.set_footer(text="You'll receive a DM when this game is added to the collection")
+    _cover_or_default(embed, selected_game)
+    return embed
+
+
+def build_subscribed_embed(
+    *,
+    game: str,
+    platform_display: str,
+    request_id: int,
+    requester_name: str,
+    subscriber_count: int,
+    selected_game: Optional[Dict],
+) -> discord.Embed:
+    """Shown when someone else asked first and this user joins the wait list."""
+    embed = discord.Embed(
+        title="📋 Request Already Exists",
+        description=f"This game has already been requested by **{requester_name}**",
+        color=discord.Color.blue()
+    )
+    embed.add_field(name="Game", value=game, inline=True)
+    embed.add_field(name="Platform", value=platform_display, inline=True)
+    embed.add_field(name="Request ID", value=f"#{request_id}", inline=True)
+    embed.add_field(
+        name="✅ You've been added to the notification list",
+        value=(
+            f"You and {subscriber_count} other user(s) will be notified "
+            "when this request is fulfilled."
+        ),
+        inline=False
+    )
+    embed.set_footer(text="You'll receive a DM when this game is added to the collection")
+    _cover_or_default(embed, selected_game)
+    return embed
+
+
+PLATFORM_MISSING_NOTE = (
+    "This platform needs to be added to the collection before this request can be fulfilled."
+)
+
+
+def build_request_submitted_embed(
+    *,
+    game: str,
+    platform_display: str,
+    platform_exists: bool,
+    request_id: int,
+    author_name: str,
+    user_details: Optional[str],
+) -> discord.Embed:
+    """Confirmation for a request submitted without an IGDB selection."""
+    embed = discord.Embed(
+        title="✅ Request Submitted",
+        description=f"Your request for **{game}** has been submitted!",
+        color=discord.Color.green()
+    )
+
+    platform_status = "✅ Available" if platform_exists else "🆕 Not Yet Added"
+    embed.add_field(name="Game", value=game, inline=True)
+    embed.add_field(name="Platform", value=f"{platform_display}\n{platform_status}", inline=True)
+    embed.add_field(name="Status", value="⏳ Pending", inline=True)
+    embed.add_field(name="Request ID", value=f"#{request_id}", inline=True)
+
+    if not platform_exists:
+        embed.add_field(name="📝 Note", value=PLATFORM_MISSING_NOTE, inline=False)
+
+    if user_details and "IGDB Metadata:" not in user_details:
+        embed.add_field(name="Details", value=user_details[:1024], inline=False)
+
+    embed.set_footer(text=f"Request submitted by {author_name}")
+    embed.set_thumbnail(url=DEFAULT_THUMBNAIL)
+    return embed

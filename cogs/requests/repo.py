@@ -100,6 +100,25 @@ class RequestsRepo:
             )
             return await cursor.fetchall()
 
+    async def list_duplicate_candidates(self, platform: str, igdb_id: Optional[int]) -> List[Any]:
+        """Pending requests on this platform that might be the same game.
+
+        Rows with a matching IGDB id, plus rows with none at all - those still
+        have to be compared by title.
+        """
+        async with self.db.get_connection() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT id, user_id, username, game_name, igdb_id
+                FROM requests
+                WHERE platform = ?
+                AND status = 'pending'
+                AND (igdb_id = ? OR igdb_id IS NULL)
+                """,
+                (platform, igdb_id)
+            )
+            return await cursor.fetchall()
+
     async def list_synced_with_ggrequestz(self, user_id: Optional[int] = None) -> List[Any]:
         """Requests that have a ggrequestz counterpart, for status reconciliation."""
         clause = "WHERE ggr_request_id IS NOT NULL"

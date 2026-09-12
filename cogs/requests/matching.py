@@ -15,7 +15,8 @@ the other; the call sites keep the metric they have always used.
 """
 
 import re
-from typing import Dict, Iterable, List
+from dataclasses import dataclass
+from typing import Dict, Iterable, List, Optional
 
 # Dropped before comparison: they say nothing about which game a title names.
 COMMON_WORDS = frozenset({'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to'})
@@ -127,3 +128,47 @@ def filter_out_existing(
             filtered.append(igdb_game)
 
     return filtered
+
+
+@dataclass
+class DuplicateMatch:
+    """An existing pending request that covers the same game."""
+
+    request_id: int
+    requester_id: int
+    requester_name: str
+    is_own_request: bool
+
+
+def find_duplicate_request(
+    candidates: Iterable[Dict],
+    *,
+    game_name: str,
+    igdb_id: Optional[int],
+    user_id: int,
+    threshold: float = 0.8,
+) -> Optional[DuplicateMatch]:
+    """Find the first pending request that already covers this game.
+
+    A matching IGDB id is decisive. Failing that, titles are compared by edit
+    distance, which tolerates the punctuation and spelling drift between what
+    someone types and what is already on file.
+
+    Only the first match is returned, which is what the original inline loop
+    did: it stopped at the first row that matched rather than looking for a
+    better one further down.
+    """
+    for row in candidates:
+        by_igdb = bool(igdb_id and row['igdb_id'] and igdb_id == row['igdb_id'])
+        if not by_igdb:
+            if edit_distance_ratio(game_name.lower(), row['game_name'].lower()) <= threshold:
+                continue
+
+        return DuplicateMatch(
+            request_id=row['id'],
+            requester_id=row['user_id'],
+            requester_name=row['username'],
+            is_own_request=row['user_id'] == user_id,
+        )
+
+    return None

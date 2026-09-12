@@ -12,13 +12,24 @@ from admin_checks import is_admin
 
 from ..igdb_client import IGDBClient
 from ..search import build_rom_download_url
-from .matching import edit_distance_ratio
-from .repo import REQUEST_COLUMNS
+from .embeds import (
+    PLATFORM_MISSING_NOTE,
+    build_already_requested_embed,
+    build_request_submitted_embed,
+    build_subscribed_embed,
+    format_igdb_details,
+)
+from .matching import edit_distance_ratio, find_duplicate_request
+from .repo import REQUEST_COLUMNS, RequestsRepo
+from .responders import responder_for
 from .views_admin import RequestAdminView
 from .views_game import ExistingGameWithIGDBView, GameSelectView
 from .views_user import UserRequestsView
 
 logger = logging.getLogger(__name__)
+
+# How many requests one user may have open at once.
+MAX_PENDING_REQUESTS = 25
 
 
 class Request(commands.Cog):
@@ -28,6 +39,7 @@ class Request(commands.Cog):
         
         # Use master db
         self.db = bot.db
+        self.repo = RequestsRepo(bot.db)
         
         self.requests_enabled = bot.config.REQUESTS_ENABLED
         self.ggr = None
@@ -475,343 +487,233 @@ class Request(commands.Cog):
             platform_exists
         )
     
-    async def process_request_with_platform(self, ctx_or_interaction, platform_display_name, 
-                                       game, details, selected_game, message, 
+    async def process_request_with_platform(self, ctx_or_interaction, platform_display_name,
+                                       game, details, selected_game, message,
                                        mapping_id, platform_exists, send_response: bool = True):
         """Process and save the request with platform mapping"""
+        respond = None
         try:
-            # Handle both ctx and interaction objects
-            if hasattr(ctx_or_interaction, 'user'):
-                author = ctx_or_interaction.user
-                author_name = str(ctx_or_interaction.user)
-                
-                async def respond(content=None, embed=None, embeds=None):
-                    kwargs = {}
-                    if content is not None:
-                        kwargs['content'] = content
-                    if embed is not None:
-                        kwargs['embed'] = embed
-                    elif embeds is not None:
-                        kwargs['embeds'] = embeds
-                    
-                    try:
-                        if ctx_or_interaction.response.is_done():
-                            return await ctx_or_interaction.followup.send(**kwargs)
-                        else:
-                            return await ctx_or_interaction.response.send_message(**kwargs)
-                    except discord.errors.InteractionResponded:
-                        return await ctx_or_interaction.followup.send(**kwargs)
-            else:
-                author = ctx_or_interaction.author
-                author_name = str(ctx_or_interaction.author)
-                
-                async def respond(content=None, embed=None, embeds=None):
-                    kwargs = {}
-                    if content is not None:
-                        kwargs['content'] = content
-                    if embed is not None:
-                        kwargs['embed'] = embed
-                    elif embeds is not None:
-                        kwargs['embeds'] = embeds
-                        
-                    return await ctx_or_interaction.respond(**kwargs)
-            
-            async with self.db.get_connection() as db:
-                # Extract IGDB ID if available
-                igdb_id = None
-                igdb_name = None
-                if selected_game and selected_game.get('id'):
-                    igdb_id = selected_game['id']
-                    igdb_name = selected_game.get('name')
-                
-                # Check for existing pending request (only if platform exists in Romm)
-                if platform_exists:
-                    cursor = await db.execute(
-                        """
-                        SELECT id, user_id, username, game_name, igdb_id 
-                        FROM requests 
-                        WHERE platform = ? 
-                        AND status = 'pending'
-                        AND (igdb_id = ? OR igdb_id IS NULL)
-                        """,
-                        (platform_display_name, igdb_id)
-                    )
-                    existing_requests = await cursor.fetchall()
-                    
-                    # Check if user already requested this game
-                    existing_request_id = None
-                    user_already_requested = False
-                    original_requester_id = None
-                    original_requester_name = None
-                    
-                    for req_id, req_user_id, req_username, req_game, req_igdb_id in existing_requests:
-                        # If IGDB IDs match, it's definitely the same game
-                        if igdb_id and req_igdb_id and igdb_id == req_igdb_id:
-                            existing_request_id = req_id
-                            original_requester_id = req_user_id
-                            original_requester_name = req_username
-                            
-                            if req_user_id == author.id:
-                                user_already_requested = True
-                                break
-                        # Otherwise use name similarity
-                        elif edit_distance_ratio(game.lower(), req_game.lower()) > 0.8:
-                            existing_request_id = req_id
-                            original_requester_id = req_user_id
-                            original_requester_name = req_username
-                            
-                            if req_user_id == author.id:
-                                user_already_requested = True
-                                break
-                        
-                        # Check if user is already a subscriber
-                        if existing_request_id:
-                            cursor = await db.execute(
-                                """
-                                SELECT COUNT(*) FROM request_subscribers 
-                                WHERE request_id = ? AND user_id = ?
-                                """,
-                                (req_id, author.id)
-                            )
-                            is_subscriber = (await cursor.fetchone())[0] > 0
-                            
-                            if is_subscriber:
-                                user_already_requested = True
-                            break
-                    
-                    # If user has already requested this game
-                    if user_already_requested:
-                        if send_response:
-                            embed = discord.Embed(
-                                title="📋 Already Requested",
-                                description="You have already requested this game.",
-                                color=discord.Color.orange()
-                            )
-                            
-                            search_cog = self.bot.get_cog('Search')
-                            platform_display = platform_display_name
-                            if search_cog:
-                                platform_display = search_cog.get_platform_with_emoji(platform_display_name)
-                            
-                            embed.add_field(name="Game", value=game, inline=True)
-                            embed.add_field(name="Platform", value=platform_display, inline=True)
-                            embed.add_field(name="Request ID", value=f"#{existing_request_id}", inline=True)
-                            embed.add_field(name="Status", value="⏳ Still Pending", inline=True)
-                            
-                            embed.set_footer(text="You'll receive a DM when this game is added to the collection")
-                            
-                            if selected_game and selected_game.get('cover_url'):
-                                embed.set_thumbnail(url=selected_game['cover_url'])
-                            else:
-                                embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
-                            
-                            await respond(embed=embed)
-                        return
-                    
-                    # If someone else has requested this game
-                    if existing_request_id and author.id != original_requester_id:
-                        # Add user as a subscriber to existing request
-                        await db.execute(
-                            """
-                            INSERT INTO request_subscribers (request_id, user_id, username)
-                            VALUES (?, ?, ?)
-                            """,
-                            (existing_request_id, author.id, author_name)
-                        )
-                        await db.commit()
-                        
-                        # Count total subscribers
-                        cursor = await db.execute(
-                            "SELECT COUNT(*) FROM request_subscribers WHERE request_id = ?",
-                            (existing_request_id,)
-                        )
-                        subscriber_count = (await cursor.fetchone())[0]
-                        
-                        if send_response:
-                            embed = discord.Embed(
-                                title="📋 Request Already Exists",
-                                description=f"This game has already been requested by **{original_requester_name}**",
-                                color=discord.Color.blue()
-                            )
-                            
-                            search_cog = self.bot.get_cog('Search')
-                            platform_display = platform_display_name
-                            if search_cog:
-                                platform_display = search_cog.get_platform_with_emoji(platform_display_name)
-                            
-                            embed.add_field(name="Game", value=game, inline=True)
-                            embed.add_field(name="Platform", value=platform_display, inline=True)
-                            embed.add_field(name="Request ID", value=f"#{existing_request_id}", inline=True)
-                            
-                            embed.add_field(
-                                name="✅ You've been added to the notification list",
-                                value=f"You and {subscriber_count} other user(s) will be notified when this request is fulfilled.",
-                                inline=False
-                            )
-                            
-                            if selected_game and selected_game.get('cover_url'):
-                                embed.set_thumbnail(url=selected_game['cover_url'])
-                            else:
-                                embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
-                            
-                            embed.set_footer(text="You'll receive a DM when this game is added to the collection")
-                            
-                            await respond(embed=embed)
-                        return
-                
-                # Check user's pending request limit
-                cursor = await db.execute(
-                    "SELECT COUNT(*) FROM requests WHERE user_id = ? AND status = 'pending'",
-                    (author.id,)
-                )
-                pending_count = (await cursor.fetchone())[0]
+            author, author_name, respond = responder_for(ctx_or_interaction)
 
-                if pending_count >= 25:
-                    if send_response:
-                        await respond(content="❌ You already have 25 pending requests. Please wait for them to be fulfilled or cancel some.")
-                    return
+            igdb_id = igdb_name = None
+            if selected_game and selected_game.get('id'):
+                igdb_id = selected_game['id']
+                igdb_name = selected_game.get('name')
 
-                # Store user's additional details separately (for local DB)
-                user_details = details
+            # A platform RomM does not have yet cannot have duplicates worth
+            # merging into, so the check only runs when the platform exists.
+            if platform_exists and await self._merge_into_existing_request(
+                respond,
+                author=author,
+                author_name=author_name,
+                game=game,
+                igdb_id=igdb_id,
+                platform_display_name=platform_display_name,
+                selected_game=selected_game,
+                send_response=send_response,
+            ):
+                return
 
-                # Add IGDB metadata to details for LOCAL database storage
-                if selected_game:
-                    alt_names_str = ""
-                    if selected_game.get('alternative_names'):
-                        alt_names = [f"{alt['name']} ({alt['comment']})" if alt.get('comment') else alt['name'] 
-                                   for alt in selected_game['alternative_names']]
-                        alt_names_str = f"\nAlternative Names: {', '.join(alt_names)}"
+            pending_count = await self.repo.count_pending_for_user(author.id)
+            if pending_count >= MAX_PENDING_REQUESTS:
+                if send_response:
+                    await respond(content=(
+                        f"❌ You already have {MAX_PENDING_REQUESTS} pending requests. "
+                        "Please wait for them to be fulfilled or cancel some."
+                    ))
+                return
 
-                    igdb_details = (
-                        f"IGDB Metadata:\n"
-                        f"Game: {selected_game['name']}{alt_names_str}\n"
-                        f"Release Date: {selected_game.get('release_date', 'Unknown')}\n"
-                        f"Platforms: {', '.join(selected_game.get('platforms', []))}\n"
-                        f"Developers: {', '.join(selected_game.get('developers', [])) if selected_game.get('developers') else 'Unknown'}\n"
-                        f"Publishers: {', '.join(selected_game.get('publishers', [])) if selected_game.get('publishers') else 'Unknown'}\n"
-                        f"Genres: {', '.join(selected_game.get('genres', [])) if selected_game.get('genres') else 'Unknown'}\n"
-                        f"Game Modes: {', '.join(selected_game.get('game_modes', [])) if selected_game.get('game_modes') else 'Unknown'}\n"
-                        f"Summary: {selected_game.get('summary', 'No summary available')}\n"
-                        f"Cover URL: {selected_game.get('cover_url', 'None')}\n"
-                    )
-                    if details:
-                        details = f"{details}\n\n{igdb_details}"
-                    else:
-                        details = igdb_details
+            # The user's own words are kept separately: the details column also
+            # carries the IGDB metadata block, which should not be echoed back.
+            user_details = details
+            if selected_game:
+                igdb_details = format_igdb_details(selected_game)
+                details = f"{details}\n\n{igdb_details}" if details else igdb_details
 
-                # Always store in local database FIRST to get the request_id
-                cursor = await db.execute(
-                    """
-                    INSERT INTO requests (user_id, username, platform, game_name, details, igdb_id, platform_mapping_id, igdb_game_name)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (author.id, author_name, platform_display_name, game, details, igdb_id, mapping_id, igdb_name)
-                )
-                await db.commit()
+            request_id = await self._store_and_sync_request(
+                author=author,
+                author_name=author_name,
+                platform_display_name=platform_display_name,
+                game=game,
+                details=details,
+                user_details=user_details,
+                igdb_id=igdb_id,
+                igdb_name=igdb_name,
+                mapping_id=mapping_id,
+            )
 
-                request_id = cursor.lastrowid  # Get the Discord request ID
+            await self._confirm_new_request(
+                respond,
+                request_id=request_id,
+                author_name=author_name,
+                game=game,
+                platform_display_name=platform_display_name,
+                platform_exists=platform_exists,
+                selected_game=selected_game,
+                user_details=user_details,
+                message=message,
+                send_response=send_response,
+            )
 
-                # NOW try to create in GGRequestz with the Discord request ID
-                ggr_request_id = None
-
-                if self.ggr and self.ggr.enabled:
-                    try:
-                        # Use IGDB name if available, otherwise fall back to user's input
-                        game_name_for_ggr = igdb_name if igdb_name else game
-                        
-                        result = await self.ggr.create_request(
-                            game_name=game_name_for_ggr,  # Use IGDB name
-                            platform=platform_display_name,
-                            user_id=author.id,
-                            username=author_name,
-                            igdb_id=igdb_id,
-                            details=user_details,
-                            discord_request_id=request_id  # Pass the Discord request ID
-                        )
-                        
-                        if result.get('success'):
-                            ggr_request_id = result.get('request_id')
-                            logger.info(f"Request created in GGRequestz: ID {ggr_request_id}")
-                            
-                            # Update the local record with the GGR ID
-                            await db.execute(
-                                "UPDATE requests SET ggr_request_id = ? WHERE id = ?",
-                                (ggr_request_id, request_id)
-                            )
-                            await db.commit()
-                        else:
-                            logger.warning(f"GGRequestz creation failed: {result.get('error')}")
-                    except Exception as e:
-                        logger.error(f"GGRequestz error: {e}")
-
-                logger.info(f"Request created - Discord: {author_name} ({author_name}) (ID: {author.id}) | Game: '{game}' | Platform: {platform_display_name} | Local ID: #{request_id} | GGR ID: {ggr_request_id or 'N/A'}")
-
-                if message and selected_game:
-                    view = GameSelectView(self.bot, matches=[selected_game], platform_name=platform_display_name)
-                    embed = view.create_game_embed(selected_game)
-                    embed.set_footer(text=f"Request #{request_id} submitted by {author_name}")
-                    
-                    # Add platform status indicator if platform doesn't exist
-                    if not platform_exists:
-                        embed.add_field(
-                            name="⚠️ Platform Status",
-                            value="This platform needs to be added to the collection before this request can be fulfilled.",
-                            inline=False
-                        )
-                    
-                    await message.edit(embed=embed)
-                else:
-                    if send_response:
-                        # Create basic embed for manual submissions
-                        embed = discord.Embed(
-                            title="✅ Request Submitted",
-                            description=f"Your request for **{game}** has been submitted!",
-                            color=discord.Color.green()
-                        )
-                        
-                        search_cog = self.bot.get_cog('Search')
-                        platform_display = platform_display_name
-                        if search_cog and platform_exists:
-                            platform_display = search_cog.get_platform_with_emoji(platform_display_name)
-                        
-                        platform_status = "✅ Available" if platform_exists else "🆕 Not Yet Added"
-                        
-                        embed.add_field(name="Game", value=game, inline=True)
-                        embed.add_field(name="Platform", value=f"{platform_display}\n{platform_status}", inline=True)
-                        embed.add_field(name="Status", value="⏳ Pending", inline=True)
-                        embed.add_field(name="Request ID", value=f"#{request_id}", inline=True)
-                        
-                        if not platform_exists:
-                            embed.add_field(
-                                name="📝 Note",
-                                value="This platform needs to be added to the collection before this request can be fulfilled.",
-                                inline=False
-                            )
-                        
-                        if user_details and "IGDB Metadata:" not in user_details:
-                            embed.add_field(name="Details", value=user_details[:1024], inline=False)
-                        
-                        embed.set_footer(text=f"Request submitted by {author_name}")
-                        embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
-                        
-                        await respond(embed=embed)
-                
-                return request_id
+            return request_id
 
         except Exception as e:
             logger.error(f"Error processing request: {e}")
             if send_response:
-                try:
-                    if 'respond' in locals():
-                        await respond(content="❌ An error occurred while processing the request.")
-                    else:
-                        if hasattr(ctx_or_interaction, 'user'):
-                            await ctx_or_interaction.followup.send("❌ An error occurred while processing the request.")
-                        else:
-                            await ctx_or_interaction.respond("❌ An error occurred while processing the request.")
-                except Exception as error_e:
-                    logger.error(f"Could not send error message to user: {error_e}")
+                await self._report_request_failure(ctx_or_interaction, respond)
             return None
+
+    def _platform_display(self, platform_display_name: str, with_emoji: bool = True) -> str:
+        """Platform name, decorated with its emoji when the Search cog is loaded."""
+        search_cog = self.bot.get_cog('Search')
+        if search_cog and with_emoji:
+            return search_cog.get_platform_with_emoji(platform_display_name)
+        return platform_display_name
+
+    async def _merge_into_existing_request(
+        self, respond, *, author, author_name, game, igdb_id,
+        platform_display_name, selected_game, send_response,
+    ) -> bool:
+        """Fold this request into an existing one if the game is already asked for.
+
+        Returns True when the request was handled here and the caller should
+        stop: either the user already has this request open, or they have just
+        been subscribed to someone else's.
+        """
+        candidates = await self.repo.list_duplicate_candidates(platform_display_name, igdb_id)
+        duplicate = find_duplicate_request(
+            candidates, game_name=game, igdb_id=igdb_id, user_id=author.id
+        )
+        if not duplicate:
+            return False
+
+        already_waiting = duplicate.is_own_request or await self.repo.is_subscribed(
+            duplicate.request_id, author.id
+        )
+
+        if already_waiting:
+            if send_response:
+                await respond(embed=build_already_requested_embed(
+                    game=game,
+                    platform_display=self._platform_display(platform_display_name),
+                    request_id=duplicate.request_id,
+                    selected_game=selected_game,
+                ))
+            return True
+
+        await self.repo.add_subscriber(duplicate.request_id, author.id, author_name)
+        subscriber_count = await self.repo.count_subscribers(duplicate.request_id)
+
+        if send_response:
+            await respond(embed=build_subscribed_embed(
+                game=game,
+                platform_display=self._platform_display(platform_display_name),
+                request_id=duplicate.request_id,
+                requester_name=duplicate.requester_name,
+                subscriber_count=subscriber_count,
+                selected_game=selected_game,
+            ))
+        return True
+
+    async def _store_and_sync_request(
+        self, *, author, author_name, platform_display_name, game, details,
+        user_details, igdb_id, igdb_name, mapping_id,
+    ) -> int:
+        """Save the request, then mirror it to ggrequestz if that is configured.
+
+        The local row is written first so ggrequestz can be handed the Discord
+        request id; a failure to mirror leaves the local request intact.
+        """
+        request_id = await self.repo.create(
+            user_id=author.id,
+            username=author_name,
+            platform=platform_display_name,
+            game_name=game,
+            details=details,
+            igdb_id=igdb_id,
+            platform_mapping_id=mapping_id,
+            igdb_game_name=igdb_name,
+        )
+
+        ggr_request_id = None
+        if self.ggr and self.ggr.enabled:
+            try:
+                result = await self.ggr.create_request(
+                    game_name=igdb_name if igdb_name else game,
+                    platform=platform_display_name,
+                    user_id=author.id,
+                    username=author_name,
+                    igdb_id=igdb_id,
+                    details=user_details,
+                    discord_request_id=request_id
+                )
+
+                if result.get('success'):
+                    ggr_request_id = result.get('request_id')
+                    logger.info(f"Request created in GGRequestz: ID {ggr_request_id}")
+                    await self.repo.set_ggr_request_id(request_id, ggr_request_id)
+                else:
+                    logger.warning(f"GGRequestz creation failed: {result.get('error')}")
+            except Exception as e:
+                logger.error(f"GGRequestz error: {e}")
+
+        logger.info(
+            f"Request created - Discord: {author_name} (ID: {author.id}) | Game: '{game}' | "
+            f"Platform: {platform_display_name} | Local ID: #{request_id} | "
+            f"GGR ID: {ggr_request_id or 'N/A'}"
+        )
+        return request_id
+
+    async def _confirm_new_request(
+        self, respond, *, request_id, author_name, game, platform_display_name,
+        platform_exists, selected_game, user_details, message, send_response,
+    ) -> None:
+        """Show the request back to the user.
+
+        A request that came from an IGDB pick edits the message that offered
+        the choice; one typed by hand gets a fresh confirmation embed.
+        """
+        if message and selected_game:
+            view = GameSelectView(
+                self.bot, matches=[selected_game], platform_name=platform_display_name
+            )
+            embed = view.create_game_embed(selected_game)
+            embed.set_footer(text=f"Request #{request_id} submitted by {author_name}")
+
+            if not platform_exists:
+                embed.add_field(
+                    name="⚠️ Platform Status",
+                    value=PLATFORM_MISSING_NOTE,
+                    inline=False
+                )
+
+            await message.edit(embed=embed)
+            return
+
+        if send_response:
+            await respond(embed=build_request_submitted_embed(
+                game=game,
+                platform_display=self._platform_display(
+                    platform_display_name, with_emoji=platform_exists
+                ),
+                platform_exists=platform_exists,
+                request_id=request_id,
+                author_name=author_name,
+                user_details=user_details,
+            ))
+
+    async def _report_request_failure(self, ctx_or_interaction, respond) -> None:
+        """Best-effort apology; the original failure is already logged."""
+        text = "❌ An error occurred while processing the request."
+        try:
+            if respond is not None:
+                await respond(content=text)
+            elif hasattr(ctx_or_interaction, 'user'):
+                await ctx_or_interaction.followup.send(text)
+            else:
+                await ctx_or_interaction.respond(text)
+        except Exception as error_e:
+            logger.error(f"Could not send error message to user: {error_e}")
         
     async def get_request_igdb_data(self, request_id: int) -> Optional[Dict]:
         """Retrieve IGDB data for a request if IGDB ID was stored"""
