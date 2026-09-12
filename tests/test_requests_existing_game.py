@@ -360,7 +360,7 @@ class RequestAutoFulfillmentTests(unittest.IsolatedAsyncioTestCase):
             }
         ]
 
-        with patch("cogs.requests.asyncio.sleep", instant_sleep):
+        with patch("cogs.requests.cog.asyncio.sleep", instant_sleep):
             await request.on_batch_scan_complete(new_games)
 
         self.assertEqual(1, len(user.messages))
@@ -384,7 +384,7 @@ class RequestAutoFulfillmentTests(unittest.IsolatedAsyncioTestCase):
             }
         ]
 
-        with patch("cogs.requests.asyncio.sleep", instant_sleep):
+        with patch("cogs.requests.cog.asyncio.sleep", instant_sleep):
             await request.on_batch_scan_complete(new_games)
 
         self.assertEqual(1, len(user.messages))
@@ -506,7 +506,7 @@ class RequestContinueFlowTests(unittest.IsolatedAsyncioTestCase):
         ctx = FakeContext()
 
         FakeGameSelectView.selected_game = selected_game
-        with patch("cogs.requests.GameSelectView", FakeGameSelectView):
+        with patch("cogs.requests.cog.GameSelectView", FakeGameSelectView):
             await request.continue_request_flow(
                 ctx,
                 "SNES",
