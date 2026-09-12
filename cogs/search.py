@@ -1734,13 +1734,132 @@ class Search(commands.Cog):
             logger.error(f"Error in firmware command: {e}")
             await ctx.respond("❌ An error occurred while fetching firmware data")
 
+    async def fetch_random_rom(self, platform_id: Optional[int] = None) -> Optional[Dict]:
+        """Ask RomM to pick a random ROM for us.
+
+        Added in RomM 5.2.0, which samples on the primary key so the pick does
+        not get slower as the library grows. Returns None both on older servers,
+        where the route does not exist, and when the scope genuinely holds
+        nothing. Callers that already know the scope is non-empty read None as
+        "this server is too old" and fall back.
+        """
+        endpoint = 'roms/random'
+        if platform_id is not None:
+            endpoint = f'{endpoint}?platform_ids={platform_id}'
+
+        try:
+            rom = await self.bot.fetch_api_endpoint(endpoint)
+        except Exception as e:
+            logger.debug(f"roms/random unavailable: {e}")
+            return None
+
+        if not isinstance(rom, dict) or not rom.get('id'):
+            return None
+
+        # The endpoint answers with SimpleRomSchema; the embed wants the full
+        # record, the same one the old code fetched after choosing.
+        detailed_rom = await self.bot.fetch_api_endpoint(f"roms/{rom['id']}")
+        return detailed_rom if isinstance(detailed_rom, dict) else rom
+
+    async def pick_random_rom_legacy(self, platform_id: Optional[int] = None,
+                                     rom_count: int = 0,
+                                     total_roms: int = 0) -> Optional[Dict]:
+        """Pick a random ROM the way we had to before RomM 5.2.0.
+
+        Both paths are best-effort, which is why they retry: the platform one
+        pulls an entire platform listing down to choose one row from it, and the
+        collection one guesses at ROM ids, so it misses every time ids are not
+        dense from 1 and can never reach an id above the library count.
+        """
+        for attempt in range(10):
+            try:
+                if platform_id is not None:
+                    roms_response = await self.bot.fetch_api_endpoint(
+                        f'roms?platform_id={platform_id}&platform_ids={platform_id}&limit={rom_count}'
+                    )
+
+                    if isinstance(roms_response, dict) and 'items' in roms_response:
+                        all_roms = roms_response['items']
+                    elif isinstance(roms_response, list):
+                        all_roms = roms_response
+                    else:
+                        all_roms = []
+
+                    if all_roms:
+                        rom_data = random.choice(all_roms)
+                        detailed_rom = await self.bot.fetch_api_endpoint(f"roms/{rom_data['id']}")
+                        return detailed_rom if isinstance(detailed_rom, dict) else rom_data
+                else:
+                    random_rom_id = random.randint(1, total_roms)
+                    rom_data = await self.bot.fetch_api_endpoint(f'roms/{random_rom_id}')
+                    if isinstance(rom_data, dict) and rom_data.get('id'):
+                        return rom_data
+
+            except Exception as e:
+                logger.error(f"Error in random ROM attempt {attempt + 1}: {e}")
+
+            logger.info(f"Random ROM attempt {attempt + 1} failed")
+            await asyncio.sleep(1)
+
+        return None
+
+    def platform_name_for_rom(self, rom_data: Dict) -> Optional[str]:
+        """Look up the display name of the platform a ROM belongs to."""
+        platform_id = rom_data.get('platform_id')
+        if not platform_id:
+            return None
+
+        platforms_data = self.bot.cache.get('platforms')
+        if not platforms_data:
+            return None
+
+        for platform in platforms_data:
+            if platform.get('id') == platform_id:
+                return platform.get('name')
+        return None
+
+    async def send_random_rom(self, ctx: discord.ApplicationContext, rom_data: Dict,
+                              platform_display_name: Optional[str]) -> None:
+        """Render a random pick and wire up its view."""
+        view = ROM_View(self.bot, [rom_data], ctx.author.id, platform_display_name)
+        view.remove_item(view.select)
+        view._selected_rom = rom_data
+        embed, cover_file = await view.create_rom_embed(rom_data)
+        await view.update_file_select(rom_data)
+
+        message_content = "🎲 Found a random ROM"
+        if platform_display_name:
+            message_content += f" from {self.get_platform_with_emoji(platform_display_name)}"
+        message_content += ":"
+
+        if cover_file:
+            initial_message = await ctx.respond(
+                message_content,
+                embed=embed,
+                view=view,
+                file=cover_file
+            )
+        else:
+            initial_message = await ctx.respond(
+                message_content,
+                embed=embed,
+                view=view
+            )
+
+        if isinstance(initial_message, discord.Interaction):
+            initial_message = await initial_message.original_response()
+
+        view.message = initial_message
+        task = self.bot.loop.create_task(view.watch_for_qr_triggers(ctx.interaction))
+        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+
     @discord.slash_command(name="random", description="Get a random ROM from the collection or a specific platform")
     async def random(
-        self, 
+        self,
         ctx: discord.ApplicationContext,
         platform: discord.Option(
-            str, 
-            "Platform to get random ROM from", 
+            str,
+            "Platform to get random ROM from",
             required=False,
             autocomplete=platform_autocomplete
         )
@@ -1748,14 +1867,17 @@ class Search(commands.Cog):
         """Get a random ROM from the collection or a specific platform."""
         await ctx.defer()
         try:
+            platform_id = None
+            platform_display_name = None
+            rom_count = 0
+            total_roms = 0
+
             if platform:
-                # Get platform data
                 raw_platforms = await self.bot.fetch_api_endpoint('platforms')
                 if not raw_platforms:
                     await ctx.respond("❌ Unable to fetch platforms data")
                     return
 
-                # Find matching platform
                 platform_id, platform_display_name = await self.bot.find_platform_by_name(platform, raw_platforms)
 
                 if not platform_id:
@@ -1767,150 +1889,49 @@ class Search(commands.Cog):
                     await ctx.respond(f"❌ Platform '{platform}' not found. Available platforms:\n{platforms_list}")
                     return
 
-                # Find platform_data from already-fetched platforms
-                platform_data = None
-                for p in raw_platforms:
-                    if p['id'] == platform_id:
-                        platform_data = p
-                        break
-                
+                platform_data = next((p for p in raw_platforms if p['id'] == platform_id), None)
                 rom_count = platform_data.get('rom_count', 0) if platform_data else 0
-                
+
                 if rom_count <= 0:
                     await ctx.respond(f"❌ No ROMs found for platform '{self.get_platform_with_emoji(platform_display_name)}'")
                     return
-
-                # Try up to 10 times to find a valid ROM for the specific platform
-                max_attempts = 10
-                for attempt in range(max_attempts):
-                    try:
-                        # Get ROMs for platform
-                        roms_response = await self.bot.fetch_api_endpoint(
-                            f'roms?platform_id={platform_id}&platform_ids={platform_id}&limit={rom_count}'
-                        )
-
-                        # Handle paginated response
-                        if roms_response and isinstance(roms_response, dict) and 'items' in roms_response:
-                            all_roms = roms_response['items']
-                        elif roms_response and isinstance(roms_response, list):
-                            all_roms = roms_response
-                        else:
-                            all_roms = []
-                        
-                        if all_roms and isinstance(all_roms, list) and len(all_roms) > 0:
-                            # Select a random ROM from the list
-                            rom_data = random.choice(all_roms)
-                            
-                            # Get full ROM data
-                            detailed_rom = await self.bot.fetch_api_endpoint(f'roms/{rom_data["id"]}')
-                            if detailed_rom:
-                                rom_data = detailed_rom
-                            
-                            logger.info(f"Random ROM found - User: {ctx.author} (ID: {ctx.author.id}) | ROM: '{rom_data['name']}' | ROM ID: #{rom_data['id']} | Platform: {platform_display_name}")
-                            
-                            # Create view with explicit ROM data
-                            view = ROM_View(self.bot, [rom_data], ctx.author.id, platform_display_name)
-                            view.remove_item(view.select)
-                            view._selected_rom = rom_data
-                            embed, cover_file = await view.create_rom_embed(rom_data)  # Changed to unpack tuple
-                            await view.update_file_select(rom_data)
-
-                            # Send with file if available
-                            if cover_file:
-                                initial_message = await ctx.respond(
-                                    f"🎲 Found a random ROM from {self.get_platform_with_emoji(platform_display_name)}:",
-                                    embed=embed,
-                                    view=view,
-                                    file=cover_file  # Add the file
-                                )
-                            else:
-                                initial_message = await ctx.respond(
-                                    f"🎲 Found a random ROM from {self.get_platform_with_emoji(platform_display_name)}:",
-                                    embed=embed,
-                                    view=view
-                                )
-
-                            if isinstance(initial_message, discord.Interaction):
-                                initial_message = await initial_message.original_response()
-                            
-                            view.message = initial_message
-                            task = self.bot.loop.create_task(view.watch_for_qr_triggers(ctx.interaction))
-                            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
-                            return
-
-                    except Exception as e:
-                        logger.error(f"Error in attempt {attempt + 1}: {e}")
-                    
-                    logger.info(f"Random ROM attempt {attempt + 1} for platform {platform_display_name} failed")
-                    await asyncio.sleep(1)
-
             else:
-                # Random from full collection
                 stats_data = self.bot.cache.get('stats')
                 if not stats_data or 'Roms' not in stats_data:
                     await ctx.respond("❌ Unable to fetch collection data")
                     return
-                
+
                 total_roms = stats_data['Roms']
                 if total_roms <= 0:
                     await ctx.respond("❌ No ROMs found in the collection")
                     return
 
-                # Try up to 10 times to find a valid ROM
-                max_attempts = 10
-                for attempt in range(max_attempts):
-                    random_rom_id = random.randint(1, total_roms)
-                    rom_data = await self.bot.fetch_api_endpoint(f'roms/{random_rom_id}')
-                
-                    if rom_data and isinstance(rom_data, dict) and rom_data.get('id'):
-                        # Get platform name if available
-                        platform_name = None
-                        if platform_id := rom_data.get('platform_id'):
-                            platforms_data = self.bot.cache.get('platforms')
-                            if platforms_data:
-                                for p in platforms_data:
-                                    if p.get('id') == platform_id:
-                                        platform_name = p.get('name')
-                                        break
-                        
-                        logger.info(f"Random ROM found - User: {ctx.author} (ID: {ctx.author.id}) | ROM: '{rom_data['name']}' | ROM ID: #{rom_data['id']} | Platform: {platform_name or 'Unknown'}")
+            # We have just established that the scope holds ROMs, so None here
+            # means the server predates the endpoint rather than that there is
+            # nothing to pick.
+            rom_data = await self.fetch_random_rom(platform_id)
+            if not rom_data:
+                logger.debug("Falling back to client-side random ROM selection")
+                rom_data = await self.pick_random_rom_legacy(
+                    platform_id=platform_id,
+                    rom_count=rom_count,
+                    total_roms=total_roms
+                )
 
-                        # Create view with explicit ROM data
-                        view = ROM_View(self.bot, [rom_data], ctx.author.id, platform_name)
-                        view.remove_item(view.select)
-                        view._selected_rom = rom_data
-                        embed, cover_file = await view.create_rom_embed(rom_data)  # Changed to unpack tuple
-                        await view.update_file_select(rom_data)
+            if not rom_data:
+                await ctx.respond("❌ Failed to find a valid random ROM. Please try again.")
+                return
 
-                        # Send with file if available
-                        message_content = f"🎲 Found a random ROM" + (f" from {self.get_platform_with_emoji(platform_name)}" if platform_name else "") + ":"
-                        if cover_file:
-                            initial_message = await ctx.respond(
-                                message_content,
-                                embed=embed,
-                                view=view,
-                                file=cover_file  # Add the file
-                            )
-                        else:
-                            initial_message = await ctx.respond(
-                                message_content,
-                                embed=embed,
-                                view=view
-                            )
+            if platform_display_name is None:
+                platform_display_name = self.platform_name_for_rom(rom_data)
 
-                        if isinstance(initial_message, discord.Interaction):
-                            initial_message = await initial_message.original_response()
-                        
-                        view.message = initial_message
-                        task = self.bot.loop.create_task(view.watch_for_qr_triggers(ctx.interaction))
-                        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
-                        return
+            logger.info(
+                f"Random ROM found - User: {ctx.author} (ID: {ctx.author.id}) | "
+                f"ROM: '{rom_data['name']}' | ROM ID: #{rom_data['id']} | "
+                f"Platform: {platform_display_name or 'Unknown'}"
+            )
 
-                    logger.info(f"Random ROM attempt {attempt + 1} with ID {random_rom_id} failed")
-                    await asyncio.sleep(1)
-
-            # If all attempts failed
-            await ctx.respond("❌ Failed to find a valid random ROM. Please try again.")
+            await self.send_random_rom(ctx, rom_data, platform_display_name)
 
         except Exception as e:
             logger.error(f"Error in random command: {e}", exc_info=True)
