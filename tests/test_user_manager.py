@@ -141,7 +141,8 @@ class RoleRemovalOwnershipTests(unittest.IsolatedAsyncioTestCase):
 
 class FakeConfig:
     DOMAIN = "https://example.com"
-    GUILD_ID = "42"
+    # Config.validate() coerces this to an int before any cog sees it.
+    GUILD_ID = 42
 
 
 class FakeInviteBot:

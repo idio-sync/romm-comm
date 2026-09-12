@@ -1533,10 +1533,7 @@ class UserManager(commands.Cog):
         it, which is the behaviour the invite flow was always meant to have.
         """
         member = None
-        try:
-            guild = self.bot.get_guild(int(self.bot.config.GUILD_ID))
-        except (AttributeError, TypeError, ValueError):
-            guild = None
+        guild = self.bot.get_guild(self.bot.config.GUILD_ID)
         if guild:
             member = guild.get_member(discord_id)
 
