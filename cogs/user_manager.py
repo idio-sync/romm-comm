@@ -13,6 +13,11 @@ from admin_checks import is_admin
 
 logger = logging.getLogger('romm_bot.users')
 
+# Seconds to wait between sends in a bulk invite run. Opening a DM channel is
+# one of the more aggressively rate limited things a bot can do, and a burst of
+# them is what draws attention to an account.
+BULK_INVITE_DELAY_SECONDS = 1.0
+
 class UserManagementView(discord.ui.View):
     """Comprehensive user management interface for admins"""
     
@@ -843,15 +848,21 @@ class UserManagementView(discord.ui.View):
             return
         
         # Create progress message
+        estimate = int(len(members_to_invite) * BULK_INVITE_DELAY_SECONDS)
         progress_msg = await interaction.followup.send(
-            f"Sending invites to {len(members_to_invite)} users...",
+            f"Sending invites to {len(members_to_invite)} users (about {estimate}s)...",
             ephemeral=True
         )
         
         sent = 0
         failed = 0
         
-        for member in members_to_invite:
+        for index, member in enumerate(members_to_invite):
+            # Pace the run rather than letting the library absorb a wall of
+            # 429s, which would stall it with no visible explanation.
+            if index:
+                await asyncio.sleep(BULK_INVITE_DELAY_SECONDS)
+
             if await self.cog.send_invite_link(member):
                 sent += 1
             else:
