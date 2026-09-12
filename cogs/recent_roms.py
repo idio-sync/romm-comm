@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 import time
-from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from typing import Dict, List, Optional, Set, Tuple
@@ -16,7 +15,19 @@ from PIL import Image
 
 from admin_checks import is_admin
 
+from .batch_embed import add_batch_footer, build_batch_embed, build_bulk_embed
+
 logger = logging.getLogger(__name__)
+
+# Bounds on a downloaded cover before it is decoded. The file comes from
+# whatever the RomM server was pointed at, so an oversized one would otherwise
+# be decompressed straight into memory.
+MAX_COVER_DIMENSION = 4096
+MAX_COVER_BYTES = 10 * 1024 * 1024
+
+# Above this many ROMs the covers are skipped: the composite stops being
+# legible and the downloads stop being worth the wait.
+MAX_ROMS_WITH_COVERS = 24
 
 class RecentRomsMonitor(commands.Cog):
     """Monitor ROMs via WebSocket connection to RomM scan events"""
@@ -1063,194 +1074,135 @@ class RecentRomsMonitor(commands.Cog):
             logger.error(f"Error in legacy composite method: {e}", exc_info=True)
             return None
     
+    async def _download_cover_image(self, rom: Dict) -> Optional[Image.Image]:
+        """Fetch one ROM's cover and return it as a loaded PIL image.
+
+        Bounded on both size and dimensions before anything is decoded: a
+        cover comes from whatever the RomM server was pointed at, and an
+        oversized one would otherwise be decompressed into memory.
+        """
+        platform_id = rom.get('platform_id')
+        rom_id = rom.get('id')
+
+        if not platform_id or not rom_id:
+            return None
+
+        cover_url = (
+            f"{self.bot.config.API_BASE_URL}"
+            f"/assets/romm/resources/roms/{platform_id}/{rom_id}/cover/big.png"
+        )
+
+        try:
+            session = await self._ensure_http_session()
+
+            async with session.get(cover_url) as response:
+                if response.status != 200:
+                    return None
+
+                # Check content-length header first if available
+                content_length = response.headers.get('content-length')
+                if content_length and int(content_length) > MAX_COVER_BYTES:
+                    logger.warning(
+                        f"Cover image for ROM {rom_id} too large ({content_length} bytes), skipping"
+                    )
+                    return None
+
+                image_bytes = await response.read()
+
+                # The header is not to be trusted; check what actually arrived.
+                if len(image_bytes) > MAX_COVER_BYTES:
+                    logger.warning(
+                        f"Cover image for ROM {rom_id} too large "
+                        f"({len(image_bytes)} bytes), skipping"
+                    )
+                    return None
+
+                img = Image.open(BytesIO(image_bytes))
+
+                # Validate dimensions before loading full image data
+                if img.width > MAX_COVER_DIMENSION or img.height > MAX_COVER_DIMENSION:
+                    logger.warning(
+                        f"Cover image for ROM {rom_id} dimensions too large "
+                        f"({img.width}x{img.height}), skipping"
+                    )
+                    img.close()
+                    return None
+
+                img.load()  # Force loading all pixel data into memory
+
+                # Convert to RGBA for consistency
+                if img.mode != 'RGBA':
+                    img = img.convert('RGBA')
+
+                return img
+
+        except Exception as e:
+            logger.error(f"Error downloading/loading cover for ROM {rom_id}: {e}")
+            return None
+
+    async def _fetch_cover_images(self, roms: List[Dict]) -> List[Image.Image]:
+        """Covers for a batch, fetched in parallel.
+
+        ROMs that arrived without a cover URL get their details looked up
+        first, since the scan payload does not always carry one. Failures are
+        dropped rather than raised - a missing cover is not worth losing the
+        announcement over.
+        """
+        detail_tasks = [
+            self.bot.fetch_api_endpoint(f'roms/{rom["id"]}', bypass_cache=True)
+            if not rom.get('url_cover') else asyncio.sleep(0)
+            for rom in roms
+        ]
+
+        if detail_tasks:
+            detail_results = await asyncio.gather(*detail_tasks, return_exceptions=True)
+            for i, result in enumerate(detail_results):
+                if isinstance(result, dict) and result:
+                    roms[i].update(result)
+
+        cover_tasks = [self._download_cover_image(rom) for rom in roms if rom.get('url_cover')]
+        if not cover_tasks:
+            return []
+
+        cover_results = await asyncio.gather(*cover_tasks, return_exceptions=True)
+        return [img for img in cover_results if isinstance(img, Image.Image)]
+
+    async def _build_composite_cover(self, cover_images: List[Image.Image]) -> Optional[discord.File]:
+        """Tile the covers into one attachment, off the event loop."""
+        if not cover_images:
+            return None
+
+        final_buffer = await self.bot.loop.run_in_executor(
+            None, self.create_composite_from_images, cover_images
+        )
+        if not final_buffer:
+            return None
+
+        return discord.File(final_buffer, filename="composite_cover.png")
+
     async def create_batch_embed(self, roms: List[Dict]) -> Tuple[discord.Embed, Optional[discord.File]]:
         """Create a summary embed for multiple ROMs"""
         is_bulk = len(roms) >= self.bulk_display_threshold
-        should_fetch_covers = 2 <= len(roms) <= 24 and not is_bulk  # Increased from 16 to 24
-        
-        # Download covers in parallel if needed
-        cover_images = []  # Store PIL Image objects directly
-        if should_fetch_covers:
-            # Fetch detailed ROM data for covers in parallel
-            detail_tasks = []
-            for rom in roms:
-                if not rom.get('url_cover'):
-                    detail_tasks.append(
-                        self.bot.fetch_api_endpoint(f'roms/{rom["id"]}', bypass_cache=True)
-                    )
-                else:
-                    detail_tasks.append(asyncio.sleep(0))
-            
-            if detail_tasks:
-                detail_results = await asyncio.gather(*detail_tasks, return_exceptions=True)
-                for i, result in enumerate(detail_results):
-                    if isinstance(result, dict) and result:
-                        roms[i].update(result)
-            
-            # Download all covers in parallel - load as PIL Images immediately
-            # Maximum image dimensions to prevent DoS via oversized images
-            MAX_IMAGE_DIMENSION = 4096  # Max width or height
-            MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10MB max file size
 
-            async def download_and_load_cover(rom: Dict) -> Optional[Image.Image]:
-                """Download cover and return loaded PIL Image"""
-                platform_id = rom.get('platform_id')
-                rom_id = rom.get('id')
+        # Covers are only worth fetching for a batch small enough to show them
+        # and large enough to be worth tiling.
+        should_fetch_covers = 2 <= len(roms) <= MAX_ROMS_WITH_COVERS and not is_bulk
 
-                if not platform_id or not rom_id:
-                    return None
+        cover_images = await self._fetch_cover_images(roms) if should_fetch_covers else []
+        composite_file = await self._build_composite_cover(cover_images)
 
-                cover_url = f"{self.bot.config.API_BASE_URL}/assets/romm/resources/roms/{platform_id}/{rom_id}/cover/big.png"
-
-                try:
-                    session = await self._ensure_http_session()
-
-                    async with session.get(cover_url) as response:
-                        if response.status == 200:
-                            # Check content-length header first if available
-                            content_length = response.headers.get('content-length')
-                            if content_length and int(content_length) > MAX_IMAGE_BYTES:
-                                logger.warning(f"Cover image for ROM {rom_id} too large ({content_length} bytes), skipping")
-                                return None
-
-                            # Read all data first
-                            image_bytes = await response.read()
-
-                            # Validate downloaded size
-                            if len(image_bytes) > MAX_IMAGE_BYTES:
-                                logger.warning(f"Cover image for ROM {rom_id} too large ({len(image_bytes)} bytes), skipping")
-                                return None
-
-                            # Immediately load and decode the complete image
-                            # This forces PIL to read ALL image data
-                            img = Image.open(BytesIO(image_bytes))
-
-                            # Validate dimensions before loading full image data
-                            if img.width > MAX_IMAGE_DIMENSION or img.height > MAX_IMAGE_DIMENSION:
-                                logger.warning(f"Cover image for ROM {rom_id} dimensions too large ({img.width}x{img.height}), skipping")
-                                img.close()
-                                return None
-
-                            img.load()  # Force loading all pixel data into memory
-
-                            # Convert to RGBA for consistency
-                            if img.mode != 'RGBA':
-                                img = img.convert('RGBA')
-
-                            return img
-                        else:
-                            return None
-
-                except Exception as e:
-                    logger.error(f"Error downloading/loading cover for ROM {rom_id}: {e}")
-                    return None
-            
-            cover_tasks = [
-                download_and_load_cover(rom) 
-                for rom in roms if rom.get('url_cover')
-            ]
-            
-            if cover_tasks:
-                cover_results = await asyncio.gather(*cover_tasks, return_exceptions=True)
-                cover_images = [
-                    img for img in cover_results 
-                    if img and isinstance(img, Image.Image) and not isinstance(img, Exception)
-                ]
-        
-        # Create composite image in executor
-        composite_file = None
-        if cover_images:
-            final_buffer = await self.bot.loop.run_in_executor(
-                None, self.create_composite_from_images, cover_images
-            )
-            if final_buffer:
-                composite_file = discord.File(final_buffer, filename="composite_cover.png")
-        
-        # Create embed
         if is_bulk:
-            embed = discord.Embed(
-                title="📦 Bulk Collection Update",
-                description=f"{len(roms)} games have been added to the collection",
-                color=discord.Color.orange()
-            )
-            
-            # Set RomM logo as thumbnail
-            embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
-            
-            # Group by platform
-            by_platform = defaultdict(int)
-            for rom in roms:
-                platform = rom.get('platform_name', 'Unknown')
-                by_platform[platform] += 1
-            
-            # Platform summary
-            platform_summary = []
-            for platform, count in sorted(by_platform.items(), key=lambda x: x[1], reverse=True)[:10]:
-                platform_summary.append(f"• {self.get_platform_with_emoji(platform)}: {count} ROMs")
-            
-            if len(by_platform) > 10:
-                platform_summary.append(f"• ...and {len(by_platform) - 10} more platforms")
-            
-            embed.add_field(
-                name="Platforms Updated",
-                value="\n".join(platform_summary),
-                inline=False
-            )
-            
-            embed.add_field(
-                name="📋 Note",
-                value="Showing summary view due to large number of additions. Use `/search` to find specific games.",
-                inline=False
-            )
+            embed = build_bulk_embed(roms, platform_display=self.get_platform_with_emoji)
         else:
-            # Regular batch embed - match original formatting
-            embed = discord.Embed(
-                title=f"🆕 {len(roms)} New Games Added",
-                description="Multiple games have been added to the collection:",
-                color=discord.Color.blue()
+            embed = build_batch_embed(
+                roms,
+                platform_display=self.get_platform_with_emoji,
+                romm_url=self.bot.config.DOMAIN,
+                romm_emoji=self.bot.get_formatted_emoji('romm'),
+                has_composite=composite_file is not None,
             )
-            
-            # Set RomM logo as thumbnail
-            embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
-            
-            # Set composite cover as main image if available
-            if composite_file:
-                embed.set_image(url="attachment://composite_cover.png")
-            
-            # Group by platform
-            by_platform = defaultdict(list)
-            for rom in roms:
-                platform = rom.get('platform_name', 'Unknown')
-                by_platform[platform].append(rom['name'])
-            
-            # Show games by platform - each game on a separate line
-            for platform in sorted(by_platform.keys()):
-                games = by_platform[platform]
-                platform_display = self.get_platform_with_emoji(platform)
-                
-                # Format games with each on a new line
-                games_text = "\n".join([f"• {game}" for game in games[:10]])
-                if len(games) > 10:
-                    games_text += f"\n• ...and {len(games) - 10} more"
-                
-                embed.add_field(
-                    name=platform_display,
-                    value=games_text,
-                    inline=False
-                )
-            
-            # View collection field with link
-            romm_url = self.bot.config.DOMAIN
-            romm_emoji = self.bot.get_formatted_emoji('romm')
-            embed.add_field(
-                name="View Collection",
-                value=f"[{romm_emoji} Browse all games]({romm_url})",
-                inline=False
-            )
-        
-        embed.set_footer(text=f"Batch update • {len(roms)} new games • Use /search to download")
-        
-        return embed, composite_file
+
+        return add_batch_footer(embed, len(roms)), composite_file
     
     @discord.slash_command(
         name="refresh_recent_metadata",
