@@ -1,0 +1,20 @@
+# Normalize line endings in the object store.
+#
+# This repository grew a mixed history: most files are stored with LF but ten
+# were committed from Windows with CRLF. With core.autocrlf=true the working
+# tree is uniformly CRLF regardless, so git wants to rewrite whichever set does
+# not match on every commit, turning one-line edits into whole-file diffs.
+#
+# text=auto stores everything as LF and checks it out in the platform's native
+# form. The commit that adds this file also renormalizes the ten stragglers, so
+# from here on the two stay in agreement.
+* text=auto
+
+# Never touch these, in case auto-detection guesses wrong.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.psd binary
+*.svg text
