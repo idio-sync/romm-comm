@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import os
 import re
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
@@ -15,9 +14,9 @@ logger = logging.getLogger(__name__)
 
 class IGDBClient:
     """IGDB API client for game metadata"""
-    def __init__(self):
-        self.client_id = os.getenv('IGDB_CLIENT_ID')
-        self.client_secret = os.getenv('IGDB_CLIENT_SECRET')
+    def __init__(self, config):
+        self.client_id = config.IGDB_CLIENT_ID
+        self.client_secret = config.IGDB_CLIENT_SECRET
         self.access_token = None
         self.token_expires = None
         self._session: Optional[aiohttp.ClientSession] = None
@@ -1490,7 +1489,7 @@ class IGDBHandler(commands.Cog):
     async def setup(self):
         """Initialize IGDB client"""
         try:
-            self.igdb = IGDBClient()
+            self.igdb = IGDBClient(self.bot.config)
             logger.debug("✅ IGDB Handler initialized successfully")
         except ValueError as e:
             logger.warning(f"IGDB integration disabled: {e}")

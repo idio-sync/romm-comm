@@ -1,14 +1,12 @@
 import asyncio
 import base64
-import json
 import logging
 import os
 import re
 import time
-from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 import aiohttp
 import discord
@@ -17,6 +15,7 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 from database_manager import MasterDatabase
+from romm_client import RommClient
 
 # Load environment variables from .env file
 load_dotenv()
@@ -33,43 +32,7 @@ logger = logging.getLogger('romm_bot')
 
 logging.getLogger('discord').setLevel(logging.WARNING)
 
-class APICache:
-    """Cache manager for API data with TTL."""
-    def __init__(self, ttl_seconds: int = 3600):
-        self.cache: Dict[str, Dict[str, Any]] = {}
-        self.ttl = ttl_seconds
-        self.last_fetch: Dict[str, float] = defaultdict(float)
 
-    def is_fresh(self, endpoint: str) -> bool:
-        """Check if cached data is still fresh."""
-        return time.time() - self.last_fetch.get(endpoint, 0) < self.ttl
-
-    def get(self, endpoint: str) -> Optional[Dict[str, Any]]:
-        """Get cached data if fresh."""
-        return self.cache.get(endpoint) if self.is_fresh(endpoint) else None
-
-    def set(self, endpoint: str, data: Dict[str, Any]):
-        """Set cache data with current timestamp."""
-        self.cache[endpoint] = data
-        self.last_fetch[endpoint] = time.time()
-
-class RateLimit:
-    """Rate limit manager for Discord API calls."""
-    def __init__(self, calls_per_minute: int = 30):
-        self.calls_per_minute = calls_per_minute
-        self.calls: list[float] = []
-
-    async def acquire(self):
-        """Wait if necessary to respect rate limits."""
-        now = time.time()
-        self.calls = [t for t in self.calls if now - t < 60]  # Clean old calls
-        
-        if len(self.calls) >= self.calls_per_minute:
-            wait_time = 60 - (now - self.calls[0])
-            if wait_time > 0:
-                await asyncio.sleep(wait_time)
-        
-        self.calls.append(now)
 
 class SocketIOManager:
     """Shared Socket.IO connection manager for all cogs"""
@@ -380,6 +343,14 @@ class Config:
         self.IGDB_CLIENT_ID = os.getenv('IGDB_CLIENT_ID')
         self.IGDB_CLIENT_SECRET = os.getenv('IGDB_CLIENT_SECRET')
         self.AUTO_REGISTER_ROLE_ID = os.getenv('AUTO_REGISTER_ROLE_ID')
+
+        # GGRequestz integration. The URL is stored without a trailing /api;
+        # the integration appends the path itself.
+        ggr_url = os.getenv('GGREQUESTZ_URL', '').rstrip('/')
+        if ggr_url.endswith('/api'):
+            ggr_url = ggr_url[:-4]
+        self.GGREQUESTZ_URL = ggr_url
+        self.GGREQUESTZ_API_KEY = os.getenv('GGREQUESTZ_API_KEY')
         self.ENABLE_USER_MANAGER = self.parse_bool(os.getenv('ENABLE_USER_MANAGER', 'true'), True)
 
         self.validate()
@@ -427,27 +398,16 @@ class RommBot(discord.Bot):
             # application_id=os.getenv('RommBot/1.0')
         )
 
-        # Initialize bot attributes    
+        # Initialize bot attributes
         self.config = Config()
-        self.cache = APICache(self.config.CACHE_TTL)
-        self.rate_limiter = RateLimit()
-        self.session: Optional[aiohttp.ClientSession] = None
-        self._session_lock = asyncio.Lock()
+
+        # Everything to do with talking to RomM - the HTTP session, OAuth and
+        # CSRF tokens, the response cache - belongs to the client.
+        self.romm = RommClient(self.config)
 
         # Master database initialization - DON'T initialize here, wait for setup_hook
         self.db = None
-        
-        # OAuth token management attributes
-        self.access_token: Optional[str] = None
-        self.refresh_token: Optional[str] = None
-        self.token_expiry: float = 0
-        self.token_lock = asyncio.Lock()
-        
-        # CSRF token management
-        self.csrf_token: Optional[str] = None
-        self.csrf_cookie: Optional[str] = None
-        self.csrf_expiry: float = 0
-        
+
         # Add a commands sync flag
         self.synced = False
         
@@ -467,159 +427,53 @@ class RommBot(discord.Bot):
         # Shared SocketIO manager
         self.socketio_manager = None 
 
+
+
+    
+
+        
+    
+    # The RomM API client owns the session, the tokens and the cache. These
+    # delegates and aliases keep the call sites in the cogs working unchanged.
+
+    @property
+    def cache(self):
+        return self.romm.cache
+
+    @property
+    def rate_limiter(self):
+        return self.romm.rate_limiter
+
+    @property
+    def session(self) -> Optional[aiohttp.ClientSession]:
+        return self.romm.session
+
+    @property
+    def access_token(self) -> Optional[str]:
+        return self.romm.access_token
+
+    @property
+    def csrf_token(self) -> Optional[str]:
+        return self.romm.csrf_token
+
+    async def ensure_session(self) -> aiohttp.ClientSession:
+        return await self.romm.ensure_session()
+
     async def get_oauth_token(self) -> bool:
-        """Get initial OAuth token using username/password."""
-        try:
-            session = await self.ensure_session()
-            
-            # Token endpoint keeps the /api/ prefix
-            token_url = f"{self.config.API_BASE_URL}/api/token"
-            logger.debug(f"Requesting token from: {token_url}")
-            
-            # Prepare form data for OAuth2 password grant
-            data = aiohttp.FormData()
-            data.add_field('grant_type', 'password')
-            data.add_field('username', self.config.USER)
-            data.add_field('password', self.config.PASS)
-            data.add_field('scope', 'roms.read platforms.read firmware.read users.read users.write me.write')
-            
-            # Simple headers for OAuth token request
-            headers = {
-                "Accept": "application/json",
-                "Content-Type": "application/x-www-form-urlencoded"
-            }
-            
-            async with session.post(token_url, data=data, headers=headers) as response:
-                response_text = await response.text()
-                logger.debug(f"Token response status: {response.status}")
-                logger.debug(f"Token response content-type: {response.headers.get('content-type')}")
-                
-                if response.status == 200:
-                    try:
-                        token_data = await response.json()
-                        self.access_token = token_data.get('access_token')
-                        self.refresh_token = token_data.get('refresh_token')
-                        # Store expiry time (subtract 60 seconds for safety margin)
-                        self.token_expiry = time.time() + token_data.get('expires', 900) - 60
-
-                        # Validate that we actually got an access token
-                        if not self.access_token:
-                            logger.error("OAuth response missing access_token")
-                            return False
-
-                        logger.debug("Successfully obtained OAuth tokens")
-                        return True
-                    except Exception as e:
-                        logger.error(f"Failed to parse token response: {e}")
-                        logger.error(f"Response text: {response_text}")
-                        return False
-                else:
-                    logger.error(f"Failed to get OAuth token. Status: {response.status}")
-                    logger.error(f"Response: {response_text}")
-                    return False
-                    
-        except Exception as e:
-            logger.error(f"Error getting OAuth token: {e}", exc_info=True)
-            return False
+        return await self.romm.get_oauth_token()
 
     async def refresh_oauth_token(self) -> bool:
-        """Refresh the OAuth token using the refresh token."""
-        if not self.refresh_token:
-            logger.debug("No refresh token available, getting new token")
-            return await self.get_oauth_token()
-        
-        try:
-            session = await self.ensure_session()
-            token_url = f"{self.config.API_BASE_URL}/api/token"
-            
-            data = aiohttp.FormData()
-            data.add_field('grant_type', 'refresh_token')
-            data.add_field('refresh_token', self.refresh_token)
-            
-            async with session.post(token_url, data=data) as response:
-                if response.status == 200:
-                    try:
-                        token_data = await response.json()
-                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
-                        logger.error(f"Invalid JSON response when refreshing token: {e}")
-                        return await self.get_oauth_token()
-                    self.access_token = token_data.get('access_token')
-                    # Refresh token may or may not be returned
-                    if 'refresh_token' in token_data:
-                        self.refresh_token = token_data.get('refresh_token')
-                    self.token_expiry = time.time() + token_data.get('expires', 900) - 60
-                    logger.debug("Successfully refreshed OAuth token")
-                    return True
-                else:
-                    logger.warning(f"Failed to refresh token, status: {response.status}")
-                    # If refresh fails, try getting a new token
-                    return await self.get_oauth_token()
-                    
-        except Exception as e:
-            logger.error(f"Error refreshing OAuth token: {e}")
-            return await self.get_oauth_token()
+        return await self.romm.refresh_oauth_token()
 
     async def ensure_valid_token(self) -> bool:
-        """Ensure we have a valid OAuth token, refreshing if necessary."""
-        async with self.token_lock:
-            # Client API token is a static credential: no OAuth grant or refresh needed.
-            if self.config.ROMM_CLIENT_TOKEN:
-                self.access_token = self.config.ROMM_CLIENT_TOKEN
-                return True
-            # Check if token is expired or missing
-            if not self.access_token or time.time() >= self.token_expiry:
-                logger.debug("Token expired or missing, refreshing...")
-                # Only try refresh token if we have one and access token expired recently (within 1 hour)
-                # This prevents using stale refresh tokens and aligns with typical OAuth best practices
-                if self.refresh_token and time.time() < self.token_expiry + 3600:  # 1 hour grace period
-                    return await self.refresh_oauth_token()
-                else:
-                    # Token expired too long ago or no refresh token - get fresh credentials
-                    return await self.get_oauth_token()
-            return True
-    
+        return await self.romm.ensure_valid_token()
+
     async def get_csrf_token(self) -> Optional[str]:
-        """Get CSRF token from the heartbeat endpoint."""
-        try:
-            session = await self.ensure_session()
-            heartbeat_url = f"{self.config.API_BASE_URL}/api/heartbeat"
-            
-            async with session.get(heartbeat_url) as response:
-                if response.status != 200:
-                    logger.error(f"Failed to get heartbeat. Status: {response.status}")
-                    return None
-                
-                # Extract CSRF token from Set-Cookie header
-                set_cookie = response.headers.get('Set-Cookie')
-                if not set_cookie:
-                    logger.debug("No Set-Cookie header in heartbeat response")
-                    return None
-                
-                # Parse the CSRF token from cookie using regex for safety
-                csrf_match = re.search(r'romm_csrftoken=([^;]+)', set_cookie)
-                if csrf_match:
-                    csrf_token = csrf_match.group(1)
-                    self.csrf_token = csrf_token
-                    self.csrf_cookie = f"romm_csrftoken={csrf_token}"
-                    # CSRF tokens typically last for the session
-                    self.csrf_expiry = time.time() + 3600  # 1 hour expiry
-                    logger.debug(f"Extracted CSRF token: {csrf_token[:10]}...")
-                    return csrf_token
-                else:
-                    logger.debug("CSRF token not found in Set-Cookie header")
-                    return None
-                    
-        except Exception as e:
-            logger.error(f"Error getting CSRF token: {e}")
-            return None
+        return await self.romm.get_csrf_token()
 
     async def ensure_csrf_token(self) -> Optional[str]:
-        """Ensure we have a valid CSRF token."""
-        if not self.csrf_token or time.time() >= self.csrf_expiry:
-            logger.debug("CSRF token expired or missing, fetching new one")
-            return await self.get_csrf_token()
-        return self.csrf_token
-        
+        return await self.romm.ensure_csrf_token()
+
     async def make_authenticated_request(
         self,
         method: str,
@@ -629,85 +483,18 @@ class RommBot(discord.Bot):
         form_data: Optional[aiohttp.FormData] = None,
         require_csrf: bool = False
     ) -> Optional[Dict]:
-        """Make an authenticated API request with proper headers.
+        return await self.romm.make_authenticated_request(
+            method, endpoint, data=data, params=params,
+            form_data=form_data, require_csrf=require_csrf
+        )
 
-        require_csrf is a no-op against current RomM. Its CSRFMiddleware skips
-        validation outright when the Authorization scheme is bearer or basic,
-        and every request made here carries a bearer token, so the extra
-        round-trip to fetch a CSRF token buys nothing. The flag is kept, and
-        left set where it already was, in case an older or differently
-        configured server does enforce it. New call sites do not need it,
-        which is why users/invite-link omits it.
-        """
-        try:
-            if not await self.ensure_valid_token():
-                logger.error("Failed to obtain valid OAuth token")
-                return None
-            
-            session = await self.ensure_session()
-            url = f"{self.config.API_BASE_URL}/api/{endpoint}"
-            
-            headers = {"Authorization": f"Bearer {self.access_token}", "Accept": "application/json"}
-            
-            if require_csrf:
-                csrf_token = await self.ensure_csrf_token()
-                if csrf_token:
-                    headers["X-CSRFToken"] = csrf_token
-                    headers["Cookie"] = self.csrf_cookie
-            
-            request_kwargs = {"headers": headers}
-            if data: request_kwargs["json"] = data
-            if params: request_kwargs["params"] = params
-            if form_data: request_kwargs["data"] = form_data
-                
-            async with session.request(method, url, **request_kwargs) as response:
-                logger.debug(f"API Response: {method} {url} -> Status {response.status}")
+    async def fetch_api_endpoint(
+        self, endpoint: str, bypass_cache: bool = False, max_retries: int = 2
+    ) -> Optional[Dict]:
+        return await self.romm.fetch_api_endpoint(
+            endpoint, bypass_cache=bypass_cache, max_retries=max_retries
+        )
 
-                # This is the function that will handle the response
-                async def handle_response(resp: aiohttp.ClientResponse) -> Optional[Dict]:
-                    if resp.status in (200, 201, 204):
-                        if resp.status == 204:
-                            return {}  # Success with no content is a valid response
-
-                        try:
-                            json_response = await resp.json()
-                            # A `null` response body becomes `None`. Treat this as a successful empty response.
-                            return json_response if json_response is not None else {}
-                        except Exception:
-                            # An empty body or non-JSON response on a success status code is also a success.
-                            logger.debug(f"Could not parse JSON from successful response (Status {resp.status}), but treating as success.")
-                            return {}
-                    else:
-                        logger.error(f"Request failed with status {resp.status}")
-                        try:
-                            response_text = await resp.text()
-                            logger.error(f"Response: {response_text}")
-                        except Exception:
-                            logger.error("Could not read response text.")
-                        return None
-
-                if response.status == 401:
-                    # A client API token can't be refreshed; a 401 means it is invalid/revoked.
-                    if self.config.ROMM_CLIENT_TOKEN:
-                        logger.error(
-                            "Got 401 using ROMM_CLIENT_TOKEN - the client token may be "
-                            "invalid, expired, or revoked. Verify it in RomM."
-                        )
-                        return None
-                    logger.debug("Got 401, attempting to refresh token")
-                    if await self.refresh_oauth_token():
-                        headers["Authorization"] = f"Bearer {self.access_token}"
-                        async with session.request(method, url, **request_kwargs) as retry_response:
-                            return await handle_response(retry_response)
-                    else:
-                        return None
-                else:
-                    return await handle_response(response)
-                    
-        except Exception as e:
-            logger.error(f"Error making authenticated request: {e}", exc_info=True)
-            return None
-    
     async def on_application_command_error(self, ctx: discord.ApplicationContext, error: discord.DiscordException):
         """Global error handler for all slash commands."""
         if isinstance(error, commands.CommandOnCooldown):
@@ -1013,34 +800,6 @@ class RommBot(discord.Bot):
         if not self.refresh_token_task.is_running():
             self.refresh_token_task.start()
                     
-    async def ensure_session(self) -> aiohttp.ClientSession:
-        """Ensure an active session exists with optimized settings."""
-        async with self._session_lock:
-            if self.session is None or self.session.closed:
-                # Configure connector with keepalive
-                connector = aiohttp.TCPConnector(
-                    limit=10,                      # Max connections
-                    limit_per_host=5,              # Max per host
-                    ttl_dns_cache=300,             # DNS cache 5 min
-                    force_close=False,             # Enable keepalive
-                    enable_cleanup_closed=True,
-                    keepalive_timeout=75           # Keep connections alive
-                )
-                
-                self.session = aiohttp.ClientSession(
-                    connector=connector,
-                    timeout=aiohttp.ClientTimeout(
-                        total=self.config.API_TIMEOUT,      # Overall timeout
-                        connect=5,                           # Connection timeout
-                        sock_read=self.config.API_TIMEOUT   # Read timeout
-                    ),
-                    headers={
-                        "User-Agent": "RommBot/1.0",
-                        "Accept": "application/json",
-                        "Connection": "keep-alive"          # Explicit keepalive
-                    }
-                )
-            return self.session
     
     def get_formatted_emoji(self, name: str) -> str:
         """Get formatted emoji string for use in embeds"""
@@ -1076,72 +835,6 @@ class RommBot(discord.Bot):
         self.update_loop.change_interval(seconds=self.config.SYNC_RATE)
         logger.debug("Update loop initialized")
 
-    async def fetch_api_endpoint(self, endpoint: str, bypass_cache: bool = False, max_retries: int = 2) -> Optional[Dict]:
-        """Fetch data from API with caching, error handling, and retries."""
-        # Bypass cache if specified
-        if not bypass_cache:
-            cached_data = self.cache.get(endpoint)
-            if cached_data:
-                logger.debug(f"Returning cached data for {endpoint}")
-                return cached_data
-
-        for attempt in range(max_retries + 1):
-            try:
-                # Ensure we have a valid token
-                if not await self.ensure_valid_token():
-                    logger.error("Failed to obtain valid OAuth token")
-                    return None
-                    
-                session = await self.ensure_session()
-                url = f"{self.config.API_BASE_URL}/api/{endpoint}"
-                
-                headers = {
-                    "Authorization": f"Bearer {self.access_token}",
-                    "Accept": "application/json"
-                }
-                
-                logger.debug(f"Making request to: {url} (attempt {attempt + 1}/{max_retries + 1})")
-            
-                async with session.get(url, headers=headers) as response:
-                    logger.debug(f"Response status: {response.status}")
-                    logger.debug(f"Response content-type: {response.headers.get('content-type', 'unknown')}")
-
-                    if response.status == 200:
-                        try:
-                            data = await response.json()
-                        except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
-                            logger.error(f"Invalid JSON response from {endpoint}: {e}")
-                            return None
-                        logger.debug(f"Fetched fresh data for {endpoint}")
-                        self.cache.set(endpoint, data)
-                        return data
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"API returned status {response.status}: {error_text}")
-                        
-                        # Don't retry on auth failures
-                        if response.status in [401, 403]:
-                            return None
-                            
-            except TimeoutError:
-                if attempt < max_retries:
-                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
-                    logger.warning(f"Request timeout, retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries + 1})")
-                    await asyncio.sleep(wait_time)
-                else:
-                    logger.error(f"Request failed after {max_retries + 1} attempts (timeout)")
-                    return None
-                    
-            except Exception as e:
-                if attempt < max_retries:
-                    wait_time = 2 ** attempt
-                    logger.warning(f"Request error: {e}, retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries + 1})")
-                    await asyncio.sleep(wait_time)
-                else:
-                    logger.error(f"Request failed after {max_retries + 1} attempts: {e}")
-                    return None
-        
-        return None
 
     @staticmethod
     def bytes_to_tb(bytes_value: int) -> float:
@@ -1231,9 +924,8 @@ class RommBot(discord.Bot):
             logger.debug("Closed database connections")
 
         # Close HTTP session
-        if self.session and not self.session.closed:
-            await self.session.close()
-            logger.debug("Closed HTTP session")
+        await self.romm.close()
+        logger.debug("Closed HTTP session")
 
         logger.info("Graceful shutdown complete")
         await super().close()

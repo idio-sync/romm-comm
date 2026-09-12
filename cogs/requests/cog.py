@@ -51,7 +51,7 @@ class Request(commands.Cog):
         """Set up database and initialize IGDB client"""
         try:
             # Initialize IGDB client
-            self.igdb = IGDBClient()
+            self.igdb = IGDBClient(self.bot.config)
             
             # Sync Romm platforms (mappings already initialized by database)
             await self.sync_romm_platforms()

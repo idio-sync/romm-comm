@@ -3,7 +3,6 @@
 import asyncio
 import json
 import logging
-import os
 from typing import Any, Dict, Optional
 
 import aiohttp
@@ -19,15 +18,9 @@ class GGRequestzIntegration(commands.Cog):
         self.db = bot.db
         self.enabled = True
         
-        # Configuration - store base URL without /api
-        base_url = os.getenv('GGREQUESTZ_URL', '').rstrip('/')
-        # Remove /api if it was included in the env var
-        if base_url.endswith('/api'):
-            base_url = base_url[:-4]
-        self.ggr_base_url = base_url
-        
-        # API Key authentication (required)
-        self.ggr_api_key = os.getenv('GGREQUESTZ_API_KEY')
+        # Configuration comes from Config, which owns all environment reading.
+        self.ggr_base_url = bot.config.GGREQUESTZ_URL
+        self.ggr_api_key = bot.config.GGREQUESTZ_API_KEY
         
         # Session
         self.session: Optional[aiohttp.ClientSession] = None

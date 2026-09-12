@@ -1,4 +1,3 @@
-import asyncio
 import importlib
 import os
 import types
@@ -42,87 +41,104 @@ class FakeSession:
 class FakeConfig:
     API_BASE_URL = "https://romm.example"
     ROMM_CLIENT_TOKEN = None
+    CACHE_TTL = 3600
+    API_TIMEOUT = 30
 
 
-class FakeBot:
-    def __init__(self):
-        self.config = FakeConfig()
-        self.access_token = "expired-token"
-        self.refresh_calls = 0
-        self.session = FakeSession(
-            [
-                FakeResponse(401),
-                FakeResponse(200, {"ok": True}),
-            ]
-        )
+def make_client(responses, refresh_succeeds=True):
+    """A RommClient wired to canned responses.
 
-    async def ensure_valid_token(self):
+    The client takes a Config and nothing else, so this needs no Discord bot -
+    which is the point of it living outside RommBot.
+    """
+    from romm_client import RommClient
+
+    client = RommClient(FakeConfig())
+    client.access_token = "expired-token"
+    client.session = FakeSession(responses)
+    client.refresh_calls = 0
+
+    async def fake_refresh():
+        client.refresh_calls += 1
+        if refresh_succeeds:
+            client.access_token = "fresh-token"
+        return refresh_succeeds
+
+    client.refresh_oauth_token = fake_refresh
+
+    async def fake_ensure_session():
+        return client.session
+
+    client.ensure_session = fake_ensure_session
+
+    async def fake_ensure_valid_token():
         return True
 
-    async def ensure_session(self):
-        return self.session
-
-    async def refresh_oauth_token(self):
-        self.refresh_calls += 1
-        self.access_token = "fresh-token"
-        return True
+    client.ensure_valid_token = fake_ensure_valid_token
+    return client
 
 
 class BotAuthTests(unittest.IsolatedAsyncioTestCase):
-    def test_bot_module_imports_json_for_json_decode_handlers(self):
-        bot_module = importlib.import_module("bot")
+    def test_client_module_imports_json_for_json_decode_handlers(self):
+        client_module = importlib.import_module("romm_client")
 
-        self.assertTrue(hasattr(bot_module, "json"))
+        self.assertTrue(hasattr(client_module, "json"))
 
     async def test_authenticated_request_refreshes_token_immediately_after_401(self):
-        bot_module = importlib.import_module("bot")
-        fake_bot = FakeBot()
+        client = make_client([FakeResponse(401), FakeResponse(200, {"ok": True})])
 
-        result = await bot_module.RommBot.make_authenticated_request(
-            fake_bot,
-            "GET",
-            "roms",
-        )
+        result = await client.make_authenticated_request("GET", "roms")
 
         self.assertEqual({"ok": True}, result)
-        self.assertEqual(1, fake_bot.refresh_calls)
+        self.assertEqual(1, client.refresh_calls)
         self.assertEqual(
             ["Bearer expired-token", "Bearer fresh-token"],
-            fake_bot.session.auth_headers,
+            client.session.auth_headers,
         )
 
     async def test_authenticated_request_does_not_refresh_client_token_on_401(self):
-        bot_module = importlib.import_module("bot")
-        fake_bot = FakeBot()
-        fake_bot.config.ROMM_CLIENT_TOKEN = "rmm_clienttoken"
-        fake_bot.session = FakeSession([FakeResponse(401)])
+        client = make_client([FakeResponse(401)])
+        client.config.ROMM_CLIENT_TOKEN = "rmm_clienttoken"
 
         with self.assertLogs("romm_bot", level="ERROR"):
-            result = await bot_module.RommBot.make_authenticated_request(
-                fake_bot,
-                "GET",
-                "roms",
-            )
+            result = await client.make_authenticated_request("GET", "roms")
 
         self.assertIsNone(result)
-        self.assertEqual(0, fake_bot.refresh_calls)
+        self.assertEqual(0, client.refresh_calls)
+
+    async def test_a_failed_refresh_gives_up_rather_than_retrying(self):
+        client = make_client([FakeResponse(401)], refresh_succeeds=False)
+
+        result = await client.make_authenticated_request("GET", "roms")
+
+        self.assertIsNone(result)
+        self.assertEqual(1, client.refresh_calls)
+        self.assertEqual(["Bearer expired-token"], client.session.auth_headers)
 
     async def test_ensure_valid_token_uses_client_token_without_oauth(self):
-        bot_module = importlib.import_module("bot")
+        from romm_client import RommClient
 
-        class ClientTokenConfig:
-            ROMM_CLIENT_TOKEN = "rmm_clienttoken"
+        config = FakeConfig()
+        config.ROMM_CLIENT_TOKEN = "rmm_clienttoken"
+        client = RommClient(config)
 
-        fake = types.SimpleNamespace(
-            config=ClientTokenConfig(),
-            access_token=None,
-            token_lock=asyncio.Lock(),
-        )
-
-        result = await bot_module.RommBot.ensure_valid_token(fake)
+        result = await client.ensure_valid_token()
 
         self.assertTrue(result)
-        self.assertEqual("rmm_clienttoken", fake.access_token)
+        self.assertEqual("rmm_clienttoken", client.access_token)
+
+    async def test_the_bot_delegates_to_the_client(self):
+        """RommBot keeps the old method names; they must reach the client."""
+        bot_module = importlib.import_module("bot")
+
+        client = make_client([FakeResponse(200, {"ok": True})])
+        fake_bot = types.SimpleNamespace(romm=client)
+
+        result = await bot_module.RommBot.make_authenticated_request(
+            fake_bot, "GET", "roms"
+        )
+
+        self.assertEqual({"ok": True}, result)
 
 
 class ConfigCredentialTests(unittest.TestCase):

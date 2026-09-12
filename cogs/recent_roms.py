@@ -744,7 +744,7 @@ class RecentRomsMonitor(commands.Cog):
         """Initialize IGDB client if available"""
         try:
             from .igdb_client import IGDBClient
-            self.igdb = IGDBClient()
+            self.igdb = IGDBClient(self.bot.config)
             logger.debug("IGDB client initialized for recent ROMs")
         except Exception as e:
             logger.warning(f"IGDB integration not available: {e}")
