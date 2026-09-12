@@ -142,8 +142,8 @@ class EmojiManager(commands.Cog):
             row = await cursor.fetchone()
             if row:
                 return {
-                    'nitro_status': bool(row[0]),
-                    'emoji_limit': row[1]
+                    'nitro_status': bool(row['nitro_status']),
+                    'emoji_limit': row['emoji_limit']
                 }
             return None
 

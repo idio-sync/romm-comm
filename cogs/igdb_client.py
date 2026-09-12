@@ -1540,7 +1540,7 @@ class IGDBHandler(commands.Cog):
                 ''', (platform_name,))
                 
                 result = await cursor.fetchone()
-                return result[0] if result else None
+                return result['igdb_slug'] if result else None
                 
         except Exception as e:
             logger.error(f"Error getting platform slug: {e}")

@@ -152,6 +152,10 @@ class MasterDatabase:
             # This creates a new connection for each request.
             # It's safe and prevents concurrency issues.
             conn = await aiosqlite.connect(self.db_path)
+            # Rows come back as aiosqlite.Row so callers can address columns by
+            # name. Row still supports integer indexing and unpacking, so this
+            # is backwards compatible with any call site not yet converted.
+            conn.row_factory = aiosqlite.Row
             await conn.execute("PRAGMA busy_timeout=10000") # Set timeout
             yield conn
         except aiosqlite.Error as e:
@@ -669,14 +673,14 @@ class MasterDatabase:
                 
                 if row:
                     return {
-                        'discord_id': row[0],
-                        'romm_username': row[1],
-                        'romm_id': row[2],
-                        'discord_username': row[3],
-                        'discord_avatar': row[4],
-                        'created_by_bot': bool(row[5]),
-                        'created_at': row[6],
-                        'updated_at': row[7]
+                        'discord_id': row['discord_id'],
+                        'romm_username': row['romm_username'],
+                        'romm_id': row['romm_id'],
+                        'discord_username': row['discord_username'],
+                        'discord_avatar': row['discord_avatar'],
+                        'created_by_bot': bool(row['created_by_bot']),
+                        'created_at': row['created_at'],
+                        'updated_at': row['updated_at']
                     }
                 return None
         except Exception as e:
@@ -736,14 +740,14 @@ class MasterDatabase:
                 
                 return [
                     {
-                        'discord_id': row[0],
-                        'romm_username': row[1],
-                        'romm_id': row[2],
-                        'discord_username': row[3],
-                        'discord_avatar': row[4],
-                        'created_by_bot': bool(row[5]),
-                        'created_at': row[6],
-                        'updated_at': row[7]
+                        'discord_id': row['discord_id'],
+                        'romm_username': row['romm_username'],
+                        'romm_id': row['romm_id'],
+                        'discord_username': row['discord_username'],
+                        'discord_avatar': row['discord_avatar'],
+                        'created_by_bot': bool(row['created_by_bot']),
+                        'created_at': row['created_at'],
+                        'updated_at': row['updated_at']
                     }
                     for row in rows
                 ]
@@ -792,11 +796,11 @@ class MasterDatabase:
                 
                 if row:
                     return {
-                        'discord_id': row[0],
-                        'jti': row[1],
-                        'role': row[2],
-                        'sent_at': row[3],
-                        'expires_at': row[4]
+                        'discord_id': row['discord_id'],
+                        'jti': row['jti'],
+                        'role': row['role'],
+                        'sent_at': row['sent_at'],
+                        'expires_at': row['expires_at']
                     }
                 return None
         except Exception as e:
@@ -817,11 +821,11 @@ class MasterDatabase:
                 
                 return [
                     {
-                        'discord_id': row[0],
-                        'jti': row[1],
-                        'role': row[2],
-                        'sent_at': row[3],
-                        'expires_at': row[4]
+                        'discord_id': row['discord_id'],
+                        'jti': row['jti'],
+                        'role': row['role'],
+                        'sent_at': row['sent_at'],
+                        'expires_at': row['expires_at']
                     }
                     for row in rows
                 ]
@@ -995,12 +999,12 @@ class MasterDatabase:
             rows = await cursor.fetchall()
             return [
                 {
-                    'display_name': row[0],
-                    'folder_name': row[1],
-                    'igdb_slug': row[2],
-                    'moby_slug': row[3],
-                    'in_romm': row[4],
-                    'romm_id': row[5]
+                    'display_name': row['display_name'],
+                    'folder_name': row['folder_name'],
+                    'igdb_slug': row['igdb_slug'],
+                    'moby_slug': row['moby_slug'],
+                    'in_romm': row['in_romm'],
+                    'romm_id': row['romm_id']
                 }
                 for row in rows
             ]

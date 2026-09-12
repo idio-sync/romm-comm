@@ -231,7 +231,18 @@ class SocketIOManager:
             return False
     
     async def disconnect(self):
-        """Disconnect from server"""
+        """Disconnect from server and stop the health monitor."""
+        # Cancel the monitor first: it reconnects any socket it finds closed,
+        # so disconnecting while it runs just triggers a reconnect 30s later.
+        if self._health_monitor_task and not self._health_monitor_task.done():
+            self._health_monitor_task.cancel()
+            try:
+                await self._health_monitor_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.error(f"Error stopping SocketIO health monitor: {e}")
+
         try:
             if self.sio.connected:
                 await self.sio.disconnect()
@@ -1190,6 +1201,13 @@ class RommBot(discord.Bot):
         if self.refresh_token_task.is_running():
             self.refresh_token_task.cancel()
             logger.debug("Cancelled refresh_token_task")
+
+        # Close the shared SocketIO connection. It is owned here rather than
+        # by the cogs that listen on it, so this is the only place it is torn
+        # down.
+        if self.socketio_manager is not None:
+            await self.socketio_manager.disconnect()
+            logger.debug("Disconnected SocketIO")
 
         # Cancel any pending asyncio tasks created by this bot
         pending_tasks = [

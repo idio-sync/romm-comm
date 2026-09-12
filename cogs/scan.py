@@ -793,11 +793,9 @@ class Scan(commands.Cog):
 
     async def cog_unload(self):
         """Cleanup when cog is unloaded."""
-        if self.sio.connected:
-            try:
-                await self.sio.disconnect()
-            except Exception as e:
-                logger.error(f"Error disconnecting socket: {e}")
+        # The SocketIO connection is shared and owned by RommBot, which closes
+        # it on shutdown. Disconnecting here would cut off scan events for the
+        # other cogs listening on the same socket.
         self.new_games = []
 
 def setup(bot):

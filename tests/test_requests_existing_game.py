@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 import unittest
 from unittest.mock import patch
 
@@ -26,6 +27,19 @@ class FakeBot:
         return f":{name}:"
 
 
+# MasterDatabase.get_connection sets row_factory, so every row the cog sees
+# is an sqlite3.Row addressed by column name. Build real ones here rather than
+# tuples, so these doubles cannot drift from what production hands back.
+_ROW_FACTORY_CONN = sqlite3.connect(":memory:")
+_ROW_FACTORY_CONN.row_factory = sqlite3.Row
+
+
+def row(**columns):
+    """Build a real sqlite3.Row with the given column names and values."""
+    selected = ", ".join(f"? AS {name}" for name in columns)
+    return _ROW_FACTORY_CONN.execute(f"SELECT {selected}", tuple(columns.values())).fetchone()
+
+
 class FakeCursor:
     def __init__(self, rows=None, row=None):
         self.rows = rows or []
@@ -48,14 +62,23 @@ class FakeConnection:
     async def execute(self, query, params=None):
         if "FROM requests WHERE status = 'pending'" in query:
             return FakeCursor(
-                rows=[(77, 42, "SNES", "Mega Man X", 12345, "Mega Man X")]
+                rows=[
+                    row(
+                        id=77,
+                        user_id=42,
+                        platform="SNES",
+                        game_name="Mega Man X",
+                        igdb_id=12345,
+                        igdb_game_name="Mega Man X",
+                    )
+                ]
             )
         if "FROM request_subscribers" in query:
             return FakeCursor(rows=[])
         if "FROM platform_mappings" in query:
-            return FakeCursor(row=("SNES",))
+            return FakeCursor(row=row(display_name="SNES"))
         if "SELECT ggr_request_id FROM requests" in query:
-            return FakeCursor(row=("ggr-77",))
+            return FakeCursor(row=row(ggr_request_id="ggr-77"))
         return FakeCursor()
 
     async def executemany(self, query, params):

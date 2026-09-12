@@ -15,6 +15,16 @@ from .search import ROM_View, build_rom_download_url
 
 logger = logging.getLogger(__name__)
 
+# Explicit column list for the requests table, in schema order. Naming the
+# columns rather than selecting them all means a database that grew its newer
+# columns through ALTER TABLE - which appends in whatever order the migration
+# happened to run - still hands back the columns in the order we expect.
+REQUEST_COLUMNS = (
+    "id, user_id, username, platform, game_name, details, status, "
+    "created_at, updated_at, fulfilled_by, fulfiller_name, notes, "
+    "auto_fulfilled, igdb_id, platform_mapping_id, igdb_game_name, ggr_request_id"
+)
+
 class RequestAdminView(discord.ui.View):
     """Paginated view for managing requests"""
     
@@ -93,10 +103,10 @@ class RequestAdminView(discord.ui.View):
     def create_request_embed(self, req, user_avatar_url=None):
         """Create an embed for a request with status indication"""
         # Parse details for IGDB metadata
-        details = req[5] if req[5] else ""
+        details = req['details'] if req['details'] else ""
         game_data = {}
         cover_url = None
-        igdb_name = req[4]  # Default to requested game name
+        igdb_name = req['game_name']  # Default to requested game name
         
         # Extract version request info if present
         version_request = None
@@ -135,10 +145,10 @@ class RequestAdminView(discord.ui.View):
         }
         
         # Create embed
-        status = req[6].upper()
+        status = req['status'].upper()
         embed = discord.Embed(
             title=f"{igdb_name}",
-            color=status_colors.get(req[6], discord.Color.blue()),
+            color=status_colors.get(req['status'], discord.Color.blue()),
         )
         
         # Add status indicator field at the top
@@ -147,31 +157,31 @@ class RequestAdminView(discord.ui.View):
             'fulfilled': '✅',
             'cancelled': '🚫',
             'reject': '❌'
-        }.get(req[6], '❓')
+        }.get(req['status'], '❓')
         
         embed.add_field(
             name="Status",
-            value=f"{status_emoji} **{req[6].title()}**",
+            value=f"{status_emoji} **{req['status'].title()}**",
             inline=True
         )
         
         # Platform field with existence check - USE CACHED DATA
         search_cog = self.bot.get_cog('Search')
-        platform_display = req[3]
+        platform_display = req['platform']
         platform_exists_in_romm = False
         
         # Check cached platform status
-        platform_mapping_id = req[14] if len(req) > 14 else None
+        platform_mapping_id = req['platform_mapping_id']
         
         if platform_mapping_id and platform_mapping_id in self.platform_status:
             platform_exists_in_romm = self.platform_status[platform_mapping_id]
             logger.debug(f"Platform check (cached by ID): {platform_exists_in_romm}")
-        elif f"name:{req[3]}" in self.platform_status:
-            platform_exists_in_romm = self.platform_status[f"name:{req[3]}"]
+        elif f"name:{req['platform']}" in self.platform_status:
+            platform_exists_in_romm = self.platform_status[f"name:{req['platform']}"]
             logger.debug(f"Platform check (cached by name): {platform_exists_in_romm}")
         else:
             # No cached data - assume platform doesn't exist
-            logger.debug(f"No cached platform status for {req[3]}")
+            logger.debug(f"No cached platform status for {req['platform']}")
             platform_exists_in_romm = False
         
         # Format platform display with emoji and status
@@ -189,7 +199,7 @@ class RequestAdminView(discord.ui.View):
         # Request ID field
         embed.add_field(
             name="Request ID",
-            value=f"#{req[0]}",
+            value=f"#{req['id']}",
             inline=True
         )
         
@@ -278,24 +288,24 @@ class RequestAdminView(discord.ui.View):
             )
         
         # Admin notes if present
-        if req[11]:  # notes field
+        if req['notes']:
             embed.add_field(
                 name="Admin Notes",
-                value=req[11][:1024],
+                value=req['notes'][:1024],
                 inline=False
             )
         
         # Fulfillment info if fulfilled/rejected
-        if req[9]:  # fulfilled_by
-            action = "Fulfilled" if req[6] == 'fulfilled' else "Rejected"
+        if req['fulfilled_by']:
+            action = "Fulfilled" if req['status'] == 'fulfilled' else "Rejected"
             embed.add_field(
                 name=f"✍️ {action} By",
-                value=req[10],  # fulfiller_name
+                value=req['fulfiller_name'],
                 inline=True
             )
             
         # Auto-fulfilled indicator
-        if req[12]:  # auto_fulfilled
+        if req['auto_fulfilled']:
             embed.add_field(
                 name="🤖 Auto-Fulfilled",
                 value="Yes",
@@ -320,7 +330,7 @@ class RequestAdminView(discord.ui.View):
         # Footer with requester info and pagination
         total = len(self.requests)
         embed.set_footer(
-            text=f"Request {self.current_index + 1}/{total} • Requested by {req[2]} • Use buttons to navigate"
+            text=f"Request {self.current_index + 1}/{total} • Requested by {req['username']} • Use buttons to navigate"
         )
         
         return embed
@@ -414,8 +424,8 @@ class RequestAdminView(discord.ui.View):
                     )
                     result = await cursor.fetchone()
                     
-                    if result and result[0]:
-                        ggr_request_id = result[0]
+                    if result and result['ggr_request_id']:
+                        ggr_request_id = result['ggr_request_id']
                         # Update status in ggrequestz
                         sync_result = await ggr.update_request_status(
                             ggr_request_id=ggr_request_id,
@@ -534,8 +544,8 @@ class RequestAdminView(discord.ui.View):
                             )
                             result = await cursor.fetchone()
                             
-                            if result and result[0]:
-                                ggr_request_id = result[0]
+                            if result and result['ggr_request_id']:
+                                ggr_request_id = result['ggr_request_id']
                                 sync_result = await ggr.update_request_status(
                                     ggr_request_id=ggr_request_id,
                                     status='rejected',
@@ -664,7 +674,7 @@ class RequestAdminView(discord.ui.View):
         try:
             async with self.db.get_connection() as db:
                 cursor = await db.execute(
-                    "SELECT * FROM requests ORDER BY created_at DESC"
+                    f"SELECT {REQUEST_COLUMNS} FROM requests ORDER BY created_at DESC"
                 )
                 self.requests = await cursor.fetchall()
             
@@ -814,10 +824,10 @@ class UserRequestsView(discord.ui.View):
     def create_request_embed(self, req, user_avatar_url=None):
         """Create an embed for a request with status indication and platform status"""
         # Parse details for IGDB metadata
-        details = req[5] if req[5] else ""
+        details = req['details'] if req['details'] else ""
         game_data = {}
         cover_url = None
-        igdb_name = req[4]  # Default to requested game name
+        igdb_name = req['game_name']  # Default to requested game name
         
         # Extract version request info if present
         version_request = None
@@ -856,10 +866,10 @@ class UserRequestsView(discord.ui.View):
         }
         
         # Create embed
-        status = req[6].upper()
+        status = req['status'].upper()
         embed = discord.Embed(
             title=f"{igdb_name}",
-            color=status_colors.get(req[6], discord.Color.blue()),
+            color=status_colors.get(req['status'], discord.Color.blue()),
         )
         
         # Add status indicator field at the top
@@ -868,31 +878,31 @@ class UserRequestsView(discord.ui.View):
             'fulfilled': '✅',
             'cancelled': '🚫',
             'reject': '❌'
-        }.get(req[6], '❓')
+        }.get(req['status'], '❓')
         
         embed.add_field(
             name="Status",
-            value=f"{status_emoji} **{req[6].title()}**",
+            value=f"{status_emoji} **{req['status'].title()}**",
             inline=True
         )
         
         # Platform field with existence check - USE CACHED DATA
         search_cog = self.bot.get_cog('Search')
-        platform_display = req[3]
+        platform_display = req['platform']
         platform_exists_in_romm = False
         
         # Check cached platform status
-        platform_mapping_id = req[14] if len(req) > 14 else None
+        platform_mapping_id = req['platform_mapping_id']
         
         if platform_mapping_id and platform_mapping_id in self.platform_status:
             platform_exists_in_romm = self.platform_status[platform_mapping_id]
             logger.debug(f"Platform check (cached by ID): {platform_exists_in_romm}")
-        elif f"name:{req[3]}" in self.platform_status:
-            platform_exists_in_romm = self.platform_status[f"name:{req[3]}"]
+        elif f"name:{req['platform']}" in self.platform_status:
+            platform_exists_in_romm = self.platform_status[f"name:{req['platform']}"]
             logger.debug(f"Platform check (cached by name): {platform_exists_in_romm}")
         else:
             # No cached data - assume platform doesn't exist
-            logger.debug(f"No cached platform status for {req[3]}")
+            logger.debug(f"No cached platform status for {req['platform']}")
             platform_exists_in_romm = False
         
         # Format platform display with emoji and status
@@ -910,7 +920,7 @@ class UserRequestsView(discord.ui.View):
         # Request ID field
         embed.add_field(
             name="Request ID",
-            value=f"#{req[0]}",
+            value=f"#{req['id']}",
             inline=True
         )
         
@@ -999,24 +1009,24 @@ class UserRequestsView(discord.ui.View):
             )
         
         # Admin notes if present
-        if req[11]:  # notes field
+        if req['notes']:
             embed.add_field(
                 name="Admin Notes",
-                value=req[11][:1024],
+                value=req['notes'][:1024],
                 inline=False
             )
         
         # Fulfillment info if fulfilled/rejected
-        if req[9]:  # fulfilled_by
-            action = "Fulfilled" if req[6] == 'fulfilled' else "Rejected"
+        if req['fulfilled_by']:
+            action = "Fulfilled" if req['status'] == 'fulfilled' else "Rejected"
             embed.add_field(
                 name=f"✍️ {action} By",
-                value=req[10],  # fulfiller_name
+                value=req['fulfiller_name'],
                 inline=True
             )
             
         # Auto-fulfilled indicator
-        if req[12]:  # auto_fulfilled
+        if req['auto_fulfilled']:
             embed.add_field(
                 name="🤖 Auto-Fulfilled",
                 value="Yes",
@@ -1041,7 +1051,7 @@ class UserRequestsView(discord.ui.View):
         # Footer with requester info and pagination
         total = len(self.requests)
         embed.set_footer(
-            text=f"Request {self.current_index + 1}/{total} • Requested by {req[2]} • Use buttons to navigate"
+            text=f"Request {self.current_index + 1}/{total} • Requested by {req['username']} • Use buttons to navigate"
         )
         
         return embed
@@ -1285,7 +1295,7 @@ class UserRequestsView(discord.ui.View):
         try:
             async with self.db.get_connection() as db:
                 cursor = await db.execute(
-                    "SELECT * FROM requests WHERE user_id = ? ORDER BY created_at DESC",
+                    f"SELECT {REQUEST_COLUMNS} FROM requests WHERE user_id = ? ORDER BY created_at DESC",
                     (self.user_id,)
                 )
                 self.requests = await cursor.fetchall()
@@ -2180,7 +2190,7 @@ class Request(commands.Cog):
                     (platform_name, platform_name)
                 )
                 result = await cursor.fetchone()
-                return result[0] if result else platform_name
+                return result['display_name'] if result else platform_name
         except Exception:
             # If DB fails, fallback to using the original name
             return platform_name
@@ -2447,7 +2457,7 @@ class Request(commands.Cog):
                     if not pending_requests:
                         return
                     
-                    request_ids = [req[0] for req in pending_requests]
+                    request_ids = [req['id'] for req in pending_requests]
                     placeholders = ','.join('?' * len(request_ids))
                     cursor = await db.execute(
                         f"SELECT request_id, user_id FROM request_subscribers WHERE request_id IN ({placeholders})",
@@ -2509,8 +2519,8 @@ class Request(commands.Cog):
                             )
                             result = await cursor.fetchone()
                             
-                            if result and result[0]:
-                                ggr_request_id = result[0]
+                            if result and result['ggr_request_id']:
+                                ggr_request_id = result['ggr_request_id']
                                 # Update status in ggrequestz
                                 result = await self.ggr.update_request_status(
                                     ggr_request_id=ggr_request_id,
@@ -2954,10 +2964,10 @@ class Request(commands.Cog):
                 )
                 result = await cursor.fetchone()
                 
-                if result and result[0]:  # If IGDB ID exists
-                    igdb_id = result[0]
-                    game_name = result[1]
-                    platform_name = result[2]
+                if result and result['igdb_id']:
+                    igdb_id = result['igdb_id']
+                    game_name = result['game_name']
+                    platform_name = result['platform']
                     
                     # You can now use this IGDB ID for direct API calls
                     # For example, fetch fresh data from IGDB by ID
@@ -3332,13 +3342,13 @@ class Request(commands.Cog):
                 # Fetch requests based on show_pending_only parameter
                 if show_pending_only:
                     cursor = await db.execute(
-                        "SELECT * FROM requests WHERE user_id = ? AND status = 'pending' ORDER BY created_at DESC",
+                        f"SELECT {REQUEST_COLUMNS} FROM requests WHERE user_id = ? AND status = 'pending' ORDER BY created_at DESC",
                         (ctx.author.id,)
                     )
                     viewing_mode = "pending"
                 else:
                     cursor = await db.execute(
-                        "SELECT * FROM requests WHERE user_id = ? ORDER BY created_at DESC",
+                        f"SELECT {REQUEST_COLUMNS} FROM requests WHERE user_id = ? ORDER BY created_at DESC",
                         (ctx.author.id,)
                     )
                     viewing_mode = "all"
@@ -3366,25 +3376,25 @@ class Request(commands.Cog):
                 # PRE-FETCH platform status for all requests
                 platform_status = {}
                 for req in requests:
-                    platform_mapping_id = req[14] if len(req) > 14 else None
+                    platform_mapping_id = req['platform_mapping_id']
                     if platform_mapping_id and platform_mapping_id not in platform_status:
                         cursor = await db.execute(
                             "SELECT in_romm FROM platform_mappings WHERE id = ?",
                             (platform_mapping_id,)
                         )
                         result = await cursor.fetchone()
-                        platform_status[platform_mapping_id] = bool(result[0]) if result else False
+                        platform_status[platform_mapping_id] = bool(result['in_romm']) if result else False
                         
                     # Also check by name for fallback
                     if not platform_mapping_id or platform_mapping_id not in platform_status:
-                        platform_name = req[3]
+                        platform_name = req['platform']
                         if f"name:{platform_name}" not in platform_status:
                             cursor = await db.execute(
                                 "SELECT in_romm FROM platform_mappings WHERE LOWER(display_name) = LOWER(?)",
                                 (platform_name,)
                             )
                             result = await cursor.fetchone()
-                            platform_status[f"name:{platform_name}"] = bool(result[0]) if result else False
+                            platform_status[f"name:{platform_name}"] = bool(result['in_romm']) if result else False
                 
                 # Count statuses for summary
                 status_counts = {
@@ -3394,7 +3404,7 @@ class Request(commands.Cog):
                     'reject': 0
                 }
                 for req in requests:
-                    status = req[6]
+                    status = req['status']
                     if status in status_counts:
                         status_counts[status] += 1
 
@@ -3460,12 +3470,12 @@ class Request(commands.Cog):
                 # Fetch requests based on show_all parameter
                 if show_all:
                     cursor = await db.execute(
-                        "SELECT * FROM requests ORDER BY created_at DESC"
+                        f"SELECT {REQUEST_COLUMNS} FROM requests ORDER BY created_at DESC"
                     )
                     viewing_mode = "all"
                 else:
                     cursor = await db.execute(
-                        "SELECT * FROM requests WHERE status = 'pending' ORDER BY created_at ASC"
+                        f"SELECT {REQUEST_COLUMNS} FROM requests WHERE status = 'pending' ORDER BY created_at ASC"
                     )
                     viewing_mode = "pending"
                 
@@ -3487,25 +3497,25 @@ class Request(commands.Cog):
                 # PRE-FETCH platform status for all requests
                 platform_status = {}
                 for req in requests:
-                    platform_mapping_id = req[14] if len(req) > 14 else None
+                    platform_mapping_id = req['platform_mapping_id']
                     if platform_mapping_id and platform_mapping_id not in platform_status:
                         cursor = await db.execute(
                             "SELECT in_romm FROM platform_mappings WHERE id = ?",
                             (platform_mapping_id,)
                         )
                         result = await cursor.fetchone()
-                        platform_status[platform_mapping_id] = bool(result[0]) if result else False
+                        platform_status[platform_mapping_id] = bool(result['in_romm']) if result else False
                         
                     # Also check by name for fallback
                     if not platform_mapping_id or platform_mapping_id not in platform_status:
-                        platform_name = req[3]
+                        platform_name = req['platform']
                         if f"name:{platform_name}" not in platform_status:
                             cursor = await db.execute(
                                 "SELECT in_romm FROM platform_mappings WHERE LOWER(display_name) = LOWER(?)",
                                 (platform_name,)
                             )
                             result = await cursor.fetchone()
-                            platform_status[f"name:{platform_name}"] = bool(result[0]) if result else False
+                            platform_status[f"name:{platform_name}"] = bool(result['in_romm']) if result else False
                 
                 # Create paginated view
                 view = RequestAdminView(self.bot, requests, ctx.author.id, self.bot.db)

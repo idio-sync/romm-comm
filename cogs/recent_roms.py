@@ -61,8 +61,8 @@ class RecentRomsMonitor(commands.Cog):
         self.platform_cache_time: Optional[datetime] = None
         self.platform_cache_ttl = timedelta(minutes=30)
         
-        # Use shared SocketIO manager
-        self.sio = bot.socketio_manager.sio
+        # Scan events arrive as Discord events dispatched by the bot's shared
+        # SocketIO manager, so this cog does not hold the socket itself.
 
         if self.enabled:
             bot.loop.create_task(self.setup())
@@ -353,7 +353,7 @@ class RecentRomsMonitor(commands.Cog):
                     rom_ids
                 )
                 results = await cursor.fetchall()
-                return {row[0] for row in results}
+                return {row['rom_id'] for row in results}
                 
         except Exception as e:
             logger.error(f"Error checking posted ROMs: {e}")
@@ -1428,13 +1428,9 @@ class RecentRomsMonitor(commands.Cog):
         if hasattr(self, 'cleanup_task'):
             self.cleanup_task.cancel()
 
-        # Disconnect socket
-        if self.sio.connected:
-            try:
-                await self.sio.disconnect()
-                logger.debug("SocketIO disconnected")
-            except Exception as e:
-                logger.warning(f"Error disconnecting SocketIO: {e}")
+        # The SocketIO connection is shared and owned by RommBot, which closes
+        # it on shutdown. Disconnecting here would cut off scan events for the
+        # other cogs listening on the same socket.
 
         # Close HTTP session
         if self.http_session and not self.http_session.closed:

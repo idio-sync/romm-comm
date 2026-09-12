@@ -1269,7 +1269,7 @@ class UserManager(commands.Cog):
                 rows = await cursor.fetchall()
 
                 for row in rows:
-                    discord_id = row[0]
+                    discord_id = row['discord_id']
                     try:
                         # Get Discord user info
                         guild = self.bot.get_guild(self.bot.config.GUILD_ID)
