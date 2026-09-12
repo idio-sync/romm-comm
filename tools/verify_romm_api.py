@@ -186,13 +186,26 @@ async def main():
             async with session.post(f'{base_url}/api/users/invite-link',
                                     params={'role': 'user'}, headers=headers) as resp:
                 status = resp.status
-                body = await resp.json() if resp.status == 200 else await resp.text()
+                # RomM answers this one 201 Created, not 200.
+                body = await resp.json() if 200 <= resp.status < 300 else await resp.text()
             show('status', f'HTTP {status}')
             if isinstance(body, dict):
+                token_value = body.get('token') or ''
+                url_value = body.get('url')
+                # The URL embeds a live invite token. Print its shape, never the
+                # token itself - anyone reading this output could spend it.
+                if isinstance(url_value, str) and token_value:
+                    shown = url_value.replace(token_value, '<TOKEN REDACTED>')
+                else:
+                    shown = repr(url_value)
                 show("'url' key present", 'url' in body, 'absent means pre-5.2.0')
-                show("'url' value", repr(body.get('url')),
-                     'null means ROMM_BASE_URL is unset or loopback')
-                show('token length', len(body.get('token') or ''))
+                show("'url' value", shown,
+                     'null means ROMM_BASE_URL is unset or points at loopback')
+                show('token length', f'{len(token_value)} chars (not shown)')
+                if isinstance(url_value, str):
+                    from urllib.parse import urlsplit
+                    parts = urlsplit(url_value)
+                    show('url origin + path', f'{parts.scheme}://{parts.netloc}{parts.path}')
 
     print()
     print('Done. Paste the output back for interpretation.')
