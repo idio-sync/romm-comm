@@ -1043,7 +1043,7 @@ class Request(commands.Cog):
                             try:
                                 igdb_platform_slug = None
                                 if platform_mapping:
-                                    igdb_platform_slug = platform_mapping[4]  # igdb_slug from mapping
+                                    igdb_platform_slug = platform_mapping['igdb_slug']
                                 igdb_matches = await self.igdb.search_game(game, igdb_platform_slug)
                             except Exception as e:
                                 logger.error(f"Error fetching IGDB data: {e}")
@@ -1113,7 +1113,7 @@ class Request(commands.Cog):
                         # Get IGDB slug from mapping to use for platform filtering
                         igdb_platform_slug = None
                         if platform_mapping:
-                            igdb_platform_slug = platform_mapping[4]  # igdb_slug from mapping
+                            igdb_platform_slug = platform_mapping['igdb_slug']
                         
                         # Pass platform slug for filtering if available
                         igdb_matches = await self.igdb.search_game(game, igdb_platform_slug)
@@ -1383,9 +1383,9 @@ class Request(commands.Cog):
                 # Fetch user avatar for the first request
                 user_avatar_url = None
                 try:
-                    user = self.bot.get_user(requests[0][1])  # requests[0][1] is user_id
+                    user = self.bot.get_user(requests[0]['user_id'])
                     if not user:
-                        user = await self.bot.fetch_user(requests[0][1])
+                        user = await self.bot.fetch_user(requests[0]['user_id'])
                     if user and user.avatar:
                         user_avatar_url = user.avatar.url
                     elif user:

@@ -81,7 +81,7 @@ class RequestAdminView(discord.ui.View):
         
         # Action buttons - disable for non-pending requests
         current_request = self.requests[self.current_index]
-        is_pending = current_request[6] == 'pending'
+        is_pending = current_request['status'] == 'pending'
         self.fulfill_button.disabled = not is_pending
         self.reject_button.disabled = not is_pending
     
@@ -156,7 +156,7 @@ class RequestAdminView(discord.ui.View):
         await interaction.response.defer()
         
         current_request = self.requests[self.current_index]
-        request_id = current_request[0]
+        request_id = current_request['id']
         
         try:
             async with self.db.get_connection() as db:
@@ -173,7 +173,7 @@ class RequestAdminView(discord.ui.View):
                 )
                 await db.commit()
                 
-                logger.info(f"Request fulfilled manually - Admin: {interaction.user} | Request ID: #{request_id} | Discord: {current_request[2]} (ID: {current_request[1]}) | Game: '{current_request[4]}' | Platform: {current_request[3]}")
+                logger.info(f"Request fulfilled manually - Admin: {interaction.user} | Request ID: #{request_id} | Discord: {current_request['username']} (ID: {current_request['user_id']}) | Game: '{current_request['game_name']}' | Platform: {current_request['platform']}")
                 
                 # Sync to ggrequestz if enabled
                 ggr = self.bot.get_cog('GGRequestzIntegration')
@@ -210,20 +210,20 @@ class RequestAdminView(discord.ui.View):
                 # Notify original requester
                 try:
                     # Prioritize the stored IGDB name, fall back to the user's requested name
-                    igdb_game_name = current_request[15] if len(current_request) > 15 else None
-                    display_game_name = igdb_game_name if igdb_game_name else current_request[4]
+                    igdb_game_name = current_request['igdb_game_name']
+                    display_game_name = igdb_game_name if igdb_game_name else current_request['game_name']
 
-                    user = await self.bot.fetch_user(current_request[1])
+                    user = await self.bot.fetch_user(current_request['user_id'])
                     await user.send(f"✅ Your request for '{display_game_name}' has been fulfilled!")
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
-                    logger.warning(f"Could not DM user {current_request[1]}: {e}")
+                    logger.warning(f"Could not DM user {current_request['user_id']}: {e}")
             
             # Update the request in our list
-            updated_request = list(current_request)
-            updated_request[6] = 'fulfilled'
-            updated_request[9] = interaction.user.id
-            updated_request[10] = str(interaction.user)
-            self.requests[self.current_index] = tuple(updated_request)
+            updated_request = dict(current_request)
+            updated_request['status'] = 'fulfilled'
+            updated_request['fulfilled_by'] = interaction.user.id
+            updated_request['fulfiller_name'] = str(interaction.user)
+            self.requests[self.current_index] = updated_request
             
             # Update view
             self.update_button_states()
@@ -275,7 +275,7 @@ class RequestAdminView(discord.ui.View):
             async def callback(self, modal_interaction: discord.Interaction):
                 await modal_interaction.response.defer()
                 
-                request_id = self.request_data[0]
+                request_id = self.request_data['id']
                 reason = self.reason.value or None
                 
                 try:
@@ -294,7 +294,7 @@ class RequestAdminView(discord.ui.View):
                         )
                         await db.commit()
                         
-                        logger.info(f"Request rejected - Admin: {modal_interaction.user} | Request ID: #{request_id} | Discord: {self.request_data[2]} (ID: {self.request_data[1]}) | Game: '{self.request_data[4]}' | Platform: {self.request_data[3]} | Reason: {reason or 'No reason provided'}")
+                        logger.info(f"Request rejected - Admin: {modal_interaction.user} | Request ID: #{request_id} | Discord: {self.request_data['username']} (ID: {self.request_data['user_id']}) | Game: '{self.request_data['game_name']}' | Platform: {self.request_data['platform']} | Reason: {reason or 'No reason provided'}")
                         
                         # Sync to ggrequestz if enabled
                         ggr = self.view.bot.get_cog('GGRequestzIntegration')
@@ -322,24 +322,24 @@ class RequestAdminView(discord.ui.View):
                         # Notify user
                         try:
                             # Prioritize the stored IGDB name, fall back to the user's requested name
-                            igdb_game_name = self.request_data[15] if len(self.request_data) > 15 else None
-                            display_game_name = igdb_game_name if igdb_game_name else self.request_data[4]
+                            igdb_game_name = self.request_data['igdb_game_name']
+                            display_game_name = igdb_game_name if igdb_game_name else self.request_data['game_name']
 
-                            user = await self.view.bot.fetch_user(self.request_data[1])
+                            user = await self.view.bot.fetch_user(self.request_data['user_id'])
                             message = f"❌ Your request for '{display_game_name}' has been rejected."
                             if reason:
                                 message += f"\nReason: {reason}"
                             await user.send(message)
                         except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
-                            logger.warning(f"Could not DM user {self.request_data[1]}: {e}")
+                            logger.warning(f"Could not DM user {self.request_data['user_id']}: {e}")
                     
                     # Update the request in our list
-                    updated_request = list(self.request_data)
-                    updated_request[6] = 'reject'
-                    updated_request[9] = modal_interaction.user.id
-                    updated_request[10] = str(modal_interaction.user)
-                    updated_request[11] = reason
-                    self.view.requests[self.view.current_index] = tuple(updated_request)
+                    updated_request = dict(self.request_data)
+                    updated_request['status'] = 'reject'
+                    updated_request['fulfilled_by'] = modal_interaction.user.id
+                    updated_request['fulfiller_name'] = str(modal_interaction.user)
+                    updated_request['notes'] = reason
+                    self.view.requests[self.view.current_index] = updated_request
                     
                     # Update view
                     self.view.update_button_states()
@@ -376,7 +376,7 @@ class RequestAdminView(discord.ui.View):
                 self.db = db
                 
                 # Show current note if exists
-                current_note = request_data[11] or ""
+                current_note = request_data['notes'] or ""
                 self.note = discord.ui.InputText(
                     label="Note",
                     placeholder="Enter note for this request",
@@ -390,7 +390,7 @@ class RequestAdminView(discord.ui.View):
             async def callback(self, modal_interaction: discord.Interaction):
                 await modal_interaction.response.defer()
                 
-                request_id = self.request_data[0]
+                request_id = self.request_data['id']
                 note = self.note.value
                 
                 try:
@@ -402,9 +402,9 @@ class RequestAdminView(discord.ui.View):
                         await db.commit()
                     
                     # Update the request in our list
-                    updated_request = list(self.request_data)
-                    updated_request[11] = note
-                    self.view.requests[self.view.current_index] = tuple(updated_request)
+                    updated_request = dict(self.request_data)
+                    updated_request['notes'] = note
+                    self.view.requests[self.view.current_index] = updated_request
                     
                     # Update view
                     embed = self.view.create_request_embed(self.view.requests[self.view.current_index])

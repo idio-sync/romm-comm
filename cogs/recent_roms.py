@@ -731,7 +731,7 @@ class RecentRomsMonitor(commands.Cog):
                         'message_id': message_id,
                         'batch_id': batch_id,
                         'posted_at': posted_at,
-                        'roms': [{'id': r[0], 'name': r[1], 'platform': r[2]} for r in roms]
+                        'roms': [{'id': r['rom_id'], 'name': r['rom_name'], 'platform': r['platform_name']} for r in roms]
                     })
                 
                 return notifications

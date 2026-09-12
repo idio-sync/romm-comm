@@ -74,18 +74,18 @@ class UserRequestsView(discord.ui.View):
         
         # Action buttons - disable cancel for non-pending requests
         current_request = self.requests[self.current_index]
-        is_pending = current_request[6] == 'pending'
+        is_pending = current_request['status'] == 'pending'
         self.cancel_button.disabled = not is_pending
         
         # Update cancel button label and style based on status
         if not is_pending:
-            if current_request[6] == 'fulfilled':
+            if current_request['status'] == 'fulfilled':
                 self.cancel_button.label = "Fulfilled"
                 self.cancel_button.style = discord.ButtonStyle.success  # Green
-            elif current_request[6] == 'reject':
+            elif current_request['status'] == 'reject':
                 self.cancel_button.label = "Rejected"
                 self.cancel_button.style = discord.ButtonStyle.danger  # Red
-            elif current_request[6] == 'cancelled':
+            elif current_request['status'] == 'cancelled':
                 self.cancel_button.label = "Cancelled"
                 self.cancel_button.style = discord.ButtonStyle.danger  # Red
             else:
@@ -166,7 +166,7 @@ class UserRequestsView(discord.ui.View):
         
         current_request = self.requests[self.current_index]
         
-        if current_request[6] != 'pending':
+        if current_request['status'] != 'pending':
             await interaction.response.send_message("Only pending requests can be cancelled.", ephemeral=True)
             return
         
@@ -189,7 +189,7 @@ class UserRequestsView(discord.ui.View):
             async def callback(self, modal_interaction: discord.Interaction):
                 await modal_interaction.response.defer()
                 
-                request_id = self.request_data[0]
+                request_id = self.request_data['id']
                 reason = self.reason.value or "User cancelled"
                 
                 try:
@@ -207,10 +207,10 @@ class UserRequestsView(discord.ui.View):
                         await db.commit()
                     
                     # Update the request in our list
-                    updated_request = list(self.request_data)
-                    updated_request[6] = 'cancelled'
-                    updated_request[11] = reason
-                    self.view.requests[self.view.current_index] = tuple(updated_request)
+                    updated_request = dict(self.request_data)
+                    updated_request['status'] = 'cancelled'
+                    updated_request['notes'] = reason
+                    self.view.requests[self.view.current_index] = updated_request
                     
                     # Update button states
                     self.view.update_button_states()
@@ -267,7 +267,7 @@ class UserRequestsView(discord.ui.View):
                 self.request_data = request_data
                 
                 # Show current note if exists
-                current_note = request_data[11] or ""
+                current_note = request_data['notes'] or ""
                 self.note = discord.ui.InputText(
                     label="Your Note",
                     placeholder="Add any additional information about this request",
@@ -281,7 +281,7 @@ class UserRequestsView(discord.ui.View):
             async def callback(self, modal_interaction: discord.Interaction):
                 await modal_interaction.response.defer()
                 
-                request_id = self.request_data[0]
+                request_id = self.request_data['id']
                 note = self.note.value
                 
                 try:
@@ -293,9 +293,9 @@ class UserRequestsView(discord.ui.View):
                         await db.commit()
                     
                     # Update the request in our list
-                    updated_request = list(self.request_data)
-                    updated_request[11] = note
-                    self.view.requests[self.view.current_index] = tuple(updated_request)
+                    updated_request = dict(self.request_data)
+                    updated_request['notes'] = note
+                    self.view.requests[self.view.current_index] = updated_request
                     
                     # Fetch user avatar
                     user_avatar_url = None

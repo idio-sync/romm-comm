@@ -1219,7 +1219,7 @@ class IGDBGameView(discord.ui.View):
                     return
                 
                 # If someone else has requested this game
-                if existing_request_id and interaction.user.id != existing_requests[0][1]:
+                if existing_request_id and interaction.user.id != existing_requests[0]['user_id']:
                     # Add user as a subscriber to existing request
                     await db.execute(
                         """
