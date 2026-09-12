@@ -5,7 +5,7 @@ import logging
 import discord
 
 from .embeds import build_request_embed
-from .repo import REQUEST_COLUMNS
+from .repo import RequestsRepo
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,7 @@ class UserRequestsView(discord.ui.View):
         self.current_index = 0
         self.message = None
         self.db = db
+        self.repo = RequestsRepo(db)
         
         # Cache platform status for all requests
         self.platform_status = {}  # mapping_id -> in_romm status
@@ -193,18 +194,7 @@ class UserRequestsView(discord.ui.View):
                 reason = self.reason.value or "User cancelled"
                 
                 try:
-                    async with self.view.db.get_connection() as db:
-                        await db.execute(
-                            """
-                            UPDATE requests 
-                            SET status = 'cancelled', 
-                                notes = ?,
-                                updated_at = CURRENT_TIMESTAMP 
-                            WHERE id = ?
-                            """,
-                            (reason, request_id)
-                        )
-                        await db.commit()
+                    await self.view.repo.mark_cancelled(request_id, reason=reason)
                     
                     # Update the request in our list
                     updated_request = dict(self.request_data)
@@ -285,12 +275,7 @@ class UserRequestsView(discord.ui.View):
                 note = self.note.value
                 
                 try:
-                    async with self.view.db.get_connection() as db:
-                        await db.execute(
-                            "UPDATE requests SET notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                            (note, request_id)
-                        )
-                        await db.commit()
+                    await self.view.repo.set_notes(request_id, note)
                     
                     # Update the request in our list
                     updated_request = dict(self.request_data)
@@ -343,12 +328,7 @@ class UserRequestsView(discord.ui.View):
         await interaction.response.defer()
         
         try:
-            async with self.db.get_connection() as db:
-                cursor = await db.execute(
-                    f"SELECT {REQUEST_COLUMNS} FROM requests WHERE user_id = ? ORDER BY created_at DESC",
-                    (self.user_id,)
-                )
-                self.requests = await cursor.fetchall()
+            self.requests = await self.repo.list_for_user(self.user_id)
             
             # Reset to first page if current index is out of bounds
             if self.current_index >= len(self.requests):

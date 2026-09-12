@@ -5,7 +5,7 @@ import logging
 import discord
 
 from .embeds import build_request_embed
-from .repo import REQUEST_COLUMNS
+from .repo import RequestsRepo
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +17,7 @@ class RequestAdminView(discord.ui.View):
         super().__init__(timeout=300)  # 5 minute timeout
         self.bot = bot
         self.db = db
+        self.repo = RequestsRepo(db)
         self.requests = requests_data
         self.admin_id = admin_id
         self.current_index = 0
@@ -159,65 +160,42 @@ class RequestAdminView(discord.ui.View):
         request_id = current_request['id']
         
         try:
-            async with self.db.get_connection() as db:
-                await db.execute(
-                    """
-                    UPDATE requests 
-                    SET status = 'fulfilled', 
-                        fulfilled_by = ?, 
-                        fulfiller_name = ?, 
-                        updated_at = CURRENT_TIMESTAMP 
-                    WHERE id = ?
-                    """,
-                    (interaction.user.id, str(interaction.user), request_id)
-                )
-                await db.commit()
-                
-                logger.info(f"Request fulfilled manually - Admin: {interaction.user} | Request ID: #{request_id} | Discord: {current_request['username']} (ID: {current_request['user_id']}) | Game: '{current_request['game_name']}' | Platform: {current_request['platform']}")
-                
-                # Sync to ggrequestz if enabled
-                ggr = self.bot.get_cog('GGRequestzIntegration')
-                if ggr and ggr.enabled:
-                    # Get the ggr_request_id for this Discord request
-                    cursor = await db.execute(
-                        "SELECT ggr_request_id FROM requests WHERE id = ?",
-                        (request_id,)
-                    )
-                    result = await cursor.fetchone()
-                    
-                    if result and result['ggr_request_id']:
-                        ggr_request_id = result['ggr_request_id']
-                        # Update status in ggrequestz
-                        sync_result = await ggr.update_request_status(
-                            ggr_request_id=ggr_request_id,
-                            status='fulfilled',
-                            admin_name=str(interaction.user),
-                            notes=f"Manually fulfilled by {interaction.user}"
-                        )
-                        
-                        if sync_result.get('success'):
-                            logger.info(f"✅ Synced manual fulfillment to ggrequestz for request #{request_id} (GGR ID: {ggr_request_id})")
-                        else:
-                            logger.error(f"❌ Failed to sync manual fulfillment to ggrequestz: {sync_result.get('error')}")
-                
-                # Get all subscribers for this request
-                cursor = await db.execute(
-                    "SELECT user_id FROM request_subscribers WHERE request_id = ?",
-                    (request_id,)
-                )
-                subscribers = await cursor.fetchall()
-                
-                # Notify original requester
-                try:
-                    # Prioritize the stored IGDB name, fall back to the user's requested name
-                    igdb_game_name = current_request['igdb_game_name']
-                    display_game_name = igdb_game_name if igdb_game_name else current_request['game_name']
+            await self.repo.mark_fulfilled(
+                request_id, by_id=interaction.user.id, by_name=str(interaction.user)
+            )
 
-                    user = await self.bot.fetch_user(current_request['user_id'])
-                    await user.send(f"✅ Your request for '{display_game_name}' has been fulfilled!")
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
-                    logger.warning(f"Could not DM user {current_request['user_id']}: {e}")
-            
+            logger.info(f"Request fulfilled manually - Admin: {interaction.user} | Request ID: #{request_id} | Discord: {current_request['username']} (ID: {current_request['user_id']}) | Game: '{current_request['game_name']}' | Platform: {current_request['platform']}")
+
+            # Sync to ggrequestz if enabled
+            ggr = self.bot.get_cog('GGRequestzIntegration')
+            if ggr and ggr.enabled:
+                ggr_request_id = await self.repo.get_ggr_request_id(request_id)
+
+                if ggr_request_id:
+                    # Update status in ggrequestz
+                    sync_result = await ggr.update_request_status(
+                        ggr_request_id=ggr_request_id,
+                        status='fulfilled',
+                        admin_name=str(interaction.user),
+                        notes=f"Manually fulfilled by {interaction.user}"
+                    )
+
+                    if sync_result.get('success'):
+                        logger.info(f"✅ Synced manual fulfillment to ggrequestz for request #{request_id} (GGR ID: {ggr_request_id})")
+                    else:
+                        logger.error(f"❌ Failed to sync manual fulfillment to ggrequestz: {sync_result.get('error')}")
+
+            # Notify original requester
+            try:
+                # Prioritize the stored IGDB name, fall back to the user's requested name
+                igdb_game_name = current_request['igdb_game_name']
+                display_game_name = igdb_game_name if igdb_game_name else current_request['game_name']
+
+                user = await self.bot.fetch_user(current_request['user_id'])
+                await user.send(f"✅ Your request for '{display_game_name}' has been fulfilled!")
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
+                logger.warning(f"Could not DM user {current_request['user_id']}: {e}")
+
             # Update the request in our list
             updated_request = dict(current_request)
             updated_request['status'] = 'fulfilled'
@@ -257,11 +235,10 @@ class RequestAdminView(discord.ui.View):
         current_request = self.requests[self.current_index]
         
         class RejectModal(discord.ui.Modal):
-            def __init__(self, view, request_data, db):
+            def __init__(self, view, request_data):
                 super().__init__(title="Reject Request")
                 self.view = view
                 self.request_data = request_data
-                self.db = db
                 
                 self.reason = discord.ui.InputText(
                     label="Rejection Reason",
@@ -279,60 +256,47 @@ class RequestAdminView(discord.ui.View):
                 reason = self.reason.value or None
                 
                 try:
-                    async with self.db.get_connection() as db:
-                        await db.execute(
-                            """
-                            UPDATE requests 
-                            SET status = 'reject', 
-                                fulfilled_by = ?, 
-                                fulfiller_name = ?, 
-                                notes = ?,
-                                updated_at = CURRENT_TIMESTAMP 
-                            WHERE id = ?
-                            """,
-                            (modal_interaction.user.id, str(modal_interaction.user), reason, request_id)
-                        )
-                        await db.commit()
-                        
-                        logger.info(f"Request rejected - Admin: {modal_interaction.user} | Request ID: #{request_id} | Discord: {self.request_data['username']} (ID: {self.request_data['user_id']}) | Game: '{self.request_data['game_name']}' | Platform: {self.request_data['platform']} | Reason: {reason or 'No reason provided'}")
-                        
-                        # Sync to ggrequestz if enabled
-                        ggr = self.view.bot.get_cog('GGRequestzIntegration')
-                        if ggr and ggr.enabled:
-                            cursor = await db.execute(
-                                "SELECT ggr_request_id FROM requests WHERE id = ?",
-                                (request_id,)
-                            )
-                            result = await cursor.fetchone()
-                            
-                            if result and result['ggr_request_id']:
-                                ggr_request_id = result['ggr_request_id']
-                                sync_result = await ggr.update_request_status(
-                                    ggr_request_id=ggr_request_id,
-                                    status='rejected',
-                                    admin_name=str(interaction.user),
-                                    notes=f"Rejected by {interaction.user}"
-                                )
-                                
-                                if sync_result.get('success'):
-                                    logger.info(f"✅ Synced rejection to ggrequestz for request #{request_id} (GGR ID: {ggr_request_id})")
-                                else:
-                                    logger.error(f"❌ Failed to sync rejection to ggrequestz: {sync_result.get('error')}")
-                        
-                        # Notify user
-                        try:
-                            # Prioritize the stored IGDB name, fall back to the user's requested name
-                            igdb_game_name = self.request_data['igdb_game_name']
-                            display_game_name = igdb_game_name if igdb_game_name else self.request_data['game_name']
+                    await self.view.repo.mark_rejected(
+                        request_id,
+                        by_id=modal_interaction.user.id,
+                        by_name=str(modal_interaction.user),
+                        reason=reason,
+                    )
 
-                            user = await self.view.bot.fetch_user(self.request_data['user_id'])
-                            message = f"❌ Your request for '{display_game_name}' has been rejected."
-                            if reason:
-                                message += f"\nReason: {reason}"
-                            await user.send(message)
-                        except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
-                            logger.warning(f"Could not DM user {self.request_data['user_id']}: {e}")
-                    
+                    logger.info(f"Request rejected - Admin: {modal_interaction.user} | Request ID: #{request_id} | Discord: {self.request_data['username']} (ID: {self.request_data['user_id']}) | Game: '{self.request_data['game_name']}' | Platform: {self.request_data['platform']} | Reason: {reason or 'No reason provided'}")
+
+                    # Sync to ggrequestz if enabled
+                    ggr = self.view.bot.get_cog('GGRequestzIntegration')
+                    if ggr and ggr.enabled:
+                        ggr_request_id = await self.view.repo.get_ggr_request_id(request_id)
+
+                        if ggr_request_id:
+                            sync_result = await ggr.update_request_status(
+                                ggr_request_id=ggr_request_id,
+                                status='rejected',
+                                admin_name=str(interaction.user),
+                                notes=f"Rejected by {interaction.user}"
+                            )
+
+                            if sync_result.get('success'):
+                                logger.info(f"✅ Synced rejection to ggrequestz for request #{request_id} (GGR ID: {ggr_request_id})")
+                            else:
+                                logger.error(f"❌ Failed to sync rejection to ggrequestz: {sync_result.get('error')}")
+
+                    # Notify user
+                    try:
+                        # Prioritize the stored IGDB name, fall back to the user's requested name
+                        igdb_game_name = self.request_data['igdb_game_name']
+                        display_game_name = igdb_game_name if igdb_game_name else self.request_data['game_name']
+
+                        user = await self.view.bot.fetch_user(self.request_data['user_id'])
+                        message = f"❌ Your request for '{display_game_name}' has been rejected."
+                        if reason:
+                            message += f"\nReason: {reason}"
+                        await user.send(message)
+                    except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
+                        logger.warning(f"Could not DM user {self.request_data['user_id']}: {e}")
+
                     # Update the request in our list
                     updated_request = dict(self.request_data)
                     updated_request['status'] = 'reject'
@@ -357,7 +321,7 @@ class RequestAdminView(discord.ui.View):
                         ephemeral=True
                     )
         
-        modal = RejectModal(self, current_request, self.db)
+        modal = RejectModal(self, current_request)
         await interaction.response.send_modal(modal)
     
     async def note_callback(self, interaction: discord.Interaction):
@@ -369,11 +333,10 @@ class RequestAdminView(discord.ui.View):
         current_request = self.requests[self.current_index]
         
         class NoteModal(discord.ui.Modal):
-            def __init__(self, view, request_data, db):
+            def __init__(self, view, request_data):
                 super().__init__(title="Add Note to Request")
                 self.view = view
                 self.request_data = request_data
-                self.db = db
                 
                 # Show current note if exists
                 current_note = request_data['notes'] or ""
@@ -394,12 +357,7 @@ class RequestAdminView(discord.ui.View):
                 note = self.note.value
                 
                 try:
-                    async with self.view.db.get_connection() as db:
-                        await db.execute(
-                            "UPDATE requests SET notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                            (note, request_id)
-                        )
-                        await db.commit()
+                    await self.view.repo.set_notes(request_id, note)
                     
                     # Update the request in our list
                     updated_request = dict(self.request_data)
@@ -421,7 +379,7 @@ class RequestAdminView(discord.ui.View):
                         ephemeral=True
                     )
         
-        modal = NoteModal(self, current_request, self.db)
+        modal = NoteModal(self, current_request)
         await interaction.response.send_modal(modal)
     
     async def refresh_callback(self, interaction: discord.Interaction):
@@ -433,11 +391,7 @@ class RequestAdminView(discord.ui.View):
         await interaction.response.defer()
         
         try:
-            async with self.db.get_connection() as db:
-                cursor = await db.execute(
-                    f"SELECT {REQUEST_COLUMNS} FROM requests ORDER BY created_at DESC"
-                )
-                self.requests = await cursor.fetchall()
+            self.requests = await self.repo.list_all()
             
             # Reset to first page if current index is out of bounds
             if self.current_index >= len(self.requests):
