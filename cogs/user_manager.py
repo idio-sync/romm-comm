@@ -1226,7 +1226,7 @@ class UserManager(commands.Cog):
                 # This is the new, standardized embed
                 embed = discord.Embed(
                     title="🎮 RomM Invitation",
-                    description=f"You've been invited to access the game library at {self.bot.config.DOMAIN}!",
+                    description=f"You've been invited to access the game library at {self.bot.config.DOMAIN}",
                     color=discord.Color.blue()
                 )
                 embed.add_field(
