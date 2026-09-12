@@ -824,7 +824,7 @@ class UserManagementView(discord.ui.View):
             )
             return
         
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer()
         
         role = self.guild.get_role(self.cog.auto_register_role_id)
         if not role:
@@ -860,7 +860,7 @@ class UserManagementView(discord.ui.View):
             # Update progress every 5 users
             if (sent + failed) % 5 == 0:
                 try:
-                    await interaction.edit_original_response(
+                    await progress_msg.edit(
                         content=f"Progress: {sent + failed}/{len(members_to_invite)} processed..."
                     )
                 except (discord.NotFound, discord.HTTPException):
@@ -868,7 +868,7 @@ class UserManagementView(discord.ui.View):
         
         # Final summary
         try:
-            await interaction.edit_original_response(
+            await progress_msg.edit(
                 content=f"✅ Sent: {sent} invites\n❌ Failed: {failed} invites"
             )
         except (discord.NotFound, discord.HTTPException):
