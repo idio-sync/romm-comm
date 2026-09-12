@@ -78,7 +78,7 @@ Disclaimer: This was primarily created using Claude Code after my project scope 
 2. Install dependencies:
 
 ```bash
-pip install py-cord aiohttp python-dotenv qrcode Pillow python-socketio requests aiosqlite python-dateutil
+pip install -r requirements.txt
 ```
 
 ---

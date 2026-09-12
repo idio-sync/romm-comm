@@ -6,7 +6,6 @@
 .env
 *.env
 .env*
-!.env.example
 
 # Python
 __pycache__
@@ -42,7 +41,7 @@ data/
 ehthumbs.db
 Thumbs.db
 
-#
-.env (Sample)
+# Docs and samples: not needed in the runtime image.
+.env.example
 .github/
 README.md
