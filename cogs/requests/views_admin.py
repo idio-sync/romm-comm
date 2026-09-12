@@ -195,20 +195,6 @@ class RequestAdminView(discord.ui.View):
             igdb_game_name = current_request['igdb_game_name']
             display_game_name = igdb_game_name if igdb_game_name else current_request['game_name']
 
-            # Notify original requester
-            await notify(
-                self.bot,
-                current_request['user_id'],
-                f"✅ Your request for '{display_game_name}' has been fulfilled!"
-            )
-
-            # Notify everyone who joined the wait list for this request. They
-            # were promised this DM when they subscribed, and until now it was
-            # never sent.
-            await notify_subscribers(
-                self.bot, self.repo, request_id, fulfilled_message(display_game_name)
-            )
-
             # Update the request in our list
             updated_request = dict(current_request)
             updated_request['status'] = 'fulfilled'
@@ -234,11 +220,27 @@ class RequestAdminView(discord.ui.View):
 
             embed = self.create_request_embed(self.requests[self.current_index], user_avatar_url)
             await interaction.followup.edit_message(message_id=self.message.id, embed=embed, view=self)
-            
+
+            # DMs go out last, once the admin can already see the request
+            # closed. The wait list is paced a second apart, so a popular
+            # request would otherwise leave a stale embed - still offering
+            # Fulfill and Reject - sitting in front of them for a minute.
+            await notify(
+                self.bot,
+                current_request['user_id'],
+                f"✅ Your request for '{display_game_name}' has been fulfilled!"
+            )
+
+            # Everyone who joined the wait list for this request was promised
+            # this DM when they subscribed, and until now it was never sent.
+            await notify_subscribers(
+                self.bot, self.repo, request_id, fulfilled_message(display_game_name)
+            )
+
         except Exception as e:
             logger.error(f"Error fulfilling request: {e}")
             await interaction.followup.send("❌ An error occurred while fulfilling the request.", ephemeral=True)
-    
+
     async def reject_callback(self, interaction: discord.Interaction):
         """Show modal for rejection reason then reject"""
         if not self.bot.is_admin(interaction.user):
@@ -300,7 +302,25 @@ class RequestAdminView(discord.ui.View):
                     igdb_game_name = self.request_data['igdb_game_name']
                     display_game_name = igdb_game_name if igdb_game_name else self.request_data['game_name']
 
-                    # Notify user
+                    # Update the request in our list
+                    updated_request = dict(self.request_data)
+                    updated_request['status'] = 'reject'
+                    updated_request['fulfilled_by'] = modal_interaction.user.id
+                    updated_request['fulfiller_name'] = str(modal_interaction.user)
+                    updated_request['notes'] = reason
+                    self.view.requests[self.view.current_index] = updated_request
+                    
+                    # Update view
+                    self.view.update_button_states()
+                    embed = self.view.create_request_embed(self.view.requests[self.view.current_index])
+                    await modal_interaction.followup.edit_message(
+                        message_id=self.view.message.id,
+                        embed=embed,
+                        view=self.view
+                    )
+
+                    # DMs last, so the admin sees the rejection land before the
+                    # wait list is walked a second at a time.
                     message = f"❌ Your request for '{display_game_name}' has been rejected."
                     if reason:
                         message += f"\nReason: {reason}"
@@ -316,23 +336,6 @@ class RequestAdminView(discord.ui.View):
                         rejected_message(display_game_name, reason),
                     )
 
-                    # Update the request in our list
-                    updated_request = dict(self.request_data)
-                    updated_request['status'] = 'reject'
-                    updated_request['fulfilled_by'] = modal_interaction.user.id
-                    updated_request['fulfiller_name'] = str(modal_interaction.user)
-                    updated_request['notes'] = reason
-                    self.view.requests[self.view.current_index] = updated_request
-                    
-                    # Update view
-                    self.view.update_button_states()
-                    embed = self.view.create_request_embed(self.view.requests[self.view.current_index])
-                    await modal_interaction.followup.edit_message(
-                        message_id=self.view.message.id, 
-                        embed=embed, 
-                        view=self.view
-                    )
-                    
                 except Exception as e:
                     logger.error(f"Error rejecting request: {e}")
                     await modal_interaction.followup.send(

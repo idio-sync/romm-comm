@@ -49,23 +49,29 @@ def request_row(**overrides):
 
 
 class FakeUser:
-    def __init__(self, user_id, raises=None):
+    def __init__(self, user_id, raises=None, events=None):
         self.id = user_id
         self.messages = []
         self.raises = raises
+        self.events = events
         self.avatar = None
         self.default_avatar = type("A", (), {"url": "https://example/default.png"})()
 
     async def send(self, content):
+        if self.events is not None:
+            self.events.append(f"dm:{self.id}")
         if self.raises:
             raise self.raises
         self.messages.append(content)
 
 
 class FakeBot:
-    def __init__(self, users=None):
+    def __init__(self, users=None, fetch_errors=None):
         self.users = {user.id: user for user in (users or [])}
         self.fetched = []
+        # Ids whose fetch_user blows up before a DM is ever attempted, which is
+        # where a flaky connection actually fails.
+        self.fetch_errors = dict(fetch_errors or {})
 
     def is_admin(self, user):
         return True
@@ -81,6 +87,8 @@ class FakeBot:
 
     async def fetch_user(self, user_id):
         self.fetched.append(user_id)
+        if user_id in self.fetch_errors:
+            raise self.fetch_errors[user_id]
         if user_id not in self.users:
             raise discord.NotFound(type("R", (), {"status": 404, "reason": ""})(), "no user")
         return self.users[user_id]
@@ -89,8 +97,9 @@ class FakeBot:
 class FakeRepo:
     """Only what the request-ending paths ask of the repository."""
 
-    def __init__(self, subscriber_ids=()):
+    def __init__(self, subscriber_ids=(), subscriber_ids_raises=None):
         self._subscriber_ids = list(subscriber_ids)
+        self._subscriber_ids_raises = subscriber_ids_raises
         self.fulfilled = []
         self.rejected = []
         self.cancelled = []
@@ -108,6 +117,8 @@ class FakeRepo:
         return None
 
     async def subscriber_ids(self, request_id):
+        if self._subscriber_ids_raises:
+            raise self._subscriber_ids_raises
         return list(self._subscriber_ids)
 
 
@@ -130,21 +141,26 @@ class FakeResponse:
 
 
 class FakeFollowup:
-    def __init__(self):
+    def __init__(self, events=None):
         self.sent = []
+        self.events = events
 
     async def send(self, content=None, **kwargs):
+        if self.events is not None:
+            self.events.append("followup")
         self.sent.append(content)
 
     async def edit_message(self, **kwargs):
+        if self.events is not None:
+            self.events.append("view-updated")
         return None
 
 
 class FakeInteraction:
-    def __init__(self, user_id=1):
+    def __init__(self, user_id=1, events=None):
         self.user = type("U", (), {"id": user_id, "__str__": lambda self: "an-admin"})()
         self.response = FakeResponse()
-        self.followup = FakeFollowup()
+        self.followup = FakeFollowup(events)
         self.message = None
 
 
@@ -313,6 +329,113 @@ class CancellationNotificationTests(unittest.IsolatedAsyncioTestCase):
         view = await self.cancel()
 
         self.assertEqual([(7, "changed my mind")], view.repo.cancelled)
+
+
+class DeliveryIsBestEffortTests(unittest.IsolatedAsyncioTestCase):
+    """A DM that cannot be sent must not turn a completed action into a failure.
+
+    By the time any of these run, the request's new status is already written
+    and committed. Anything that escapes the notification step lands in the
+    callback's `except Exception` and tells the admin the action failed - while
+    leaving the embed stale and still offering the buttons they just pressed.
+    """
+
+    async def fulfil(self, *, subscriber_ids=(), extra_users=(), fetch_errors=None,
+                     repo_raises=None):
+        bot = FakeBot([FakeUser(42), *extra_users], fetch_errors=fetch_errors)
+        view = RequestAdminView(bot, [request_row()], admin_id=1, db=None)
+        view.repo = FakeRepo(subscriber_ids, subscriber_ids_raises=repo_raises)
+        view.message = type("M", (), {"id": 1})()
+
+        interaction = FakeInteraction()
+        with instant_dms():
+            await view.fulfill_callback(interaction)
+        return view, interaction
+
+    async def test_a_transport_error_does_not_stop_the_rest_of_the_list(self):
+        """TimeoutError is not an HTTPException, so it used to escape.
+
+        fetch_user goes over the wire. A connection that drops mid-list raises
+        something the three Discord exception types do not cover.
+        """
+        reachable = FakeUser(102)
+
+        with self.assertLogs("cogs.requests.notifications", level="WARNING"):
+            await self.fulfil(
+                subscriber_ids=[101, 102],
+                extra_users=[reachable],
+                fetch_errors={101: TimeoutError("connection dropped")},
+            )
+
+        self.assertEqual(1, len(reachable.messages))
+
+    async def test_a_transport_error_is_not_reported_as_a_failed_fulfilment(self):
+        with self.assertLogs("cogs.requests.notifications", level="WARNING"):
+            view, interaction = await self.fulfil(
+                subscriber_ids=[101],
+                fetch_errors={101: OSError("connection reset")},
+            )
+
+        self.assertEqual([(7, 1, "an-admin")], view.repo.fulfilled)
+        self.assertEqual([], interaction.followup.sent)
+        self.assertEqual("fulfilled", view.requests[0]["status"])
+
+    async def test_a_transport_error_reaching_the_requester_is_survivable_too(self):
+        with self.assertLogs("cogs.requests.notifications", level="WARNING"):
+            _, interaction = await self.fulfil(fetch_errors={42: TimeoutError("slow")})
+
+        self.assertEqual([], interaction.followup.sent)
+
+    async def test_an_unreadable_wait_list_does_not_fail_the_action(self):
+        """The request is fulfilled and committed before the list is read."""
+        with self.assertLogs("cogs.requests.notifications", level="ERROR"):
+            view, interaction = await self.fulfil(repo_raises=RuntimeError("database is locked"))
+
+        self.assertEqual([(7, 1, "an-admin")], view.repo.fulfilled)
+        self.assertEqual([], interaction.followup.sent)
+
+
+class ActionIsVisibleBeforeDmsTests(unittest.IsolatedAsyncioTestCase):
+    """The embed is rebuilt before the wait list is walked.
+
+    DMs are paced a second apart, so a request with a long wait list would
+    otherwise leave the person who actioned it looking at a stale embed - one
+    that still offers the button they just pressed - for as long as the fan-out
+    takes.
+    """
+
+    async def test_the_admin_sees_the_request_closed_before_dms_go_out(self):
+        events = []
+        watchers = [FakeUser(101, events=events), FakeUser(102, events=events)]
+        bot = FakeBot([FakeUser(42, events=events), *watchers])
+
+        view = RequestAdminView(bot, [request_row()], admin_id=1, db=None)
+        view.repo = FakeRepo([101, 102])
+        view.message = type("M", (), {"id": 1})()
+
+        with instant_dms():
+            await view.fulfill_callback(FakeInteraction(events=events))
+
+        self.assertEqual(["view-updated", "dm:42", "dm:101", "dm:102"], events)
+
+    async def test_the_canceller_is_confirmed_before_dms_go_out(self):
+        events = []
+        watcher = FakeUser(101, events=events)
+        bot = FakeBot([FakeUser(42), watcher])
+
+        view = UserRequestsView(bot, [request_row()], user_id=42, db=None)
+        view.repo = FakeRepo([101])
+        view.message = type("M", (), {"id": 1})()
+
+        interaction = FakeInteraction(user_id=42)
+        await view.cancel_callback(interaction)
+        modal = interaction.response.modal
+        modal.reason.value = "changed my mind"
+
+        with instant_dms():
+            await modal.callback(FakeInteraction(user_id=42, events=events))
+
+        self.assertEqual(["view-updated", "followup", "dm:101"], events)
 
 
 class MessageWordingTests(unittest.TestCase):

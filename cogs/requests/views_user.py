@@ -197,18 +197,6 @@ class UserRequestsView(discord.ui.View):
                 try:
                     await self.view.repo.mark_cancelled(request_id, reason=reason)
 
-                    # Everyone who joined the wait list for this request is
-                    # now waiting on something that no longer exists. Tell
-                    # them, and that they can file their own.
-                    igdb_game_name = self.request_data['igdb_game_name']
-                    display_game_name = igdb_game_name or self.request_data['game_name']
-                    await notify_subscribers(
-                        self.view.bot,
-                        self.view.repo,
-                        request_id,
-                        cancelled_message(display_game_name),
-                    )
-
                     # Update the request in our list
                     updated_request = dict(self.request_data)
                     updated_request['status'] = 'cancelled'
@@ -244,7 +232,21 @@ class UserRequestsView(discord.ui.View):
                         f"✅ Request #{request_id} has been cancelled.",
                         ephemeral=True
                     )
-                    
+
+                    # Everyone who joined the wait list for this request is now
+                    # waiting on something that no longer exists. Tell them, and
+                    # that they can file their own. Last, because the list is
+                    # walked a second at a time and the person who cancelled
+                    # should not be kept waiting on other people's DMs.
+                    igdb_game_name = self.request_data['igdb_game_name']
+                    display_game_name = igdb_game_name or self.request_data['game_name']
+                    await notify_subscribers(
+                        self.view.bot,
+                        self.view.repo,
+                        request_id,
+                        cancelled_message(display_game_name),
+                    )
+
                 except Exception as e:
                     logger.error(f"Error cancelling request: {e}")
                     await modal_interaction.followup.send(

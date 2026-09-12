@@ -12,8 +12,6 @@ import asyncio
 import logging
 from typing import Optional
 
-import discord
-
 logger = logging.getLogger(__name__)
 
 # Seconds between consecutive DMs, matching the scan notifications.
@@ -45,12 +43,21 @@ def cancelled_message(game_name: str) -> str:
 
 
 async def notify(bot, user_id: int, message: str) -> bool:
-    """DM one user. A closed inbox is not an error worth propagating."""
+    """DM one user. Nothing that goes wrong here is worth propagating.
+
+    A closed inbox raises Forbidden and a deleted account raises NotFound, but
+    a flaky connection raises neither: fetch_user goes over the wire, so it can
+    also fail with a timeout or a transport error that is not an HTTPException
+    at all. Those used to escape, and because the caller has already written
+    the request's new status to the database by the time it gets here, they
+    surfaced as "an error occurred" for an action that had in fact succeeded -
+    and took the rest of the wait list down with them.
+    """
     try:
         user = await bot.fetch_user(user_id)
         await user.send(message)
         return True
-    except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
+    except Exception as e:
         logger.warning(f"Could not DM user {user_id}: {e}")
         return False
 
@@ -58,10 +65,19 @@ async def notify(bot, user_id: int, message: str) -> bool:
 async def notify_subscribers(bot, repo, request_id: int, message: str) -> int:
     """Tell everyone on a request's wait list how it ended.
 
-    Each DM is attempted independently, so one person with DMs closed does not
+    Each DM is attempted independently, so one unreachable recipient does not
     cut the rest of the list short. Returns how many were reached.
+
+    Delivery is best effort in both directions: failing to read the wait list
+    is reported and returns nothing, rather than being raised at a caller whose
+    own work is already done and committed.
     """
-    subscriber_ids = await repo.subscriber_ids(request_id)
+    try:
+        subscriber_ids = await repo.subscriber_ids(request_id)
+    except Exception as e:
+        logger.error(f"Could not read the wait list for request #{request_id}: {e}")
+        return 0
+
     if not subscriber_ids:
         return 0
 
