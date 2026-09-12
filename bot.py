@@ -618,7 +618,16 @@ class RommBot(discord.Bot):
         form_data: Optional[aiohttp.FormData] = None,
         require_csrf: bool = False
     ) -> Optional[Dict]:
-        """Make an authenticated API request with proper headers."""
+        """Make an authenticated API request with proper headers.
+
+        require_csrf is a no-op against current RomM. Its CSRFMiddleware skips
+        validation outright when the Authorization scheme is bearer or basic,
+        and every request made here carries a bearer token, so the extra
+        round-trip to fetch a CSRF token buys nothing. The flag is kept, and
+        left set where it already was, in case an older or differently
+        configured server does enforce it. New call sites do not need it,
+        which is why users/invite-link omits it.
+        """
         try:
             if not await self.ensure_valid_token():
                 logger.error("Failed to obtain valid OAuth token")
