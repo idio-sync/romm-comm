@@ -754,6 +754,17 @@ class UserManagementView(discord.ui.View):
             await interaction.followup.send("Please select a Discord user.", ephemeral=True)
             return
         
+        # send_invite_link treats an already-linked user as a no-op success, so
+        # check here to avoid reporting that an invite was sent when it was not.
+        existing_link = await self.cog.db_manager.get_user_link(self.selected_discord_user.id)
+        if existing_link:
+            await interaction.followup.send(
+                f"ℹ️ {self.selected_discord_user.mention} is already linked to RomM account "
+                f"`{existing_link['romm_username']}` - no invite was sent.",
+                ephemeral=True
+            )
+            return
+        
         # Call the standardized method from the cog
         success = await self.cog.send_invite_link(self.selected_discord_user)
         
