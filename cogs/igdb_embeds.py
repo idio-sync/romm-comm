@@ -7,8 +7,9 @@ ways users would notice. The two look similar; they are not interchangeable.
 """
 
 import logging
+import re
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional, Tuple
 
 import discord
 
@@ -45,14 +46,19 @@ def format_rating(rating: Optional[float], rating_count: Optional[int]) -> Optio
     return text
 
 
+def format_capped_list(values, cap: int) -> Optional[str]:
+    """First `cap` values, comma-joined, with a count of whatever is left over."""
+    if not values:
+        return None
+    text = ', '.join(values[:cap])
+    if len(values) > cap:
+        text += f' (+{len(values) - cap} more)'
+    return text
+
+
 def format_genres(genres) -> Optional[str]:
     """At most two genres, with a count of whatever is left over."""
-    if not genres:
-        return None
-    text = ', '.join(genres[:2])
-    if len(genres) > 2:
-        text += f' (+{len(genres) - 2} more)'
-    return text
+    return format_capped_list(genres, 2)
 
 
 def top_companies(selected_game: Dict) -> list:
@@ -217,3 +223,101 @@ def build_existing_games_embed(matches: list, game_name: str, other_igdb_count: 
 
     embed.add_field(name="What would you like to do?", value="\n".join(instructions), inline=False)
     return embed
+
+
+# --- the detail embed -------------------------------------------------------
+#
+# IGDBGameView.create_game_detail_embed renders one game as a full page. It is
+# one optional field per IGDB attribute, which is why it was long rather than
+# complicated; the per-attribute formatters live here so the builder reads as
+# the list of fields it is.
+
+SUMMARY_LIMIT = 500
+
+# Links shown under the detail embed, in render order, after the IGDB link
+# itself. `None` for the emoji name means the literal globe, which sits
+# *outside* the bold span where the custom emoji sit inside it -- a wording
+# difference users would notice, so it is preserved rather than tidied.
+#
+# IGDB also reports an 'epic' website and we fetch it, but the Epic link has
+# been commented out of this list since it was written. Left out here too,
+# deliberately, rather than quietly turned on by the move.
+DETAIL_WEBSITE_LINKS = (
+    ('official', None, 'Website'),
+    ('steam', 'steam', 'Steam'),
+    ('gog', 'gog', 'GOG'),
+    ('youtube', 'youtube', 'YouTube'),
+    ('twitch', 'twitch', 'Twitch'),
+)
+
+LINKS_PER_ROW = 5
+
+
+def igdb_slug(game_name: str) -> str:
+    """IGDB's own URL slug: lowercase, spaces to hyphens, everything else gone."""
+    return re.sub(r'[^a-z0-9-]', '', game_name.lower().replace(' ', '-'))
+
+
+def build_detail_links_value(
+    *,
+    game_name: str,
+    websites: Optional[Dict],
+    emoji: Callable[[str], str],
+) -> str:
+    """The Links field: IGDB first, then whichever storefronts IGDB knows about.
+
+    Membership, not truthiness, decides whether a link is rendered -- IGDB has
+    been seen to report a key with an empty URL, and the original rendered a
+    dead link in that case. Preserved; changing it is a fix, not a move.
+    """
+    websites = websites or {}
+    links = [f"[**{emoji('igdb')} IGDB**](https://www.igdb.com/games/{igdb_slug(game_name)})"]
+    for key, emoji_name, label in DETAIL_WEBSITE_LINKS:
+        if key not in websites:
+            continue
+        if emoji_name is None:
+            links.append(f"[\U0001F310 **{label}**]({websites[key]})")
+        else:
+            links.append(f"[**{emoji(emoji_name)} {label}**]({websites[key]})")
+
+    rows = [
+        "\u2003".join(links[i:i + LINKS_PER_ROW])
+        for i in range(0, len(links), LINKS_PER_ROW)
+    ]
+    return "\n\n".join(rows)
+
+
+def build_detail_platform_field(
+    platforms,
+    platform_name: Optional[str],
+    platform_display: Callable[[str], str],
+) -> Optional[Tuple[str, str]]:
+    """The Platform(s) field, as (name, value), or None when there are none.
+
+    A filtered view shows only the platform that was filtered on, singular;
+    an unfiltered one shows up to three of the game's own, plural.
+    """
+    if not platforms:
+        return None
+    if platform_name:
+        return "Platform", platform_display(platform_name)
+    return "Platforms", format_capped_list(platforms, 3)
+
+
+def format_detail_release_date(release_date: Optional[str]) -> str:
+    """Release date for the detail embed, which always shows the field.
+
+    Where `format_release_date` returns None for a date it cannot use, this
+    falls back to showing it as IGDB sent it, and to 'Unknown' when there is
+    nothing to show.
+    """
+    return format_release_date(release_date) or release_date or 'Unknown'
+
+
+def format_detail_summary(summary: Optional[str]) -> Optional[str]:
+    """The summary, truncated, or None when IGDB supplied no real one."""
+    if not summary or summary == 'No summary available':
+        return None
+    if len(summary) > SUMMARY_LIMIT:
+        return summary[:SUMMARY_LIMIT - 3] + "..."
+    return summary

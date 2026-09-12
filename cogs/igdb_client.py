@@ -10,10 +10,19 @@ import discord
 from discord.ext import commands
 
 from .igdb_embeds import (
+    ROMM_LOGO,
+    build_detail_links_value,
+    build_detail_platform_field,
     build_existing_games_embed,
     build_igdb_already_requested_embed,
     build_igdb_request_submitted_embed,
     build_igdb_subscribed_embed,
+    format_capped_list,
+    format_detail_release_date,
+    format_detail_summary,
+    format_genres,
+    format_rating,
+    top_companies,
 )
 
 logger = logging.getLogger(__name__)
@@ -899,173 +908,54 @@ class IGDBGameView(discord.ui.View):
         embed = self.create_list_embed()
         await interaction.response.edit_message(embed=embed, view=self)
     
-    def create_game_detail_embed(self, game: Dict) -> discord.Embed:  # noqa: C901 - one optional embed field per IGDB attribute
-        """Create detailed embed for a single game (like requests cog)"""
+    def create_game_detail_embed(self, game: Dict) -> discord.Embed:
+        """One game as a full page: cover art, then a field per IGDB attribute.
+
+        Every field but Release Date and Links is optional and omitted when
+        IGDB has nothing for it. The formatting lives in cogs/igdb_embeds.py.
+        """
         game_name = game.get('name', 'Unknown')
-        
-        embed = discord.Embed(
-            title=game_name,
-            color=discord.Color.blue()
-        )
-        
-        # Set cover image if available
+
+        embed = discord.Embed(title=game_name, color=discord.Color.blue())
         if game.get('cover_url'):
             embed.set_image(url=game['cover_url'])
-        
-        # Set RomM logo as thumbnail
-        embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
-        
-        # Platform field
-        platforms = game.get('platforms', [])
-        if platforms:
-            # If viewing with platform filter, only show that platform
-            if self.platform_name:
-                platform_str = self.bot.platform_emoji.format(self.platform_name)
-            else:
-                # No filter - show all platforms
-                platform_str = ', '.join(platforms[:3])
-                if len(platforms) > 3:
-                    platform_str += f' (+{len(platforms) - 3} more)'
-            
-            embed.add_field(
-                name="Platform" if self.platform_name else "Platforms",
-                value=platform_str,
-                inline=True
-            )
-        
-        # Genre field
-        genres = game.get('genres', [])
-        if genres:
-            genre_str = ', '.join(genres[:2])
-            if len(genres) > 2:
-                genre_str += f' (+{len(genres) - 2} more)'
-            embed.add_field(
-                name="Genre",
-                value=genre_str,
-                inline=True
-            )
-        
-        # Release Date field
-        release_date = game.get('release_date', 'Unknown')
-        if release_date != 'Unknown' and release_date != 'TBA':
-            try:
-                date_obj = datetime.strptime(release_date, "%Y-%m-%d")
-                formatted_date = date_obj.strftime("%B %d, %Y")
-            except ValueError:
-                formatted_date = release_date
-        else:
-            formatted_date = release_date
+        embed.set_thumbnail(url=ROMM_LOGO)
 
-        embed.add_field(
-            name="Release Date",
-            value=formatted_date,
-            inline=True
+        # Order matters: this is the order the fields appear in the embed.
+        # Release Date is the one that is always shown; the rest are dropped
+        # when IGDB has nothing for them.
+        inline_fields = (
+            build_detail_platform_field(
+                game.get('platforms', []),
+                self.platform_name,
+                self.bot.platform_emoji.format,
+            ),
+            ("Genre", format_genres(game.get('genres', []))),
+            ("Release Date", format_detail_release_date(game.get('release_date', 'Unknown'))),
+            ("IGDB Rating", format_rating(game.get('rating'), game.get('rating_count'))),
+            ("Companies", ", ".join(top_companies(game)) or None),
+            ("Game Modes", format_capped_list(game.get('game_modes', []), 3)),
         )
-        
-        # IGDB Rating (if available)
-        rating = game.get('rating')
-        rating_count = game.get('rating_count')
-        if rating:
-            # Convert 0-100 to 0-5 stars
-            stars = round(rating / 20)
-            star_display = "⭐" * stars + "☆" * (5 - stars)
-            rating_text = f"{star_display} {rating:.1f}/100"
-            if rating_count:
-                rating_text += f" ({rating_count:,} ratings)"
-            
-            embed.add_field(
-                name="IGDB Rating",
-                value=rating_text,
-                inline=True
-            )
-        
-        # Companies section
-        companies = []
-        if game.get('developers'):
-            developers = game['developers'][:2]
-            companies.extend(developers)
-        if game.get('publishers') and game.get('publishers') != game.get('developers'):
-            publishers = game['publishers']
-            remaining_slots = 2 - len(companies)
-            if remaining_slots > 0:
-                companies.extend(publishers[:remaining_slots])
-        
-        if companies:
-            embed.add_field(
-                name="Companies",
-                value=", ".join(companies),
-                inline=True
-            )
-        
-        # Game modes
-        game_modes = game.get('game_modes', [])
-        if game_modes:
-            modes_str = ', '.join(game_modes[:3])
-            if len(game_modes) > 3:
-                modes_str += f' (+{len(game_modes) - 3} more)'
-            embed.add_field(
-                name="Game Modes",
-                value=modes_str,
-                inline=True
-            )
-        
-        # Summary
-        summary = game.get('summary', 'No summary available')
-        if summary and summary != 'No summary available':
-            if len(summary) > 500:
-                summary = summary[:497] + "..."
-            embed.add_field(
-                name="Summary",
-                value=summary,
-                inline=False
-            )
-        
-        # IGDB Link and other links
-        igdb_link_name = game_name.lower().replace(' ', '-')
-        igdb_link_name = re.sub(r'[^a-z0-9-]', '', igdb_link_name)
-        igdb_url = f"https://www.igdb.com/games/{igdb_link_name}"
+        for field in inline_fields:
+            if field and field[1]:
+                embed.add_field(name=field[0], value=field[1], inline=True)
 
-        igdb_emoji = self.bot.get_formatted_emoji('igdb')
-        youtube_emoji = self.bot.get_formatted_emoji('youtube')
-        steam_emoji = self.bot.get_formatted_emoji('steam')
-        epic_emoji = self.bot.get_formatted_emoji('epic')
-        gog_emoji = self.bot.get_formatted_emoji('gog')
-        twitch_emoji = self.bot.get_formatted_emoji('twitch')
-
-        # Build links list
-        links = [f"[**{igdb_emoji} IGDB**]({igdb_url})"]
-
-        # Add other website links if available
-        websites = game.get('websites', {})
-
-        # Priority order for links
-        if 'official' in websites:
-            links.append(f"[🌐 **Website**]({websites['official']})")
-        if 'steam' in websites:
-            links.append(f"[**{steam_emoji} Steam**]({websites['steam']})")
-        # if 'epic' in websites:
-        #     links.append(f"[**{epic_emoji} Epic**]({websites['epic']})")
-        if 'gog' in websites:
-            links.append(f"[**{gog_emoji} GOG**]({websites['gog']})")
-        if 'youtube' in websites:
-            links.append(f"[**{youtube_emoji} YouTube**]({websites['youtube']})")
-        if 'twitch' in websites:
-            links.append(f"[**{twitch_emoji} Twitch**]({websites['twitch']})")
-
-        # Format links: 4 per row with better spacing
-        links_formatted = []
-        for i in range(0, len(links), 5):
-            row = links[i:i+5]
-            links_formatted.append("\u2003".join(row))
+        summary = format_detail_summary(game.get('summary', 'No summary available'))
+        if summary:
+            embed.add_field(name="Summary", value=summary, inline=False)
 
         embed.add_field(
             name="Links",
-            value="\n\n".join(links_formatted),  # Each row on new line
-            inline=False
+            value=build_detail_links_value(
+                game_name=game_name,
+                websites=game.get('websites', {}),
+                emoji=self.bot.get_formatted_emoji,
+            ),
+            inline=False,
         )
-               
+
         return embed
-    
+
     async def select_callback(self, interaction: discord.Interaction):
         """Handle game selection"""
         game_index = int(self.game_select.values[0])

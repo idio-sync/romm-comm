@@ -9,12 +9,18 @@ import unittest
 
 from cogs.igdb_embeds import (
     ROMM_LOGO,
+    build_detail_links_value,
+    build_detail_platform_field,
     build_existing_games_embed,
     build_igdb_request_submitted_embed,
     build_igdb_subscribed_embed,
+    format_capped_list,
+    format_detail_release_date,
+    format_detail_summary,
     format_genres,
     format_rating,
     format_release_date,
+    igdb_slug,
     top_companies,
 )
 
@@ -206,3 +212,88 @@ class SubscribedEmbedTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DetailEmbedHelperTests(unittest.TestCase):
+    """The per-attribute formatters behind IGDBGameView.create_game_detail_embed.
+
+    The split itself was checked by running the pre-split implementation against
+    the new one over 12,441,600 input combinations; the only two divergences
+    were unreachable (see the commit message). These tests pin the pieces so a
+    later edit cannot drift them.
+    """
+
+    def test_capped_list_keeps_everything_under_the_cap(self):
+        self.assertEqual(format_capped_list(["a", "b"], 3), "a, b")
+
+    def test_capped_list_counts_the_overflow(self):
+        self.assertEqual(format_capped_list(["a", "b", "c", "d"], 3), "a, b, c (+1 more)")
+
+    def test_capped_list_is_none_when_empty(self):
+        self.assertIsNone(format_capped_list([], 3))
+        self.assertIsNone(format_capped_list(None, 3))
+
+    def test_platform_field_is_singular_and_filtered_under_a_platform_filter(self):
+        field = build_detail_platform_field(["SNES", "Genesis"], "Super Nintendo", lambda n: f"<{n}>")
+        self.assertEqual(field, ("Platform", "<Super Nintendo>"))
+
+    def test_platform_field_is_plural_and_capped_without_a_filter(self):
+        field = build_detail_platform_field(["A", "B", "C", "D"], None, lambda n: f"<{n}>")
+        self.assertEqual(field, ("Platforms", "A, B, C (+1 more)"))
+
+    def test_platform_field_is_none_when_the_game_lists_no_platforms(self):
+        self.assertIsNone(build_detail_platform_field([], "Super Nintendo", lambda n: f"<{n}>"))
+
+    def test_detail_release_date_formats_a_real_date(self):
+        self.assertEqual(format_detail_release_date("1997-08-25"), "August 25, 1997")
+
+    def test_detail_release_date_shows_unusable_input_as_it_came(self):
+        self.assertEqual(format_detail_release_date("TBA"), "TBA")
+        self.assertEqual(format_detail_release_date("not-a-date"), "not-a-date")
+
+    def test_detail_release_date_never_returns_empty(self):
+        # The field is always added, so an empty value would be an embed
+        # Discord rejects. The pre-split code returned '' here and crashed on None.
+        self.assertEqual(format_detail_release_date(""), "Unknown")
+        self.assertEqual(format_detail_release_date(None), "Unknown")
+
+    def test_detail_summary_truncates_to_the_limit_including_the_ellipsis(self):
+        result = format_detail_summary("x" * 600)
+        self.assertEqual(len(result), 500)
+        self.assertTrue(result.endswith("..."))
+
+    def test_detail_summary_leaves_a_summary_at_the_limit_alone(self):
+        self.assertEqual(format_detail_summary("x" * 500), "x" * 500)
+
+    def test_detail_summary_is_none_for_igdbs_placeholder(self):
+        self.assertIsNone(format_detail_summary("No summary available"))
+        self.assertIsNone(format_detail_summary(""))
+        self.assertIsNone(format_detail_summary(None))
+
+    def test_slug_strips_everything_igdb_urls_do_not_carry(self):
+        self.assertEqual(igdb_slug("Marvel's Spider-Man 2!"), "marvels-spider-man-2")
+
+    def test_links_always_start_with_igdb(self):
+        value = build_detail_links_value(
+            game_name="Chrono Trigger", websites={}, emoji=lambda n: f"<{n}>"
+        )
+        self.assertEqual(value, "[**<igdb> IGDB**](https://www.igdb.com/games/chrono-trigger)")
+
+    def test_links_render_the_official_site_outside_the_bold_span(self):
+        # The globe sits outside the bold where the custom emoji sit inside it.
+        value = build_detail_links_value(
+            game_name="G", websites={"official": "http://o"}, emoji=lambda n: f"<{n}>"
+        )
+        self.assertIn("[\U0001F310 **Website**](http://o)", value)
+
+    def test_links_skip_epic_even_when_igdb_reports_it(self):
+        value = build_detail_links_value(
+            game_name="G", websites={"epic": "http://e"}, emoji=lambda n: f"<{n}>"
+        )
+        self.assertNotIn("http://e", value)
+
+    def test_links_wrap_every_five(self):
+        websites = {"official": "o", "steam": "s", "gog": "g", "youtube": "y", "twitch": "t"}
+        value = build_detail_links_value(game_name="G", websites=websites, emoji=lambda n: f"<{n}>")
+        rows = value.split("\n\n")
+        self.assertEqual([len(r.split("\u2003")) for r in rows], [5, 1])
