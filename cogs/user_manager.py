@@ -8,6 +8,7 @@ import asyncio
 import aiohttp
 import aiosqlite
 import time
+from enum import Enum
 
 from admin_checks import is_admin
 
@@ -17,6 +18,20 @@ logger = logging.getLogger('romm_bot.users')
 # one of the more aggressively rate limited things a bot can do, and a burst of
 # them is what draws attention to an account.
 BULK_INVITE_DELAY_SECONDS = 1.0
+
+
+class InviteOutcome(Enum):
+    """Why send_invite_link() finished the way it did.
+
+    A bare bool cannot tell "nothing to do" or "the invite exists but we could
+    not deliver it" apart from "this did not work", and callers need to say
+    something different in each case.
+    """
+
+    SENT = "sent"
+    ALREADY_LINKED = "already_linked"
+    DM_BLOCKED = "dm_blocked"
+    FAILED = "failed"
 
 class UserManagementView(discord.ui.View):
     """Comprehensive user management interface for admins"""
@@ -759,29 +774,33 @@ class UserManagementView(discord.ui.View):
             await interaction.followup.send("Please select a Discord user.", ephemeral=True)
             return
         
-        # send_invite_link treats an already-linked user as a no-op success, so
-        # check here to avoid reporting that an invite was sent when it was not.
-        existing_link = await self.cog.db_manager.get_user_link(self.selected_discord_user.id)
-        if existing_link:
+        # Call the standardized method from the cog
+        outcome = await self.cog.send_invite_link(self.selected_discord_user)
+        mention = self.selected_discord_user.mention
+        
+        if outcome is InviteOutcome.SENT:
             await interaction.followup.send(
-                f"ℹ️ {self.selected_discord_user.mention} is already linked to RomM account "
-                f"`{existing_link['romm_username']}` - no invite was sent.",
+                f"✅ Successfully sent invite link to {mention}",
                 ephemeral=True
             )
-            return
-        
-        # Call the standardized method from the cog
-        success = await self.cog.send_invite_link(self.selected_discord_user)
-        
-        if success:
+        elif outcome is InviteOutcome.ALREADY_LINKED:
+            existing_link = await self.cog.db_manager.get_user_link(self.selected_discord_user.id)
+            username = existing_link.get('romm_username') if existing_link else None
+            detail = f" to RomM account `{username}`" if username else ""
             await interaction.followup.send(
-                f"✅ Successfully sent invite link to {self.selected_discord_user.mention}",
+                f"ℹ️ {mention} is already linked{detail} - no invite was sent.",
+                ephemeral=True
+            )
+        elif outcome is InviteOutcome.DM_BLOCKED:
+            await interaction.followup.send(
+                f"⚠️ The invite for {mention} was created, but their DMs are closed. "
+                "The link has been posted to the log channel - send it to them manually.",
                 ephemeral=True
             )
         else:
-            # The send_invite_link function already handles logging and DM failure notifications
+            # send_invite_link already logged the underlying failure.
             await interaction.followup.send(
-                f"❌ Failed to send invite link to {self.selected_discord_user.mention}. See logs for details.",
+                f"❌ Failed to create an invite for {mention}. See logs for details.",
                 ephemeral=True
             )
     
@@ -855,6 +874,7 @@ class UserManagementView(discord.ui.View):
         )
         
         sent = 0
+        dm_blocked = 0
         failed = 0
         
         for index, member in enumerate(members_to_invite):
@@ -863,30 +883,36 @@ class UserManagementView(discord.ui.View):
             if index:
                 await asyncio.sleep(BULK_INVITE_DELAY_SECONDS)
 
-            if await self.cog.send_invite_link(member):
+            outcome = await self.cog.send_invite_link(member)
+            if outcome is InviteOutcome.SENT:
                 sent += 1
+            elif outcome is InviteOutcome.DM_BLOCKED:
+                dm_blocked += 1
             else:
                 failed += 1
             
             # Update progress every 5 users
-            if (sent + failed) % 5 == 0:
+            processed = index + 1
+            if processed % 5 == 0:
                 try:
                     await progress_msg.edit(
-                        content=f"Progress: {sent + failed}/{len(members_to_invite)} processed..."
+                        content=f"Progress: {processed}/{len(members_to_invite)} processed..."
                     )
                 except (discord.NotFound, discord.HTTPException):
                     pass  # Ignore if message edit fails
         
-        # Final summary
+        # Final summary. DM-blocked invites exist server side and their links
+        # are in the log channel, so they are not the same as an outright
+        # failure and are counted separately.
+        summary = f"✅ Sent: {sent} invites"
+        if dm_blocked:
+            summary += f"\n⚠️ DMs closed: {dm_blocked} (links are in the log channel)"
+        summary += f"\n❌ Failed: {failed} invites"
+
         try:
-            await progress_msg.edit(
-                content=f"✅ Sent: {sent} invites\n❌ Failed: {failed} invites"
-            )
+            await progress_msg.edit(content=summary)
         except (discord.NotFound, discord.HTTPException):
-            await interaction.followup.send(
-                f"✅ Sent: {sent} invites\n❌ Failed: {failed} invites",
-                ephemeral=True
-            )
+            await interaction.followup.send(summary, ephemeral=True)
         
         # Refresh the view
         await self.populate_discord_users()
@@ -1221,13 +1247,13 @@ class UserManager(commands.Cog):
             logger.error(f"Error finding user {username}: {e}", exc_info=True)
             return None
     
-    async def send_invite_link(self, member: discord.Member, role: str = "user") -> bool:
+    async def send_invite_link(self, member: discord.Member, role: str = "user") -> InviteOutcome:
         """Send a standardized invite link to a Discord member."""
         try:
             existing_link = await self.db_manager.get_user_link(member.id)
             if existing_link:
                 logger.info(f"User {member.display_name} already has a linked account.")
-                return True
+                return InviteOutcome.ALREADY_LINKED
 
             invite_data = await self.bot.make_authenticated_request(
                 method="POST",
@@ -1237,7 +1263,7 @@ class UserManager(commands.Cog):
             
             if not invite_data or 'token' not in invite_data:
                 logger.error(f"Failed to create invite link for {member.display_name}")
-                return False
+                return InviteOutcome.FAILED
             
             invite_token = invite_data.get('token')
             # RomM returns the canonical registration URL when it has a public base
@@ -1282,7 +1308,7 @@ class UserManager(commands.Cog):
                     await log_channel.send(embed=log_embed)
                 
                 logger.info(f"Successfully sent invite link to {member.display_name}")
-                return True
+                return InviteOutcome.SENT
                 
             except discord.Forbidden:
                 logger.warning(f"Could not DM {member.display_name} - DMs may be disabled.")
@@ -1299,11 +1325,11 @@ class UserManager(commands.Cog):
                             color=discord.Color.yellow()
                         )
                     )
-                return False
+                return InviteOutcome.DM_BLOCKED
                 
         except Exception as e:
             logger.error(f"Error sending invite link to {member.display_name}: {e}", exc_info=True)
-            return False
+            return InviteOutcome.FAILED
     
     async def handle_role_removal(self, member: discord.Member) -> bool:
         """Handle removal of the auto-register role"""
@@ -1584,8 +1610,10 @@ class UserManager(commands.Cog):
             use_invite: Whether to use invite links (True) or direct creation (False)
         """
         if use_invite:
-            # Use the new invite-based system
-            return await self.send_invite_link(member)
+            # Use the new invite-based system. This function's callers only care
+            # whether the member ends up with a route to an account.
+            outcome = await self.send_invite_link(member)
+            return outcome in (InviteOutcome.SENT, InviteOutcome.ALREADY_LINKED)
         
         try:
             # Check if user already has a linked account
