@@ -402,7 +402,7 @@ class IGDBClient:
         
         return sorted(games, key=calculate_relevance, reverse=True)
 
-    def _process_games_response(self, games: List[Dict]) -> List[Dict]:
+    def _process_games_response(self, games: List[Dict]) -> List[Dict]:  # noqa: C901 - many optional IGDB fields, each absent-checked
         """Process and format IGDB game data"""
         processed_games = []
         for game in games:
@@ -902,7 +902,7 @@ class IGDBGameView(discord.ui.View):
         embed = self.create_list_embed()
         await interaction.response.edit_message(embed=embed, view=self)
     
-    def create_game_detail_embed(self, game: Dict) -> discord.Embed:
+    def create_game_detail_embed(self, game: Dict) -> discord.Embed:  # noqa: C901 - one optional embed field per IGDB attribute
         """Create detailed embed for a single game (like requests cog)"""
         game_name = game.get('name', 'Unknown')
         

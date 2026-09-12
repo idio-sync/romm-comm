@@ -39,10 +39,10 @@ class Info(commands.Cog):
         if not self.last_stats:
             return True
         
-        for key, value in new_stats.items():
-            if key not in self.last_stats or self.last_stats[key] != value:
-                return True
-        return False
+        return any(
+            key not in self.last_stats or self.last_stats[key] != value
+            for key, value in new_stats.items()
+        )
 
     async def update_stat_channels(self, guild: discord.Guild):
         """Update stat channels when stats change."""

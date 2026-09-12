@@ -182,7 +182,7 @@ class MasterDatabase:
         ]
         return any(os.path.exists(db) for db in old_dbs)
     
-    async def migrate_existing_databases(self):
+    async def migrate_existing_databases(self):  # noqa: C901 - three legacy schemas, each read defensively
         """Migrate data from old separate databases to the master database"""
         migration_summary = {
             'recent_roms': {'migrated': 0, 'failed': 0},

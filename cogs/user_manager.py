@@ -919,7 +919,7 @@ class UserManagementView(discord.ui.View):
         else:
             await interaction.followup.send("❌ Failed to create RomM account", ephemeral=True)
     
-    async def bulk_create_callback(self, interaction: discord.Interaction):
+    async def bulk_create_callback(self, interaction: discord.Interaction):  # noqa: C901 - per-member outcomes, each reported separately
         """Bulk send invites for users with the auto-register role"""
         if not self.cog.auto_register_role_id:
             await interaction.response.send_message(

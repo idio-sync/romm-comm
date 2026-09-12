@@ -453,7 +453,7 @@ class RecentRomsMonitor(commands.Cog):
         
         return all_details
     
-    async def process_scan_batch(self, roms: List[Dict]):
+    async def process_scan_batch(self, roms: List[Dict]):  # noqa: C901 - scan fan-out: batching, flood control and notification
         """Process and post the ROMs from a completed scan"""
         if not roms:
             return
@@ -797,7 +797,7 @@ class RecentRomsMonitor(commands.Cog):
             size_bytes /= 1024.0
         return f"{size_bytes:.1f} PB"
     
-    async def create_single_rom_embed(self, rom: Dict) -> Tuple[discord.Embed, Optional[discord.File]]:
+    async def create_single_rom_embed(self, rom: Dict) -> Tuple[discord.Embed, Optional[discord.File]]:  # noqa: C901 - one optional embed field per ROM attribute
         """Create a detailed embed for a single ROM with RomM metadata"""
         platform_name = rom.get('platform_name', 'Unknown')
         
@@ -1045,7 +1045,10 @@ class RecentRomsMonitor(commands.Cog):
             composite.save(buffer, format='PNG', optimize=False)  # Don't optimize for better quality
             buffer.seek(0)
             
-            logger.debug(f"Created composite: {num_images} images, {cols}x{rows} grid, {thumb_width}x{thumb_height}px covers, total: {composite_width}x{composite_height}px")
+            logger.debug(
+                f"Created composite: {num_images} images, {cols}x{rows} grid, {thumb_width}x{thumb_height}px covers, total: "
+                f"{composite_width}x{composite_height}px"
+            )
             
             return buffer
             
@@ -1219,7 +1222,7 @@ class RecentRomsMonitor(commands.Cog):
         default=1
     )
     @is_admin()
-    async def refresh_recent(self, ctx: discord.ApplicationContext, count: int = 1):
+    async def refresh_recent(self, ctx: discord.ApplicationContext, count: int = 1):  # noqa: C901 - reconciles posted messages against what the API now reports
         """Refresh recent ROM notifications with updated metadata"""
         if not self.enabled:
             await ctx.respond("Recent ROMs monitoring is disabled.", ephemeral=True)

@@ -172,7 +172,11 @@ class RequestAdminView(discord.ui.View):
                 request_id, by_id=interaction.user.id, by_name=str(interaction.user)
             )
 
-            logger.info(f"Request fulfilled manually - Admin: {interaction.user} | Request ID: #{request_id} | Discord: {current_request['username']} (ID: {current_request['user_id']}) | Game: '{current_request['game_name']}' | Platform: {current_request['platform']}")
+            logger.info(
+                f"Request fulfilled manually - Admin: {interaction.user} | Request ID: #{request_id} | Discord: "
+                f"{current_request['username']} (ID: {current_request['user_id']}) | Game: '{current_request['game_name']}' | Platform: "
+                f"{current_request['platform']}"
+            )
 
             # Sync to ggrequestz if enabled
             ggr = self.bot.get_cog('GGRequestzIntegration')
@@ -280,7 +284,11 @@ class RequestAdminView(discord.ui.View):
                         reason=reason,
                     )
 
-                    logger.info(f"Request rejected - Admin: {modal_interaction.user} | Request ID: #{request_id} | Discord: {self.request_data['username']} (ID: {self.request_data['user_id']}) | Game: '{self.request_data['game_name']}' | Platform: {self.request_data['platform']} | Reason: {reason or 'No reason provided'}")
+                    logger.info(
+                        f"Request rejected - Admin: {modal_interaction.user} | Request ID: #{request_id} | Discord: "
+                        f"{self.request_data['username']} (ID: {self.request_data['user_id']}) | Game: '{self.request_data['game_name']}' | "
+                        f"Platform: {self.request_data['platform']} | Reason: {reason or 'No reason provided'}"
+                    )
 
                     # Sync to ggrequestz if enabled
                     ggr = self.view.bot.get_cog('GGRequestzIntegration')

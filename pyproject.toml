@@ -4,14 +4,14 @@ target-version = "py312"
 extend-exclude = [".backend", "docs"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
+select = ["E", "F", "I", "UP", "B", "SIM", "C901"]
 
 # Everything below is a real violation we have chosen not to fix yet, kept
 # separate from the rules that are clean so CI stays a meaningful gate.
 # Delete an entry, run `ruff check`, fix what it reports.
 ignore = [
-    # --- formatting: 214 violations. Belongs to a dedicated `ruff format` pass.
-    "E501",   # line-too-long
+    # --- formatting: still deferred. E501 is enforced, but at 180 rather than
+    # at the 110 `line-length` above - see [tool.ruff.lint.pycodestyle].
     "E701",   # multiple-statements-on-one-line
 
     # --- typing modernization: ~260 violations. py-cord introspects slash
@@ -35,6 +35,24 @@ ignore = [
     "SIM102", "SIM105", "SIM108", "SIM114", "SIM117",
     "B007", "B904", "B905",
 ]
+
+[tool.ruff.lint.pycodestyle]
+# `line-length` above is what new code should aim for and what a formatter
+# would wrap to. This is the wall: nothing may exceed it. It is set where the
+# codebase already sits so it needs no per-line exceptions, and the point is
+# to keep out the 200-300 character lines that were here before, not to
+# reformat the ones that are merely long. Tightening it is a one-number
+# change; each step down costs a handful of wraps.
+max-line-length = 180
+
+[tool.ruff.lint.mccabe]
+# Branch count per function. Twelve functions exceed this today and carry a
+# `# noqa: C901` naming why; everything written from here on has to come in
+# under it. Deliberately per-function rather than a looser global or a
+# per-file ignore: a threshold set to whatever the worst function needs would
+# permit a second one just as bad, and a file-level exemption would cover
+# every function added to that file later.
+max-complexity = 15
 
 [tool.ruff.lint.isort]
 known-first-party = ["cogs", "integrations", "admin_checks", "bot", "database_manager"]

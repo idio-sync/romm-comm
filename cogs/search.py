@@ -1027,7 +1027,10 @@ class ROM_View(discord.ui.View):
             
             if selected_rom:
                 platform_name = self.platform_name or selected_rom.get('platform_name', 'Unknown')
-                logger.info(f"ROM selected - User: {interaction.user} (ID: {interaction.user.id}) | ROM: '{selected_rom['name']}' | ROM ID: #{selected_rom_id} | Platform: {platform_name}")
+                logger.info(
+                    f"ROM selected - User: {interaction.user} (ID: {interaction.user.id}) | ROM: '{selected_rom['name']}' | ROM ID: "
+                    f"#{selected_rom_id} | Platform: {platform_name}"
+                )
                 try:
                     detailed_rom = await self.bot.fetch_api_endpoint(f'roms/{selected_rom_id}')
                     if detailed_rom:
@@ -1766,7 +1769,7 @@ class Search(commands.Cog):
             await ctx.respond("❌ An error occurred while fetching a random ROM")
 
     @discord.slash_command(name="search", description="Search for a ROM")
-    async def search(self, ctx: discord.ApplicationContext,
+    async def search(self, ctx: discord.ApplicationContext,  # noqa: C901 - query parsing, platform resolution and result dispatch
                     platform: discord.Option(str, "Platform to search in", 
                                           required=True,
                                           autocomplete=platform_autocomplete),

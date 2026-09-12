@@ -106,7 +106,7 @@ def platform_is_in_romm(req, platform_status: Dict[Any, bool]) -> bool:
     return False
 
 
-def build_request_embed(
+def build_request_embed(  # noqa: C901 - one optional embed field per stored attribute
     req,
     *,
     bot,

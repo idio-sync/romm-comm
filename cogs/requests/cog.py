@@ -275,7 +275,7 @@ class Request(commands.Cog):
 
         
     @commands.Cog.listener()
-    async def on_batch_scan_complete(self, new_games: List[Dict[str, str]]):
+    async def on_batch_scan_complete(self, new_games: List[Dict[str, str]]):  # noqa: C901 - matches new ROMs to pending requests, then fans out
         """Handle batch scan completion event with improved matching logic."""
         async with self.processing_lock:
             try:
@@ -842,7 +842,7 @@ class Request(commands.Cog):
 
 
     @discord.slash_command(name="request", description="Submit a ROM request")
-    async def request(
+    async def request(  # noqa: C901 - the slash command's option handling and confirmation flow
         self,
         ctx: discord.ApplicationContext,
         platform: discord.Option(

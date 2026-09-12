@@ -74,7 +74,7 @@ def _fetch_kind(node):
     return None
 
 
-def repository_row_methods(path=REPOSITORY):
+def repository_row_methods(path=REPOSITORY):  # noqa: C901 - walks two AST shapes to find row-returning methods
     """Which repository methods hand back raw rows, and whether one or many.
 
     Read out of the repository rather than listed here, so a query method added
