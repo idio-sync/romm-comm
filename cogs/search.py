@@ -2,8 +2,6 @@ import asyncio
 import logging
 import random
 import re
-from collections import defaultdict
-from datetime import datetime
 from io import BytesIO
 from typing import Dict, List, Optional, Tuple, Union
 from urllib.parse import quote
@@ -15,6 +13,19 @@ from discord.ext import commands
 from PIL import Image
 
 # Set up logging
+from .rom_embed import (
+    ROMM_LOGO,
+    build_file_listing,
+    build_links_value,
+    build_single_file_field,
+    file_subfolder,
+    first_two,
+    format_file_size,
+    format_release_date,
+    subfolder_icon,
+    truncate_field,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -114,52 +125,18 @@ class ROM_View(discord.ui.View):
     @staticmethod
     def format_file_size(size_bytes: Union[int, float]) -> str:
         """Format size in bytes to human readable format"""
-        if not size_bytes or not isinstance(size_bytes, (int, float)):
-            return "Unknown size"
-        
-        units = ['B', 'KB', 'MB', 'GB', 'TB']
-        size_value = float(size_bytes)
-        unit_index = 0
-        while size_value >= 1024 and unit_index < len(units) - 1:
-            size_value /= 1024
-            unit_index += 1
-        return f"{size_value:.2f} {units[unit_index]}"
-        
+        return format_file_size(size_bytes)
+
     @staticmethod
     def get_file_subfolder(file_info: Dict) -> Optional[str]:
-        # First prefer backend category field
-        if file_info.get('category'):
-            return file_info['category'].lower()
-        
-        # Fallback to path parsing if no category
-        file_path = file_info.get('file_path', '')
-        if not file_path:
-            return None
+        """The subfolder a file sits in, or None when it is at the root."""
+        return file_subfolder(file_info)
 
-        known_subfolders = ['hack', 'dlc', 'manual', 'mod', 'patch', 'update', 'demo', 'translation', 'prototype', 'cheat']
-        path_parts = file_path.split('/')
-        for part in path_parts:  # include all parts
-            if part.lower() in known_subfolders:
-                return part.lower()
-        return None
-    
     @staticmethod
     def get_subfolder_icon(subfolder: Optional[str]) -> str:
         """Get icon for subfolder type"""
-        icons = {
-            'hack': '🔧',
-            'dlc':'⬇️',
-            'manual': '📖',
-            'mod': '🎨',
-            'patch': '📝',
-            'update': '🔄',
-            'demo': '🎮',
-            'translation': '🌐',
-            'prototype': '🔬',
-            'cheat': '🃏',
-            None: '📄'  # Default for main/root files
-        }
-        return icons.get(subfolder, '📁')
+        return subfolder_icon(subfolder)
+
 
     @staticmethod
     def _encode_download_filename(file_name: str) -> str:
@@ -253,29 +230,77 @@ class ROM_View(discord.ui.View):
             logger.error(f"Error downloading cover image: {e}")
             return None
     
+    async def _resolve_platform_name(self, rom_data: Dict) -> Optional[str]:
+        """The platform this ROM belongs to.
+
+        The view's own platform wins when it has one. Otherwise the live
+        platform list is consulted for its display name, falling back to the
+        cached list if the API is unreachable.
+        """
+        if self.platform_name:
+            return self.platform_name
+
+        platform_id = rom_data.get('platform_id')
+        if not platform_id:
+            return None
+
+        raw_platforms_data = await self.bot.fetch_api_endpoint('platforms')
+        if raw_platforms_data:
+            for p in raw_platforms_data:
+                if p.get('id') == platform_id:
+                    return self.bot.get_platform_display_name(p)
+            return None
+
+        # Fallback to cached platforms data
+        for p in self.bot.cache.get('platforms') or []:
+            if p.get('id') == platform_id:
+                return p.get('name', 'Unknown Platform')
+        return None
+
+    async def _resolve_pcgw_url(self, rom_data: Dict, platform_name: Optional[str]) -> Optional[str]:
+        """PCGamingWiki link, for PC platforms with an IGDB id."""
+        if not platform_name or not self.is_pc_platform(platform_name):
+            return None
+
+        igdb_id = rom_data.get('igdb_id')
+        if not igdb_id:
+            return None
+
+        return await self.get_pcgamingwiki_url(igdb_id, rom_data.get('name', ''))
+
+    def _add_metadata_fields(self, embed: discord.Embed, rom_data: Dict) -> None:
+        """Genres, release date, summary and companies, where IGDB has them."""
+        metadatum = rom_data.get('metadatum') or {}
+        if not isinstance(metadatum, dict):
+            logger.warning(
+                f"Unexpected metadatum type for ROM {rom_data.get('id')}: "
+                f"{type(metadatum).__name__}"
+            )
+            metadatum = {}
+
+        if genres := metadatum.get('genres'):
+            embed.add_field(name="Genres", value=first_two(genres), inline=True)
+
+        if formatted_date := format_release_date(metadatum.get('first_release_date')):
+            embed.add_field(name="Release Date", value=formatted_date, inline=True)
+
+        if summary := rom_data.get('summary'):
+            trimmed_summary = self.trim_summary_to_lines(summary, max_lines=3)
+            if trimmed_summary:
+                embed.add_field(
+                    name="Summary", value=truncate_field(trimmed_summary), inline=False
+                )
+
+        if companies := metadatum.get('companies'):
+            embed.add_field(
+                name="Companies", value=truncate_field(first_two(companies)), inline=True
+            )
+
     async def create_rom_embed(self, rom_data: Dict) -> Tuple[discord.Embed, Optional[discord.File]]:
         try:
-            raw_file_name = rom_data.get('fs_name', 'unknown_file')
-            encoded_file_name = self._encode_download_filename(raw_file_name)
-            download_url = self.build_rom_download_url(rom_data['id'], raw_file_name)
-            
-            logger.debug(f"Embed download URL - raw: '{raw_file_name}'")
-            logger.debug(f"Embed download URL - encoded: '{encoded_file_name}'")
-            logger.debug(f"Embed download URL - final: {download_url}")
-            igdb_name = rom_data['name'].lower().replace(' ', '-')
-            igdb_name = re.sub(r'[^a-z0-9-]', '', igdb_name)
-            igdb_url = f"https://www.igdb.com/games/{igdb_name}"
-            romm_url = f"{self.bot.config.DOMAIN}/rom/{rom_data['id']}"
-            logo_url = "https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png"
-            
-            embed = discord.Embed(
-                title=f"{rom_data['name']}",
-                color=discord.Color.green()
-            )
-            
-            # Set romm logo as thumbnail
-            embed.set_thumbnail(url=logo_url)
-            
+            embed = discord.Embed(title=f"{rom_data['name']}", color=discord.Color.green())
+            embed.set_thumbnail(url=ROMM_LOGO)
+
             # Download cover image if available
             cover_file = None
             if rom_data.get('url_cover'):
@@ -283,239 +308,40 @@ class ROM_View(discord.ui.View):
                 if cover_file:
                     # Set the image to use the attachment
                     embed.set_image(url="attachment://cover.png")
-            
-            # Get platform name if not provided
-            platform_name = self.platform_name
-            if not platform_name and (platform_id := rom_data.get('platform_id')):
-                # Get raw platforms data to access custom_name
-                raw_platforms_data = await self.bot.fetch_api_endpoint('platforms')
-                if raw_platforms_data:
-                    for p in raw_platforms_data:
-                        if p.get('id') == platform_id:
-                            platform_name = self.bot.get_platform_display_name(p)
-                            break
-                else:
-                    # Fallback to cached platforms data
-                    platforms_data = self.bot.cache.get('platforms')
-                    if platforms_data:
-                        for p in platforms_data:
-                            if p.get('id') == platform_id:
-                                platform_name = p.get('name', 'Unknown Platform')
-                                break
-            
+
+            platform_name = await self._resolve_platform_name(rom_data)
             if platform_name:
                 search_cog = self.bot.get_cog('Search')
-                if search_cog:
-                    platform_display = search_cog.get_platform_with_emoji(platform_name)
-                else:
-                    platform_display = platform_name
-                embed.add_field(name="Platform", value=platform_display, inline=True)
-            
-            # Rest of the embed creation remains the same...
-            metadatum = rom_data.get('metadatum') or {}
-            if not isinstance(metadatum, dict):
-                logger.warning(f"Unexpected metadatum type for ROM {rom_data.get('id')}: {type(metadatum).__name__}")
-                metadatum = {}
+                embed.add_field(
+                    name="Platform",
+                    value=(
+                        search_cog.get_platform_with_emoji(platform_name)
+                        if search_cog else platform_name
+                    ),
+                    inline=True,
+                )
 
-            if metadatum:
-                if genres := metadatum.get('genres'):
-                    if isinstance(genres, list):
-                        genre_list = genres[:2]  # Take only first two genres
-                        genre_display = ", ".join(genre_list)
-                    else:
-                        genre_display = str(genres)
-                    embed.add_field(name="Genres", value=genre_display, inline=True)
-            
-            if metadatum:
-                if release_date := metadatum.get('first_release_date'):
-                    try:
-                        # Check if timestamp is in milliseconds (if it's too large)
-                        # A reasonable date should be less than 2,000,000,000 (year 2033)
-                        if release_date > 2_000_000_000:
-                            # Convert milliseconds to seconds
-                            release_date = release_date / 1000
-                        
-                        release_datetime = datetime.fromtimestamp(int(release_date))
-                        formatted_date = release_datetime.strftime('%b %d, %Y')
-                        embed.add_field(name="Release Date", value=formatted_date, inline=True)
-                    except (ValueError, TypeError) as e:
-                        logger.error(f"Error formatting date: {e}")
-                        logger.error(f"Raw release_date value: {release_date}")
-            
-            if summary := rom_data.get('summary'):
-                trimmed_summary = self.trim_summary_to_lines(summary, max_lines=3)
-                if trimmed_summary:
-                    # Enforce Discord's 1024 character limit
-                    if len(trimmed_summary) > 1024:
-                        trimmed_summary = trimmed_summary[:1021] + "..."
-                    embed.add_field(name="Summary", value=trimmed_summary, inline=False)
-            
-            if companies := metadatum.get('companies'):
-                if isinstance(companies, list):
-                    company_list = companies[:2]  # Take only first two companies
-                    companies_str = ", ".join(company_list)
-                else:
-                    companies_str = str(companies)
+            self._add_metadata_fields(embed, rom_data)
 
-                # Truncate to Discord's 1024 character limit
-                if len(companies_str) > 1024:
-                    companies_str = companies_str[:1021] + "..."
-                
-                embed.add_field(name="Companies", value=companies_str, inline=True)
-            
-            # Check if this is a PC platform and get PCGamingWiki link
-            pcgw_url = None
-            if platform_name and self.is_pc_platform(platform_name):
-                # Get IGDB ID directly from ROM data
-                igdb_id = rom_data.get('igdb_id')
-                
-                if igdb_id:
-                    game_name = rom_data.get('name', '')
-                    pcgw_url = await self.get_pcgamingwiki_url(igdb_id, game_name)
-            
-            # Build the links section with two rows
-            romm_emoji = self.bot.get_formatted_emoji('romm')
-            igdb_emoji = self.bot.get_formatted_emoji('igdb')
-            launchbox_emoji = self.bot.get_formatted_emoji('launchbox')
-            hash_emoji = self.bot.get_formatted_emoji('hash')
+            igdb_slug = re.sub(r'[^a-z0-9-]', '', rom_data['name'].lower().replace(' ', '-'))
+            embed.add_field(
+                name="Links",
+                value=build_links_value(
+                    rom_data,
+                    romm_url=f"{self.bot.config.DOMAIN}/rom/{rom_data['id']}",
+                    igdb_url=f"https://www.igdb.com/games/{igdb_slug}",
+                    pcgw_url=await self._resolve_pcgw_url(rom_data, platform_name),
+                    emoji=self.bot.get_formatted_emoji,
+                ),
+                inline=True,
+            )
 
-            # Top row links
-            top_row_links = [
-                f"[**{romm_emoji} RomM**]({romm_url})",
-                f"[**{igdb_emoji} IGDB**]({igdb_url})"
-            ]
-
-            # Add YouTube to top row if available
-            if youtube_video_id := rom_data.get('youtube_video_id'):
-                youtube_emoji = self.bot.get_formatted_emoji('youtube')
-                youtube_url = f"https://www.youtube.com/watch?v={youtube_video_id}"
-                top_row_links.append(f"[**{youtube_emoji} Trailer**]({youtube_url})")
-
-            # Build the final links value
-            links_value = " ".join(top_row_links)
-
-            # Second row - add achievements and/or PCGamingWiki if available
-            second_row_links = []
-
-            if ra_id := rom_data.get('ra_id'):
-                ra_emoji = self.bot.get_formatted_emoji('retroachievements')
-                ra_url = f"https://retroachievements.org/game/{ra_id}"
-                second_row_links.append(f"[**{ra_emoji} Achievements**]({ra_url})")
-
-            if pcgw_url:
-                pcgw_emoji = self.bot.get_formatted_emoji('pcgw')
-                second_row_links.append(f"[**{pcgw_emoji} PCGWiki**]({pcgw_url})")
-
-            # Add second row if there's anything to show
-            if second_row_links:
-                links_value += "\n" + " ".join(second_row_links)
-
-            # Add the field to embed
-            embed.add_field(name="Links", value=links_value, inline=True)
-            
-            # File information (rest remains the same as original)
             if rom_data.get('multi') and rom_data.get('files'):
-                files = rom_data.get('files', [])
-                total_size = sum(f.get('file_size_bytes', 0) for f in files)
-                
-                # Group files by subfolder
-                files_by_subfolder = defaultdict(list)
-                for file_info in files:
-                    subfolder = self.get_file_subfolder(file_info)
-                    files_by_subfolder[subfolder].append(file_info)
-                
-                # Sort subfolders with None (main) first
-                sorted_subfolders = sorted(files_by_subfolder.keys(), key=lambda x: (x is not None, x))
-                
-                files_info = []
-                total_length = 0
-                files_shown = 0
-                total_files = len(files)
-                max_length = 800
-                
-                for subfolder in sorted_subfolders:
-                    subfolder_files = files_by_subfolder[subfolder]
-                    
-                    # Add subfolder header if not main files
-                    if files_info and len(sorted_subfolders) > 1:  # Add spacing between groups
-                        if total_length + 1 < max_length:
-                            files_info.append("")
-                            total_length += 1
-                    
-                    if subfolder:
-                        icon = self.get_subfolder_icon(subfolder)
-                        # Special handling for acronyms that should be all caps
-                        acronyms = {'dlc': 'DLC'}
-                        display_name = acronyms.get(subfolder, subfolder.capitalize())
-                        header_line = f"{icon} **{display_name}**"
-                        if total_length + len(header_line) + 1 > max_length:
-                            files_info.append("...")
-                            break
-                        files_info.append(header_line)
-                        total_length += len(header_line) + 1
-                    
-                    # Sort files in this subfolder
-                    sorted_files = sorted(
-                        subfolder_files,
-                        key=lambda x: (x.get('file_size_bytes', 0), x.get('file_name', '').lower()),
-                        reverse=(len(subfolder_files) > 10)
-                    )[:10] if len(subfolder_files) > 10 else sorted(
-                        subfolder_files,
-                        key=lambda x: x.get('file_name', '').lower()
-                    )
-                    
-                    # Add files from this subfolder
-                    for file_info in sorted_files:
-                        size_bytes = file_info.get('file_size_bytes', 0)
-                        size_str = self.format_file_size(size_bytes)
-                        file_line = f"• {file_info['file_name']} ({size_str})"
-                        line_length = len(file_line) + 1
-                        
-                        if total_length + line_length > max_length:
-                            files_info.append("...")
-                            break
-                        
-                        files_info.append(file_line)
-                        total_length += line_length
-                        files_shown += 1
-                    
-                    if total_length >= max_length:
-                        break
-                
-                # Create field name
-                field_name = f"Files (Total: {self.format_file_size(total_size)}"
-                if len(files) > files_shown:
-                    field_name += f" - Showing {files_shown} of {total_files} files)"
-                else:
-                    field_name += ")"
-                
-                # Add field to embed
-                embed.add_field(
-                    name=field_name,
-                    value="\n".join(files_info) if files_info else "No files to display",
-                    inline=False
-                )
+                field_name, field_value = build_file_listing(rom_data['files'])
             else:
-                # Single file display
-                file_size = self.format_file_size(rom_data.get('fs_size_bytes', 0))
-                file_name = rom_data.get('fs_name', 'unknown_file')
-                
-                # Check if single file is in a subfolder
-                subfolder = None
-                if rom_data.get('files') and len(rom_data.get('files', [])) == 1:
-                    subfolder = self.get_file_subfolder(rom_data['files'][0])
-                
-                file_info_text = f"• {file_name}"
-                if subfolder:
-                    icon = self.get_subfolder_icon(subfolder)
-                    file_info_text = f"{icon} [{subfolder.capitalize()}]\n• {file_name}"
-                
-                embed.add_field(
-                    name=f"File ({file_size})",
-                    value=file_info_text,
-                    inline=False
-                )
-                
+                field_name, field_value = build_single_file_field(rom_data)
+            embed.add_field(name=field_name, value=field_value, inline=False)
+
             return embed, cover_file
         except Exception as e:
             logger.error(f"Error creating ROM embed: {e}")
