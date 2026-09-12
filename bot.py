@@ -330,7 +330,7 @@ class Config:
         self.CHANNEL_ID = os.getenv('CHANNEL_ID')
         self.ADMIN_ID = os.getenv('ADMIN_ID')
         self.API_BASE_URL = os.getenv('API_URL', '').rstrip('/')
-        self.DOMAIN = os.getenv('DOMAIN', 'No website configured')
+        self.DOMAIN = os.getenv('DOMAIN', 'No website configured').rstrip('/')
         self.SYNC_RATE = int(os.getenv('SYNC_RATE', '3600'))  # 1 hour default
         self.UPDATE_VOICE_NAMES = self.parse_bool(os.getenv('UPDATE_VOICE_NAMES', 'true'), True)
         self.SHOW_API_SUCCESS = self.parse_bool(os.getenv('SHOW_API_SUCCESS', 'false'), False)
