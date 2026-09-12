@@ -1229,7 +1229,9 @@ class UserManager(commands.Cog):
                 return False
             
             invite_token = invite_data.get('token')
-            invite_url = f"{self.bot.config.DOMAIN}/register?token={invite_token}"
+            # RomM returns the canonical registration URL when it has a public base
+            # URL configured; only build our own from DOMAIN when it does not.
+            invite_url = invite_data.get('url') or f"{self.bot.config.DOMAIN}/register?token={invite_token}"
             
             try:
                 dm_channel = await self.get_or_create_dm_channel(member)
