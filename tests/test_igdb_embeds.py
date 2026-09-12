@@ -214,6 +214,15 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class _FakeEmojiService:
+    def format(self, name):
+        return f"<{name}>"
+
+
+def _emoji_service():
+    return _FakeEmojiService()
+
+
 class DetailEmbedHelperTests(unittest.TestCase):
     """The per-attribute formatters behind IGDBGameView.create_game_detail_embed.
 
@@ -234,15 +243,24 @@ class DetailEmbedHelperTests(unittest.TestCase):
         self.assertIsNone(format_capped_list(None, 3))
 
     def test_platform_field_is_singular_and_filtered_under_a_platform_filter(self):
-        field = build_detail_platform_field(["SNES", "Genesis"], "Super Nintendo", lambda n: f"<{n}>")
+        field = build_detail_platform_field(["SNES", "Genesis"], "Super Nintendo", _emoji_service)
         self.assertEqual(field, ("Platform", "<Super Nintendo>"))
 
     def test_platform_field_is_plural_and_capped_without_a_filter(self):
-        field = build_detail_platform_field(["A", "B", "C", "D"], None, lambda n: f"<{n}>")
+        field = build_detail_platform_field(["A", "B", "C", "D"], None, _emoji_service)
         self.assertEqual(field, ("Platforms", "A, B, C (+1 more)"))
 
     def test_platform_field_is_none_when_the_game_lists_no_platforms(self):
-        self.assertIsNone(build_detail_platform_field([], "Super Nintendo", lambda n: f"<{n}>"))
+        self.assertIsNone(build_detail_platform_field([], "Super Nintendo", _emoji_service))
+
+    def test_platform_field_does_not_reach_for_the_emoji_service_unfiltered(self):
+        # The service is looked up off the bot, and callers on this branch are
+        # not required to have one. Splitting this function briefly broke that.
+        def exploding():
+            raise AssertionError("emoji service reached on the unfiltered branch")
+
+        field = build_detail_platform_field(["A", "B"], None, exploding)
+        self.assertEqual(field, ("Platforms", "A, B"))
 
     def test_detail_release_date_formats_a_real_date(self):
         self.assertEqual(format_detail_release_date("1997-08-25"), "August 25, 1997")

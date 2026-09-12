@@ -16,7 +16,17 @@ from types import SimpleNamespace
 
 from cogs.platform_emoji import PlatformEmoji
 from cogs.requests import REQUEST_COLUMNS, RequestAdminView, UserRequestsView
-from cogs.requests.embeds import DEFAULT_THUMBNAIL, parse_request_details
+from cogs.requests.embeds import (
+    DEFAULT_THUMBNAIL,
+    build_fulfiller_fields,
+    build_platform_fields,
+    build_request_links_value,
+    format_stored_release_date,
+    format_stored_summary,
+    game_data_list,
+    parse_request_details,
+    stored_companies,
+)
 from database_manager import MasterDatabase
 
 
@@ -220,3 +230,105 @@ class EmbedBuilderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _EmojiService:
+    def format(self, name):
+        return f"<{name}>"
+
+
+class _BotWithEmoji:
+    platform_emoji = _EmojiService()
+
+
+class _BotWithoutEmoji:
+    """What the notification tests drive: no platform_emoji attribute at all."""
+
+
+class RequestEmbedHelperTests(unittest.TestCase):
+    """The per-attribute formatters behind build_request_embed.
+
+    The split was checked by running the pre-split implementation against the
+    new one over 89,600 input combinations; see the commit message for the one
+    divergence class that survived.
+    """
+
+    def test_game_data_list_caps_and_splits(self):
+        data = {"Genres": "RPG, Action, Puzzle"}
+        self.assertEqual(game_data_list(data, "Genres", 2), ["RPG", "Action"])
+
+    def test_game_data_list_treats_the_unknown_placeholder_as_absent(self):
+        self.assertEqual(game_data_list({"Genres": "Unknown"}, "Genres", 2), [])
+
+    def test_game_data_list_is_empty_when_the_key_is_missing(self):
+        self.assertEqual(game_data_list({}, "Genres", 2), [])
+
+    def test_stored_release_date_formats_a_real_date(self):
+        self.assertEqual(format_stored_release_date({"Release Date": "1995-03-11"}), "March 11, 1995")
+
+    def test_stored_release_date_keeps_an_unparseable_value(self):
+        self.assertEqual(format_stored_release_date({"Release Date": "early 1995"}), "early 1995")
+
+    def test_stored_release_date_is_none_when_unknown_or_absent(self):
+        self.assertIsNone(format_stored_release_date({"Release Date": "Unknown"}))
+        self.assertIsNone(format_stored_release_date({}))
+
+    def test_companies_take_developers_first_then_fill_from_publishers(self):
+        data = {"Developers": "Squaresoft", "Publishers": "Nintendo, Sony"}
+        self.assertEqual(stored_companies(data), ["Squaresoft", "Nintendo"])
+
+    def test_companies_stop_at_two_developers(self):
+        data = {"Developers": "A, B, C", "Publishers": "D"}
+        self.assertEqual(stored_companies(data), ["A", "B"])
+
+    def test_companies_fall_back_to_publishers_alone(self):
+        self.assertEqual(stored_companies({"Publishers": "P1, P2, P3"}), ["P1", "P2"])
+
+    def test_stored_summary_truncates_to_the_limit_including_the_ellipsis(self):
+        result = format_stored_summary({"Summary": "x" * 600})
+        self.assertEqual(len(result), 500)
+        self.assertTrue(result.endswith("..."))
+
+    def test_stored_summary_is_none_when_the_row_carries_none(self):
+        self.assertIsNone(format_stored_summary({}))
+
+    def test_platform_in_romm_gets_the_emoji_and_no_warning(self):
+        req = {"platform": "SNES", "platform_mapping_id": 5}
+        fields = build_platform_fields(req, {5: True}, _BotWithEmoji())
+        self.assertEqual(fields, [("Platform", "<SNES>  \u2705", True)])
+
+    def test_platform_missing_from_romm_is_shown_plainly_with_a_warning(self):
+        # The emoji would read as a claim that the platform is available.
+        req = {"platform": "SNES", "platform_mapping_id": 5}
+        fields = build_platform_fields(req, {5: False}, _BotWithoutEmoji())
+        self.assertEqual(fields[0], ("Platform", "SNES \U0001F195", True))
+        self.assertEqual(len(fields), 2)
+        self.assertEqual(fields[1][0], "\u26a0\ufe0f Platform Status")
+
+    def test_platform_field_does_not_reach_for_the_emoji_service_when_absent(self):
+        # Splitting this function briefly made the lookup unconditional, which
+        # broke every caller that builds an embed without an emoji service.
+        req = {"platform": "SNES", "platform_mapping_id": None}
+        build_platform_fields(req, {}, _BotWithoutEmoji())
+
+    def test_fulfiller_field_says_rejected_for_a_non_fulfilled_status(self):
+        req = {"fulfilled_by": 7, "fulfiller_name": "admin", "status": "reject",
+               "auto_fulfilled": 0}
+        self.assertEqual(build_fulfiller_fields(req), [("\u270d\ufe0f Rejected By", "admin", True)])
+
+    def test_fulfiller_field_says_fulfilled_for_a_fulfilled_status(self):
+        req = {"fulfilled_by": 7, "fulfiller_name": "admin", "status": "fulfilled",
+               "auto_fulfilled": 0}
+        self.assertEqual(build_fulfiller_fields(req)[0][0], "\u270d\ufe0f Fulfilled By")
+
+    def test_auto_fulfilled_adds_its_own_field(self):
+        req = {"fulfilled_by": None, "fulfiller_name": None, "status": "fulfilled",
+               "auto_fulfilled": 1}
+        self.assertEqual(build_fulfiller_fields(req), [("\U0001F916 Auto-Fulfilled", "Yes", True)])
+
+    def test_links_are_none_without_a_name_to_link_to(self):
+        self.assertIsNone(build_request_links_value(None, lambda n: f"<{n}>"))
+
+    def test_links_slug_the_name(self):
+        value = build_request_links_value("Chrono Trigger!", lambda n: f"<{n}>")
+        self.assertEqual(value, "[**<igdb> IGDB**](https://www.igdb.com/games/chrono-trigger)")

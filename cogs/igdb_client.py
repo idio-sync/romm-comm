@@ -928,7 +928,7 @@ class IGDBGameView(discord.ui.View):
             build_detail_platform_field(
                 game.get('platforms', []),
                 self.platform_name,
-                self.bot.platform_emoji.format,
+                lambda: self.bot.platform_emoji,
             ),
             ("Genre", format_genres(game.get('genres', []))),
             ("Release Date", format_detail_release_date(game.get('release_date', 'Unknown'))),

@@ -14,6 +14,8 @@ from typing import Any, Dict, Optional
 
 import discord
 
+from ..igdb_embeds import igdb_slug
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_THUMBNAIL = (
@@ -106,7 +108,99 @@ def platform_is_in_romm(req, platform_status: Dict[Any, bool]) -> bool:
     return False
 
 
-def build_request_embed(  # noqa: C901 - one optional embed field per stored attribute
+GAME_DATA_UNKNOWN = "Unknown"
+SUMMARY_LIMIT = 500
+FIELD_LIMIT = 1024
+
+
+def game_data_list(game_data: Dict, key: str, cap: int) -> list:
+    """A comma-joined game_data entry as a capped list.
+
+    Empty when the key is absent or IGDB stored its "Unknown" placeholder --
+    the two ways this table records "we do not know", which are not the same
+    as the field being empty.
+    """
+    if key not in game_data or game_data[key] == GAME_DATA_UNKNOWN:
+        return []
+    return game_data[key].split(", ")[:cap]
+
+
+def format_stored_release_date(game_data: Dict) -> Optional[str]:
+    """The stored release date, left as it came if it will not parse."""
+    stored = game_data.get("Release Date")
+    if "Release Date" not in game_data or stored == GAME_DATA_UNKNOWN:
+        return None
+    try:
+        return datetime.strptime(stored, "%Y-%m-%d").strftime("%B %d, %Y")
+    except ValueError:
+        return stored
+
+
+def stored_companies(game_data: Dict) -> list:
+    """Up to two companies, developers first, publishers filling what is left."""
+    companies = game_data_list(game_data, "Developers", 2)
+    remaining_slots = 2 - len(companies)
+    if remaining_slots > 0:
+        companies.extend(game_data_list(game_data, "Publishers", remaining_slots))
+    return companies
+
+
+def format_stored_summary(game_data: Dict) -> Optional[str]:
+    """The stored summary, truncated. Presence decides, not content.
+
+    Unlike the IGDB browse flow there is no "No summary available" placeholder
+    here: a request row either carries a summary or does not.
+    """
+    if "Summary" not in game_data:
+        return None
+    summary = game_data["Summary"]
+    if len(summary) > SUMMARY_LIMIT:
+        return summary[:SUMMARY_LIMIT - 3] + "..."
+    return summary
+
+
+def build_platform_fields(req, platform_status: Dict[Any, bool], bot) -> list:
+    """The Platform field, plus the warning that follows it when RomM lacks it.
+
+    A platform RomM does not have yet is shown plainly: the emoji reads as a
+    claim that it is available.
+
+    Takes `bot` rather than the emoji service so that `bot.platform_emoji` is
+    reached only on the branch that needs it. Callers that never hit that
+    branch must keep working without the attribute, which is how the
+    notification tests drive this.
+    """
+    exists = platform_is_in_romm(req, platform_status)
+    display = bot.platform_emoji.format(req['platform']) if exists else req['platform']
+    fields = [("Platform", f"{display} {' ✅' if exists else '🆕'}", True)]
+    if not exists:
+        fields.append((
+            "⚠️ Platform Status",
+            "This platform needs to be added to Romm before fulfillment",
+            False,
+        ))
+    return fields
+
+
+def build_request_links_value(igdb_name: Optional[str], emoji) -> Optional[str]:
+    """The IGDB link, or None when the row never recorded a name to link to."""
+    if not igdb_name:
+        return None
+    return f"[**{emoji('igdb')} IGDB**](https://www.igdb.com/games/{igdb_slug(igdb_name)})"
+
+
+def build_fulfiller_fields(req) -> list:
+    """Who closed the request, and whether a human did."""
+    fields = []
+    if req['fulfilled_by']:
+        action = "Fulfilled" if req['status'] == 'fulfilled' else "Rejected"
+        fields.append((f"✍️ {action} By", req['fulfiller_name'], True))
+    if req['auto_fulfilled']:
+        fields.append(("🤖 Auto-Fulfilled", "Yes", True))
+    return fields
+
+
+def build_request_embed(
     req,
     *,
     bot,
@@ -119,149 +213,51 @@ def build_request_embed(  # noqa: C901 - one optional embed field per stored att
 
     Args:
         req: A row from the requests table, addressed by column name.
-        bot: Used for the Search cog's platform emoji and the IGDB emoji.
+        bot: Used for the platform emoji service and the IGDB emoji.
         platform_status: Pre-fetched in_romm flags, see platform_is_in_romm.
         position: 1-based index of this request within the view.
         total: How many requests the view is paging through.
         user_avatar_url: Requester's avatar, used as the thumbnail.
     """
     parsed = parse_request_details(req['details'], fallback_name=req['game_name'])
+    game_data = parsed.game_data
 
     colour = STATUS_COLORS.get(req['status'], discord.Color.blue)()
     embed = discord.Embed(title=f"{parsed.igdb_name}", color=colour)
 
-    embed.add_field(
-        name="Status",
-        value=f"{STATUS_EMOJI.get(req['status'], '❓')} **{req['status'].title()}**",
-        inline=True
-    )
+    # Platform renders before the Request ID; the warning it may bring with it
+    # renders after, on its own row.
+    platform_field, *platform_warning = build_platform_fields(req, platform_status, bot)
 
-    # Platform field with existence check - USE CACHED DATA
-    platform_display = req['platform']
-    platform_exists_in_romm = platform_is_in_romm(req, platform_status)
-
-    # A platform RomM does not have yet is shown plainly: the emoji reads as a
-    # claim that it is available.
-    if platform_exists_in_romm:
-        platform_display = bot.platform_emoji.format(platform_display)
-
-    platform_status_icon = " ✅" if platform_exists_in_romm else "🆕"
-
-    embed.add_field(
-        name="Platform",
-        value=f"{platform_display} {platform_status_icon}",
-        inline=True
-    )
-
-    embed.add_field(
-        name="Request ID",
-        value=f"#{req['id']}",
-        inline=True
-    )
-
-    if not platform_exists_in_romm:
-        embed.add_field(
-            name="⚠️ Platform Status",
-            value="This platform needs to be added to Romm before fulfillment",
-            inline=False
-        )
-
-    if parsed.version_request:
-        embed.add_field(
-            name="Version Requested",
-            value=parsed.version_request[:1024],
-            inline=False
-        )
-
-    if parsed.additional_notes:
-        embed.add_field(
-            name="Additional Notes from User",
-            value=parsed.additional_notes[:1024],
-            inline=False
-        )
+    # Order matters: this is the order the fields appear in the embed. A value
+    # of None drops the field.
+    fields = [
+        ("Status", f"{STATUS_EMOJI.get(req['status'], '❓')} **{req['status'].title()}**", True),
+        platform_field,
+        ("Request ID", f"#{req['id']}", True),
+        *platform_warning,
+        ("Version Requested", parsed.version_request and parsed.version_request[:FIELD_LIMIT], False),
+        (
+            "Additional Notes from User",
+            parsed.additional_notes and parsed.additional_notes[:FIELD_LIMIT],
+            False,
+        ),
+        ("Genre", ", ".join(game_data_list(game_data, "Genres", 2)) or None, True),
+        ("Release Date", format_stored_release_date(game_data), True),
+        ("Companies", ", ".join(stored_companies(game_data)) or None, True),
+        ("Summary", format_stored_summary(game_data), False),
+        ("Admin Notes", req['notes'] and req['notes'][:FIELD_LIMIT], False),
+        *build_fulfiller_fields(req),
+        ("Links", build_request_links_value(parsed.igdb_name, bot.get_formatted_emoji), True),
+    ]
 
     if parsed.cover_url and parsed.cover_url != 'None':
         embed.set_image(url=parsed.cover_url)
-
     embed.set_thumbnail(url=user_avatar_url or DEFAULT_THUMBNAIL)
 
-    game_data = parsed.game_data
-
-    if "Genres" in game_data and game_data["Genres"] != "Unknown":
-        embed.add_field(
-            name="Genre",
-            value=", ".join(game_data["Genres"].split(", ")[:2]),
-            inline=True
-        )
-
-    if "Release Date" in game_data and game_data["Release Date"] != "Unknown":
-        try:
-            date_obj = datetime.strptime(game_data["Release Date"], "%Y-%m-%d")
-            formatted_date = date_obj.strftime("%B %d, %Y")
-        except ValueError:
-            formatted_date = game_data["Release Date"]
-        embed.add_field(
-            name="Release Date",
-            value=formatted_date,
-            inline=True
-        )
-
-    # At most two companies, developers first.
-    companies = []
-    if "Developers" in game_data and game_data["Developers"] != "Unknown":
-        companies.extend(game_data["Developers"].split(", ")[:2])
-    if "Publishers" in game_data and game_data["Publishers"] != "Unknown":
-        remaining_slots = 2 - len(companies)
-        if remaining_slots > 0:
-            companies.extend(game_data["Publishers"].split(", ")[:remaining_slots])
-
-    if companies:
-        embed.add_field(
-            name="Companies",
-            value=", ".join(companies),
-            inline=True
-        )
-
-    if "Summary" in game_data:
-        summary = game_data["Summary"]
-        if len(summary) > 500:
-            summary = summary[:497] + "..."
-        embed.add_field(
-            name="Summary",
-            value=summary,
-            inline=False
-        )
-
-    if req['notes']:
-        embed.add_field(
-            name="Admin Notes",
-            value=req['notes'][:1024],
-            inline=False
-        )
-
-    if req['fulfilled_by']:
-        action = "Fulfilled" if req['status'] == 'fulfilled' else "Rejected"
-        embed.add_field(
-            name=f"✍️ {action} By",
-            value=req['fulfiller_name'],
-            inline=True
-        )
-
-    if req['auto_fulfilled']:
-        embed.add_field(
-            name="🤖 Auto-Fulfilled",
-            value="Yes",
-            inline=True
-        )
-
-    if parsed.igdb_name:
-        igdb_link_name = re.sub(r'[^a-z0-9-]', '', parsed.igdb_name.lower().replace(' ', '-'))
-        igdb_emoji = bot.get_formatted_emoji('igdb')
-        embed.add_field(
-            name="Links",
-            value=f"[**{igdb_emoji} IGDB**](https://www.igdb.com/games/{igdb_link_name})",
-            inline=True
-        )
+    for name, value, inline in fields:
+        if value:
+            embed.add_field(name=name, value=value, inline=inline)
 
     embed.set_footer(
         text=(

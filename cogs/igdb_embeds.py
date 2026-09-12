@@ -290,17 +290,21 @@ def build_detail_links_value(
 def build_detail_platform_field(
     platforms,
     platform_name: Optional[str],
-    platform_display: Callable[[str], str],
+    platform_display: Callable[[], object],
 ) -> Optional[Tuple[str, str]]:
     """The Platform(s) field, as (name, value), or None when there are none.
 
     A filtered view shows only the platform that was filtered on, singular;
     an unfiltered one shows up to three of the game's own, plural.
+
+    `platform_display` is called for the emoji service rather than being handed
+    it, so `bot.platform_emoji` is reached only on the branch that needs it --
+    the unfiltered branch must keep working on a bot without the attribute.
     """
     if not platforms:
         return None
     if platform_name:
-        return "Platform", platform_display(platform_name)
+        return "Platform", platform_display().format(platform_name)
     return "Platforms", format_capped_list(platforms, 3)
 
 
