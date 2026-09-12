@@ -119,6 +119,27 @@ class RequestsRepo:
             )
             return await cursor.fetchall()
 
+    async def find_pending_by_igdb_or_name(
+        self, platform: str, igdb_id: Optional[int], game_name: str
+    ) -> List[Any]:
+        """Pending requests for this exact game, by IGDB id or by exact title.
+
+        Stricter than list_duplicate_candidates: the IGDB browse flow already
+        knows precisely which game was picked, so it needs no fuzzy matching.
+        """
+        async with self.db.get_connection() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT id, user_id, username, game_name, status
+                FROM requests
+                WHERE platform = ?
+                AND status = 'pending'
+                AND (igdb_id = ? OR LOWER(game_name) = LOWER(?))
+                """,
+                (platform, igdb_id, game_name)
+            )
+            return await cursor.fetchall()
+
     async def list_synced_with_ggrequestz(self, user_id: Optional[int] = None) -> List[Any]:
         """Requests that have a ggrequestz counterpart, for status reconciliation."""
         clause = "WHERE ggr_request_id IS NOT NULL"
@@ -321,6 +342,20 @@ class PlatformMappingsRepo:
                 SELECT id, in_romm, romm_id, folder_name, igdb_slug, moby_slug
                 FROM platform_mappings
                 WHERE display_name = ?
+                """,
+                (display_name,)
+            )
+            return await cursor.fetchone()
+
+    async def lookup_for_request(self, display_name: str) -> Optional[Any]:
+        """Mapping id, in_romm flag and RomM id, matched case-insensitively."""
+        async with self.db.get_connection() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT id, in_romm, romm_id
+                FROM platform_mappings
+                WHERE LOWER(display_name) = LOWER(?)
+                LIMIT 1
                 """,
                 (display_name,)
             )

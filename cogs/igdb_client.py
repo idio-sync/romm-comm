@@ -9,6 +9,13 @@ import aiohttp
 import discord
 from discord.ext import commands
 
+from .igdb_embeds import (
+    build_existing_games_embed,
+    build_igdb_already_requested_embed,
+    build_igdb_request_submitted_embed,
+    build_igdb_subscribed_embed,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -532,6 +539,11 @@ class IGDBGameView(discord.ui.View):
     def __init__(self, bot, games: List[Dict], title: str, platform_name: Optional[str] = None, show_full_date: bool = False, view_type: str = "upcoming"):
         super().__init__(timeout=300)
         self.bot = bot
+        # Imported here, not at module scope: cogs.requests imports this
+        # module, so a top-level import would close the cycle.
+        from .requests.repo import PlatformMappingsRepo, RequestsRepo
+        self.requests_repo = RequestsRepo(bot.db)
+        self.platforms_repo = PlatformMappingsRepo(bot.db)
         self.all_games = games  # Store all games for pagination
         self.title = title
         self.platform_name = platform_name
@@ -1099,373 +1111,192 @@ class IGDBGameView(discord.ui.View):
     
     async def request_callback(self, interaction: discord.Interaction):
         """Submit a request for the selected game"""
-        # Get the currently selected game
         if not self.game_select.values:
             await interaction.response.send_message(
                 "Please select a game from the dropdown first!",
                 ephemeral=True
             )
             return
-        
+
         await interaction.response.defer(ephemeral=True)
-        
-        game_index = int(self.game_select.values[0])
-        selected_game = self.games[game_index]
+
+        selected_game = self.games[int(self.game_select.values[0])]
         game_name = selected_game.get('name', 'Unknown')
-        
-        # Build platform info
-        if self.platform_name:
-            platform_info = self.platform_name
-        else:
-            platforms = selected_game.get('platforms', [])
-            platform_info = platforms[0] if platforms else "Unknown"
-        
-        # Get the request cog
+        platform_info = self._platform_for(selected_game)
+
         request_cog = self.bot.get_cog('Request')
         if not request_cog:
             await interaction.followup.send("❌ Request system is not available", ephemeral=True)
             return
-        
-        # Check if requests are enabled
+
         if not request_cog.requests_enabled:
-            await interaction.followup.send("❌ The request system is currently disabled.", ephemeral=True)
+            await interaction.followup.send(
+                "❌ The request system is currently disabled.", ephemeral=True
+            )
             return
-        
+
         try:
-            # Get platform mapping from database
-            async with self.bot.db.get_connection() as db:
-                cursor = await db.execute('''
-                    SELECT id, in_romm, romm_id
-                    FROM platform_mappings
-                    WHERE LOWER(display_name) = LOWER(?)
-                    LIMIT 1
-                ''', (platform_info,))
-                
-                platform_mapping = await cursor.fetchone()
-                
-                if not platform_mapping:
-                    await interaction.followup.send(
-                        f"⚠️ '{platform_info}' is not in the Romm platform database. "
-                        "Please contact an admin to add this platform.",
-                        ephemeral=True
-                    )
-                    return
-                
-                mapping_id, in_romm, romm_id = platform_mapping
-                igdb_id = selected_game.get('id')
-                
-                # Check for existing requests (Integration with Existing Requests)
-                cursor = await db.execute(
-                    """
-                    SELECT id, user_id, username, game_name, status
-                    FROM requests 
-                    WHERE platform = ? 
-                    AND status = 'pending'
-                    AND (igdb_id = ? OR LOWER(game_name) = LOWER(?))
-                    """,
-                    (platform_info, igdb_id, game_name)
+            mapping = await self.platforms_repo.lookup_for_request(platform_info)
+            if not mapping:
+                await interaction.followup.send(
+                    f"⚠️ '{platform_info}' is not in the Romm platform database. "
+                    "Please contact an admin to add this platform.",
+                    ephemeral=True
                 )
-                existing_requests = await cursor.fetchall()
-                
-                # Check if user already requested or is subscribed
-                user_already_requested = False
-                existing_request_id = None
-                original_requester_name = None
-                
-                for req_id, req_user_id, req_username, req_game, req_status in existing_requests:
-                    existing_request_id = req_id
-                    original_requester_name = req_username
-                    
-                    if req_user_id == interaction.user.id:
-                        user_already_requested = True
-                        break
-                    
-                    # Check if user is already a subscriber
-                    cursor = await db.execute(
-                        """
-                        SELECT COUNT(*) FROM request_subscribers 
-                        WHERE request_id = ? AND user_id = ?
-                        """,
-                        (req_id, interaction.user.id)
-                    )
-                    is_subscriber = (await cursor.fetchone())[0] > 0
-                    
-                    if is_subscriber:
-                        user_already_requested = True
-                    break
-                
-                # If user has already requested this game
-                if user_already_requested:
-                    embed = discord.Embed(
-                        title="📋 Already Requested",
-                        description="You have already requested this game or are subscribed to an existing request.",
-                        color=discord.Color.orange()
-                    )
-                    
-                    search_cog = self.bot.get_cog('Search')
-                    platform_display = platform_info
-                    if search_cog:
-                        platform_display = search_cog.get_platform_with_emoji(platform_info)
-                    
-                    embed.add_field(name="Game", value=game_name, inline=True)
-                    embed.add_field(name="Platform", value=platform_display, inline=True)
-                    embed.add_field(name="Request ID", value=f"#{existing_request_id}", inline=True)
-                    
-                    if selected_game.get('cover_url'):
-                        embed.set_thumbnail(url=selected_game['cover_url'])
-                    
-                    await interaction.followup.send(embed=embed, ephemeral=True)
-                    return
-                
-                # If someone else has requested this game
-                if existing_request_id and interaction.user.id != existing_requests[0]['user_id']:
-                    # Add user as a subscriber to existing request
-                    await db.execute(
-                        """
-                        INSERT INTO request_subscribers (request_id, user_id, username)
-                        VALUES (?, ?, ?)
-                        """,
-                        (existing_request_id, interaction.user.id, str(interaction.user))
-                    )
-                    await db.commit()
-                    
-                    # Count total subscribers
-                    cursor = await db.execute(
-                        "SELECT COUNT(*) FROM request_subscribers WHERE request_id = ?",
-                        (existing_request_id,)
-                    )
-                    subscriber_count = (await cursor.fetchone())[0]
-                    
-                    embed = discord.Embed(
-                        title="📋 Request Already Exists",
-                        description=f"This game has already been requested by **{original_requester_name}**",
-                        color=discord.Color.blue()
-                    )
-                    
-                    search_cog = self.bot.get_cog('Search')
-                    platform_display = platform_info
-                    if search_cog:
-                        platform_display = search_cog.get_platform_with_emoji(platform_info)
-                    
-                    embed.add_field(name="Game", value=game_name, inline=True)
-                    embed.add_field(name="Platform", value=platform_display, inline=True)
-                    embed.add_field(name="Request ID", value=f"#{existing_request_id}", inline=True)
-                    
-                    embed.add_field(
-                        name="✅ You've been added to the notification list",
-                        value=f"You and {subscriber_count} other user(s) will be notified when this request is fulfilled.",
-                        inline=False
-                    )
-                    
-                    if selected_game.get('cover_url'):
-                        embed.set_thumbnail(url=selected_game['cover_url'])
-                    
-                    embed.set_footer(text="You'll receive a DM when this game is added to the collection")
-                    
-                    await interaction.followup.send(embed=embed, ephemeral=True)
-                    return
-                
-                # If platform exists in Romm, check for existing games
-                if in_romm and romm_id:
-                    exists, matches = await request_cog.check_if_game_exists(platform_info, game_name)
-                    
-                    if exists:
-                        # Game exists - show existing game view with IGDB options
-                        from .requests import ExistingGameWithIGDBView
-                        view = ExistingGameWithIGDBView(
-                            self.bot,
-                            matches,
-                            [selected_game],  # Pass this IGDB game as option
-                            platform_info,
-                            game_name,
-                            interaction.user.id
-                        )
-                        
-                        search_cog = self.bot.get_cog('Search')
-                        platform_with_emoji = search_cog.get_platform_with_emoji(platform_info) if search_cog else platform_info
-                        
-                        embed = discord.Embed(
-                            title="Games Found in Collection",
-                            description=f"Found {len(matches)} game(s) matching '{game_name}' that are already available:",
-                            color=discord.Color.blue()
-                        )
-                        
-                        for i, rom in enumerate(matches[:3]):
-                            embed.add_field(
-                                name=f"✅ {rom.get('name', 'Unknown')}",
-                                value=f"Available now - {rom.get('fs_name', 'Unknown')}",
-                                inline=False
-                            )
-                        
-                        if len(matches) > 3:
-                            embed.add_field(
-                                name="...",
-                                value=f"And {len(matches) - 3} more available",
-                                inline=False
-                            )
-                        
-                        has_other_games = bool(view.filtered_igdb_matches)
-                        instructions = ["• **Select an existing game** from the dropdown to download it"]
-                        
-                        if has_other_games:
-                            instructions.append(f"• **Request a different game** - Found {len(view.filtered_igdb_matches)} other game(s) on IGDB")
-                        
-                        instructions.append("• Click **Request Different Version** for ROM hacks, patches, or specific versions")
-                        
-                        embed.add_field(
-                            name="What would you like to do?",
-                            value="\n".join(instructions),
-                            inline=False
-                        )
-                        
-                        message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-                        view.message = message
-                        return
-                
-                # Process the request directly with the IGDB data
-                request_id = await request_cog.process_request_with_platform(
-                    interaction,
-                    platform_info,
-                    game_name,
-                    None,  # No additional details
-                    selected_game,  # Pass the IGDB game data
-                    None,  # No message to update
-                    mapping_id,
-                    in_romm,
-                    send_response=False
-                )
-                
-                # Check if request was created successfully
-                if not request_id:
-                    await interaction.followup.send("❌ An error occurred while processing your request", ephemeral=True)
-                    return
+                return
 
-                # Create a nice success embed with game metadata after request is processed  # <-- ALL NEW FROM HERE
-                success_embed = discord.Embed(
-                    title="✅ Request Submitted",
-                    description=f"Your request for **{game_name}** has been submitted!",
-                    color=discord.Color.green()
-                )
+            if await self._handle_existing_request(
+                interaction, selected_game, game_name, platform_info
+            ):
+                return
 
-                # Set cover image if available
-                if selected_game.get('cover_url'):
-                    success_embed.set_image(url=selected_game['cover_url'])
-                
-                # Always set RomM logo as thumbnail
-                success_embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
+            if mapping['in_romm'] and mapping['romm_id'] and await self._offer_existing_games(
+                interaction, request_cog, selected_game, game_name, platform_info
+            ):
+                return
 
-                # Platform field
-                search_cog = self.bot.get_cog('Search')
-                platform_display = platform_info
-                if search_cog and in_romm:
-                    platform_display = search_cog.get_platform_with_emoji(platform_info)
+            await self._submit_request(
+                interaction, request_cog, selected_game, game_name, platform_info,
+                mapping_id=mapping['id'], platform_in_romm=mapping['in_romm'],
+            )
 
-                platform_status = "✅ Available" if in_romm else "🆕 Not Yet Added"
-                success_embed.add_field(
-                    name="Platform", 
-                    value=f"{platform_display}\n{platform_status}", 
-                    inline=True
-                )
-
-                # Genre field
-                genres = selected_game.get('genres', [])
-                if genres:
-                    genre_str = ', '.join(genres[:2])
-                    if len(genres) > 2:
-                        genre_str += f' (+{len(genres) - 2} more)'
-                    success_embed.add_field(
-                        name="Genre",
-                        value=genre_str,
-                        inline=True
-                    )
-
-                # Status
-                success_embed.add_field(
-                    name="Status",
-                    value="⏳ Pending",
-                    inline=True
-                )
-
-                # Release Date
-                release_date = selected_game.get('release_date', 'Unknown')
-                if release_date != 'Unknown' and release_date != 'TBA':
-                    try:
-                        date_obj = datetime.strptime(release_date, "%Y-%m-%d")
-                        formatted_date = date_obj.strftime("%B %d, %Y")
-                    except ValueError:
-                        formatted_date = release_date
-                    success_embed.add_field(
-                        name="Release Date",
-                        value=formatted_date,
-                        inline=True
-                    )
-
-                # IGDB Rating
-                rating = selected_game.get('rating')
-                rating_count = selected_game.get('rating_count')
-                if rating:
-                    stars = round(rating / 20)
-                    star_display = "⭐" * stars + "☆" * (5 - stars)
-                    rating_text = f"{star_display} {rating:.1f}/100"
-                    if rating_count:
-                        rating_text += f" ({rating_count:,} ratings)"
-                    success_embed.add_field(
-                        name="IGDB Rating",
-                        value=rating_text,
-                        inline=True
-                    )
-
-                # Add Request ID field
-                success_embed.add_field(
-                    name="Request ID",
-                    value=f"#{request_id}",
-                    inline=True
-                )
-                
-                # Companies
-                companies = []
-                if selected_game.get('developers'):
-                    developers = selected_game['developers'][:2]
-                    companies.extend(developers)
-                if selected_game.get('publishers') and selected_game.get('publishers') != selected_game.get('developers'):
-                    publishers = selected_game['publishers']
-                    remaining_slots = 2 - len(companies)
-                    if remaining_slots > 0:
-                        companies.extend(publishers[:remaining_slots])
-
-                if companies:
-                    success_embed.add_field(
-                        name="Companies",
-                        value=", ".join(companies),
-                        inline=True
-                    )
-
-                # Platform status warning
-                if not in_romm:
-                    success_embed.add_field(
-                        name="📝 Note",
-                        value="This platform needs to be added to the collection before this request can be fulfilled.",
-                        inline=False
-                    )
-
-                # Summary
-                summary = selected_game.get('summary', 'No summary available')
-                if summary and summary != 'No summary available':
-                    if len(summary) > 300:
-                        summary = summary[:297] + "..."
-                    success_embed.add_field(
-                        name="Summary",
-                        value=summary,
-                        inline=False
-                    )
-                
-                success_embed.set_footer(text=f"Request submitted by {interaction.user}")
-                
-                await interaction.followup.send(embed=success_embed, ephemeral=True)
-                
         except Exception as e:
             logger.error(f"Error processing request from IGDB: {e}")
-            await interaction.followup.send("❌ An error occurred while processing your request", ephemeral=True)
+            await interaction.followup.send(
+                "❌ An error occurred while processing your request", ephemeral=True
+            )
+
+    def _platform_for(self, selected_game: Dict) -> str:
+        """The platform this view was opened for, or the game's first one."""
+        if self.platform_name:
+            return self.platform_name
+        platforms = selected_game.get('platforms', [])
+        return platforms[0] if platforms else "Unknown"
+
+    def _platform_display(self, platform_info: str, with_emoji: bool = True) -> str:
+        """Platform name, decorated with its emoji when the Search cog is loaded."""
+        search_cog = self.bot.get_cog('Search')
+        if search_cog and with_emoji:
+            return search_cog.get_platform_with_emoji(platform_info)
+        return platform_info
+
+    async def _handle_existing_request(
+        self, interaction, selected_game: Dict, game_name: str, platform_info: str
+    ) -> bool:
+        """Subscribe the user to an open request for this game, if there is one.
+
+        Returns True when the request was handled here. Only the first row is
+        considered, which is what the original inline loop did - the query has
+        already narrowed to this exact game, so any row is as good as another.
+        """
+        existing = await self.requests_repo.find_pending_by_igdb_or_name(
+            platform_info, selected_game.get('id'), game_name
+        )
+        if not existing:
+            return False
+
+        first = existing[0]
+        request_id = first['id']
+
+        already_waiting = first['user_id'] == interaction.user.id
+        if not already_waiting:
+            already_waiting = await self.requests_repo.is_subscribed(
+                request_id, interaction.user.id
+            )
+
+        if already_waiting:
+            await interaction.followup.send(
+                embed=build_igdb_already_requested_embed(
+                    game_name=game_name,
+                    platform_display=self._platform_display(platform_info),
+                    request_id=request_id,
+                    selected_game=selected_game,
+                ),
+                ephemeral=True
+            )
+            return True
+
+        await self.requests_repo.add_subscriber(
+            request_id, interaction.user.id, str(interaction.user)
+        )
+        subscriber_count = await self.requests_repo.count_subscribers(request_id)
+
+        await interaction.followup.send(
+            embed=build_igdb_subscribed_embed(
+                game_name=game_name,
+                platform_display=self._platform_display(platform_info),
+                request_id=request_id,
+                requester_name=first['username'],
+                subscriber_count=subscriber_count,
+                selected_game=selected_game,
+            ),
+            ephemeral=True
+        )
+        return True
+
+    async def _offer_existing_games(
+        self, interaction, request_cog, selected_game: Dict, game_name: str, platform_info: str
+    ) -> bool:
+        """Offer what the collection already has instead of taking a request.
+
+        Returns True when matches were found and shown.
+        """
+        exists, matches = await request_cog.check_if_game_exists(platform_info, game_name)
+        if not exists:
+            return False
+
+        from .requests import ExistingGameWithIGDBView
+        view = ExistingGameWithIGDBView(
+            self.bot,
+            matches,
+            [selected_game],  # Pass this IGDB game as option
+            platform_info,
+            game_name,
+            interaction.user.id
+        )
+
+        embed = build_existing_games_embed(
+            matches, game_name, other_igdb_count=len(view.filtered_igdb_matches)
+        )
+        view.message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        return True
+
+    async def _submit_request(
+        self, interaction, request_cog, selected_game: Dict, game_name: str,
+        platform_info: str, *, mapping_id, platform_in_romm,
+    ) -> None:
+        """Create the request, then confirm it with the IGDB metadata."""
+        request_id = await request_cog.process_request_with_platform(
+            interaction,
+            platform_info,
+            game_name,
+            None,  # No additional details
+            selected_game,  # Pass the IGDB game data
+            None,  # No message to update
+            mapping_id,
+            platform_in_romm,
+            send_response=False
+        )
+
+        if not request_id:
+            await interaction.followup.send(
+                "❌ An error occurred while processing your request", ephemeral=True
+            )
+            return
+
+        await interaction.followup.send(
+            embed=build_igdb_request_submitted_embed(
+                selected_game=selected_game,
+                game_name=game_name,
+                platform_display=self._platform_display(
+                    platform_info, with_emoji=bool(platform_in_romm)
+                ),
+                platform_in_romm=bool(platform_in_romm),
+                request_id=request_id,
+                author_name=str(interaction.user),
+            ),
+            ephemeral=True
+        )
 
     async def on_timeout(self):
         """Disable all components when the view times out"""
