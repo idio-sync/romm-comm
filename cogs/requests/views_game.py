@@ -163,10 +163,7 @@ class GameSelectView(discord.ui.View):
             embed.set_image(url=game['cover_url'])
         
         # Always use the platform_name from the request
-        search_cog = self.bot.get_cog('Search')
-        platform_display = self.platform_name
-        if search_cog:
-            platform_display = search_cog.get_platform_with_emoji(self.platform_name)
+        platform_display = self.bot.platform_emoji.format(self.platform_name)
 
         embed.add_field(
             name="Platform",
@@ -608,11 +605,7 @@ class ExistingGameView(discord.ui.View):
             logger.error(f"Error fetching detailed ROM data: {e}")
         
         # Platform emoji matching
-        search_cog = self.bot.get_cog('Search')
-        if search_cog and self.platform_name:
-            platform_display = search_cog.get_platform_with_emoji(self.platform_name)
-        else:
-            platform_display = self.platform_name
+        platform_display = self.bot.platform_emoji.format(self.platform_name)
 
         
         # Create ROM_View instance to use its embed creation

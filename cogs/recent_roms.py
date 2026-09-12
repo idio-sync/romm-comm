@@ -784,10 +784,7 @@ class RecentRomsMonitor(commands.Cog):
     
     def get_platform_with_emoji(self, platform_name: str) -> str:
         """Get platform name with emoji"""
-        search_cog = self.bot.get_cog('Search')
-        if search_cog:
-            return search_cog.get_platform_with_emoji(platform_name)
-        return platform_name
+        return self.bot.platform_emoji.format(platform_name)
     
     def format_file_size(self, size_bytes: int) -> str:
         """Format file size in human-readable format"""

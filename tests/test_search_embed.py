@@ -1,6 +1,8 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
+from cogs.platform_emoji import PlatformEmoji
 from cogs.search import NoResultsView, ROM_View
 
 
@@ -12,6 +14,10 @@ class FakeConfig:
 class FakeBot:
     config = FakeConfig()
     cache = {}
+
+    # The real bot builds this in __init__; with no emojis loaded it falls
+    # back to a generic one, which is what these tests see.
+    platform_emoji = PlatformEmoji(SimpleNamespace(emojis=[]))
 
     async def fetch_api_endpoint(self, endpoint):
         return None

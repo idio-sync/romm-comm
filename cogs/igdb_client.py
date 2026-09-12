@@ -749,10 +749,7 @@ class IGDBGameView(discord.ui.View):
         """Create the initial list embed"""
         # Adjust title based on platform
         if self.platform_name:
-            search_cog = self.bot.get_cog('Search')
-            platform_display = self.platform_name
-            if search_cog:
-                platform_display = search_cog.get_platform_with_emoji(self.platform_name)
+            platform_display = self.bot.platform_emoji.format(self.platform_name)
             embed_title = f"{self.title} - {platform_display}"
         else:
             embed_title = self.title
@@ -923,11 +920,7 @@ class IGDBGameView(discord.ui.View):
         if platforms:
             # If viewing with platform filter, only show that platform
             if self.platform_name:
-                search_cog = self.bot.get_cog('Search')
-                if search_cog:
-                    platform_str = search_cog.get_platform_with_emoji(self.platform_name)
-                else:
-                    platform_str = self.platform_name
+                platform_str = self.bot.platform_emoji.format(self.platform_name)
             else:
                 # No filter - show all platforms
                 platform_str = ', '.join(platforms[:3])
@@ -1175,9 +1168,8 @@ class IGDBGameView(discord.ui.View):
 
     def _platform_display(self, platform_info: str, with_emoji: bool = True) -> str:
         """Platform name, decorated with its emoji when the Search cog is loaded."""
-        search_cog = self.bot.get_cog('Search')
-        if search_cog and with_emoji:
-            return search_cog.get_platform_with_emoji(platform_info)
+        if with_emoji:
+            return self.bot.platform_emoji.format(platform_info)
         return platform_info
 
     async def _handle_existing_request(
@@ -1585,10 +1577,7 @@ class IGDBHandler(commands.Cog):
         
         # Adjust title based on platform
         if platform_name:
-            search_cog = self.bot.get_cog('Search')
-            platform_display = platform_name
-            if search_cog:
-                platform_display = search_cog.get_platform_with_emoji(platform_name)
+            platform_display = self.bot.platform_emoji.format(platform_name)
             embed_title = f"{title} - {platform_display}"
         else:
             embed_title = title

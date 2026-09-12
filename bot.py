@@ -14,6 +14,7 @@ import socketio
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
+from cogs.platform_emoji import PlatformEmoji
 from database_manager import MasterDatabase
 from romm_client import RommClient
 
@@ -404,6 +405,11 @@ class RommBot(discord.Bot):
         # Everything to do with talking to RomM - the HTTP session, OAuth and
         # CSRF tokens, the response cache - belongs to the client.
         self.romm = RommClient(self.config)
+
+        # Formatting a platform name with its emoji is wanted in five cogs and
+        # belongs to none of them, so it is a service rather than a lookup of
+        # whichever cog happened to own the table.
+        self.platform_emoji = PlatformEmoji(self)
 
         # Master database initialization - DON'T initialize here, wait for setup_hook
         self.db = None

@@ -12,14 +12,20 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from types import SimpleNamespace
 
+from cogs.platform_emoji import PlatformEmoji
 from cogs.requests import REQUEST_COLUMNS, RequestAdminView, UserRequestsView
 from cogs.requests.embeds import DEFAULT_THUMBNAIL, parse_request_details
 from database_manager import MasterDatabase
 
 
 class FakeBot:
-    """Only the two hooks the embed builders reach for."""
+    """Only what the embed builders reach for."""
+
+    # The real bot builds this in __init__; with no emojis loaded it falls
+    # back to a generic one, which is what these tests see.
+    platform_emoji = PlatformEmoji(SimpleNamespace(emojis=[]))
 
     def get_cog(self, name):
         return None

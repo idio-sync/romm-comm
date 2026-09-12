@@ -137,12 +137,13 @@ def build_request_embed(  # noqa: C901 - one optional embed field per stored att
     )
 
     # Platform field with existence check - USE CACHED DATA
-    search_cog = bot.get_cog('Search')
     platform_display = req['platform']
     platform_exists_in_romm = platform_is_in_romm(req, platform_status)
 
-    if search_cog and platform_exists_in_romm:
-        platform_display = search_cog.get_platform_with_emoji(platform_display)
+    # A platform RomM does not have yet is shown plainly: the emoji reads as a
+    # claim that it is available.
+    if platform_exists_in_romm:
+        platform_display = bot.platform_emoji.format(platform_display)
 
     platform_status_icon = " ✅" if platform_exists_in_romm else "🆕"
 

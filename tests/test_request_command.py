@@ -19,6 +19,7 @@ from types import SimpleNamespace
 import discord
 
 import cogs.requests.cog as cog_module
+from cogs.platform_emoji import PlatformEmoji
 from cogs.requests.cog import Request
 from cogs.requests.repo import PlatformMappingsRepo, RequestsRepo
 from cogs.requests.views_game import GameSelect, VariantRequestModal
@@ -121,6 +122,10 @@ class FakeBot:
 
     def get_cog(self, name):
         return None
+
+    # The real bot builds this in __init__; with no emojis loaded it falls
+    # back to a generic one, which is what these tests see.
+    platform_emoji = PlatformEmoji(SimpleNamespace(emojis=[]))
 
     def get_formatted_emoji(self, name):
         return f"<:{name}:1>"

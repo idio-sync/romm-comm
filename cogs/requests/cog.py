@@ -507,9 +507,8 @@ class Request(commands.Cog):
 
     def _platform_display(self, platform_display_name: str, with_emoji: bool = True) -> str:
         """Platform name, decorated with its emoji when the Search cog is loaded."""
-        search_cog = self.bot.get_cog('Search')
-        if search_cog and with_emoji:
-            return search_cog.get_platform_with_emoji(platform_display_name)
+        if with_emoji:
+            return self.bot.platform_emoji.format(platform_display_name)
         return platform_display_name
 
     async def _merge_into_existing_request(
@@ -894,8 +893,7 @@ class Request(commands.Cog):
                     
                 if exists:
                     # Game exists in collection - but also fetch IGDB matches
-                    search_cog = self.bot.get_cog('Search')
-                    platform_with_emoji = search_cog.get_platform_with_emoji(platform_display_name) if search_cog else platform_display_name
+                    platform_with_emoji = self.bot.platform_emoji.format(platform_display_name)
                         
                     # Fetch IGDB matches regardless of existing games
                     igdb_matches = []

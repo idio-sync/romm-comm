@@ -1,10 +1,12 @@
 import asyncio
 import sqlite3
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import discord
 
+from cogs.platform_emoji import PlatformEmoji
 from cogs.requests import ExistingGameView, ExistingGameWithIGDBView, Request
 from cogs.requests.repo import PlatformMappingsRepo, RequestsRepo
 
@@ -17,6 +19,10 @@ class FakeConfig:
 class FakeBot:
     config = FakeConfig()
     cache = {}
+
+    # The real bot builds this in __init__; with no emojis loaded it falls
+    # back to a generic one, which is what these tests see.
+    platform_emoji = PlatformEmoji(SimpleNamespace(emojis=[]))
 
     async def fetch_api_endpoint(self, endpoint):
         return None
