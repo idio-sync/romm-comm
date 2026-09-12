@@ -729,8 +729,10 @@ class RecentRomsMonitor(commands.Cog):
                 
                 notifications = []
                 for row in results:
-                    message_id, batch_id, posted_at = row
-                    
+                    message_id = row['message_id']
+                    batch_id = row['batch_id']
+                    posted_at = row['posted_at']
+
                     # Get all ROMs in this batch
                     rom_cursor = await conn.execute(
                         "SELECT rom_id, rom_name, platform_name FROM posted_roms WHERE batch_id = ?",

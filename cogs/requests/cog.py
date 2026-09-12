@@ -276,8 +276,12 @@ class Request(commands.Cog):
                 notifications = defaultdict(list)
                 
                 for req in pending_requests:
-                    # Simplify the unpacking to match the new, explicit query
-                    req_id, user_id, req_platform, req_game, req_igdb_id, req_igdb_game_name = req
+                    req_id = req['id']
+                    user_id = req['user_id']
+                    req_platform = req['platform']
+                    req_game = req['game_name']
+                    req_igdb_id = req['igdb_id']
+                    req_igdb_game_name = req['igdb_game_name']
 
                     for new_game in new_games:
                         new_game_igdb_id = new_game.get('igdb_id')
@@ -712,8 +716,10 @@ class Request(commands.Cog):
             logger.debug(f"Syncing {len(discord_requests)} requests from ggrequestz")
                 
             for discord_req in discord_requests:
-                discord_id, ggr_id, discord_status, req_user_id, game_name = discord_req
-                    
+                discord_id = discord_req['id']
+                ggr_id = discord_req['ggr_request_id']
+                discord_status = discord_req['status']
+
                 # Get current status from ggrequestz
                 ggr_request = await self.ggr.get_request_by_id(ggr_id)
                     
@@ -784,7 +790,9 @@ class Request(commands.Cog):
                 )
                 return
                 
-            mapping_id, in_romm, romm_id, folder_name, igdb_slug, moby_slug = platform_mapping
+            mapping_id = platform_mapping['id']
+            in_romm = platform_mapping['in_romm']
+            romm_id = platform_mapping['romm_id']
             platform_display_name = platform_clean
                 
             # If platform exists in Romm, check for existing games
