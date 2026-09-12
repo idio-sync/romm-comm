@@ -20,6 +20,16 @@ from .embeds import (
     format_igdb_details,
 )
 from .matching import edit_distance_ratio, find_duplicate_request
+from .notifications import (
+    cancelled_message,
+    fulfilled_message,
+    notify,
+    notify_subscribers,
+    rejected_message,
+    requester_cancelled_message,
+    requester_fulfilled_message,
+    requester_rejected_message,
+)
 from .repo import PlatformMappingsRepo, RequestsRepo
 from .responders import responder_for
 from .views_admin import RequestAdminView
@@ -30,6 +40,22 @@ logger = logging.getLogger(__name__)
 
 # How many requests one user may have open at once.
 MAX_PENDING_REQUESTS = 25
+
+# What to say when ggrequestz reports a request has ended, by local status.
+# Both sides take (game_name, reason) so the caller does not have to know which
+# of them carries a reason. A status missing here - 'pending' - is not an
+# ending and is announced to nobody.
+REQUESTER_MESSAGES = {
+    'fulfilled': lambda name, reason: requester_fulfilled_message(name),
+    'reject': requester_rejected_message,
+    'cancelled': lambda name, reason: requester_cancelled_message(name),
+}
+
+SUBSCRIBER_MESSAGES = {
+    'fulfilled': lambda name, reason: fulfilled_message(name),
+    'reject': rejected_message,
+    'cancelled': lambda name, reason: cancelled_message(name),
+}
 
 
 class Request(commands.Cog):
@@ -702,17 +728,31 @@ class Request(commands.Cog):
             platform_exists
         )
     
-    async def _sync_statuses_from_ggrequestz(self, user_id: Optional[int] = None):
-        """Sync request statuses from ggrequestz to Discord database"""
+    async def _sync_statuses_from_ggrequestz(
+        self, user_id: Optional[int] = None
+    ) -> List[Dict]:
+        """Sync request statuses from ggrequestz to Discord database.
+
+        Returns the transitions it applied, for the caller to announce once it
+        has replied - see _announce_synced_transitions. Announcing from here
+        would put a DM fan-out in front of the response to a slash command.
+
+        A transition is recorded only when the status actually changes, and the
+        change is written before anyone is told, so a second sync sees the new
+        status and says nothing. Two syncs running at the same moment could
+        still both act on one change; that race predates this and is rare
+        enough to cost a duplicate DM rather than anything worse.
+        """
+        transitions: List[Dict] = []
         if not self.ggr or not self.ggr.enabled:
-            return
-        
+            return transitions
+
         try:
             discord_requests = await self.repo.list_open_synced_with_ggrequestz(user_id)
-                
+
             if not discord_requests:
-                return
-                
+                return transitions
+
             logger.debug(f"Syncing {len(discord_requests)} requests from ggrequestz")
                 
             for discord_req in discord_requests:
@@ -751,12 +791,56 @@ class Request(commands.Cog):
                     await self.repo.apply_synced_status(
                         discord_id, mapped_status, update_note
                     )
-                        
+
+                    transitions.append({
+                        'request_id': discord_id,
+                        'user_id': discord_req['user_id'],
+                        'game_name': (
+                            discord_req['igdb_game_name'] or discord_req['game_name']
+                        ),
+                        'status': mapped_status,
+                        'reason': notes or None,
+                    })
+
                     logger.info(f"✅ Synced status for request #{discord_id} from ggrequestz")
-        
+
         except Exception as e:
             logger.error(f"Error syncing statuses from ggrequestz: {e}", exc_info=True)
-    
+
+        return transitions
+
+    async def _announce_synced_transitions(self, transitions: List[Dict]) -> None:
+        """Tell people about requests ggrequestz closed while we were away.
+
+        The three paths that end a request inside Discord all DM the requester
+        and the wait list. A request closed on the ggrequestz side reached the
+        same end and said nothing, which left the promise made at subscription
+        time depending on which side of the integration did the closing.
+
+        Best effort throughout: this runs after the caller has already replied,
+        so nothing here is allowed to turn a rendered response into an error.
+        """
+        for transition in transitions:
+            status = transition['status']
+            if status not in REQUESTER_MESSAGES:
+                continue
+
+            game_name = transition['game_name']
+            reason = transition['reason']
+
+            await notify(
+                self.bot,
+                transition['user_id'],
+                REQUESTER_MESSAGES[status](game_name, reason),
+            )
+            await notify_subscribers(
+                self.bot,
+                self.repo,
+                transition['request_id'],
+                SUBSCRIBER_MESSAGES[status](game_name, reason),
+            )
+
+
     @discord.slash_command(name="request", description="Submit a ROM request")
     async def request(
         self,
@@ -969,10 +1053,11 @@ class Request(commands.Cog):
         """View and manage your submitted requests with interactive controls"""
         await ctx.defer(ephemeral=True)
 
+        transitions = []
         try:
             # Sync statuses from ggrequestz first
-            await self._sync_statuses_from_ggrequestz(ctx.author.id)
-            
+            transitions = await self._sync_statuses_from_ggrequestz(ctx.author.id)
+
             requests = await self.repo.list_for_user(
                 ctx.author.id, pending_only=show_pending_only
             )
@@ -1047,6 +1132,11 @@ class Request(commands.Cog):
         except Exception as e:
             logger.error(f"Error fetching requests: {e}")
             await ctx.respond("❌ An error occurred while fetching your requests.", ephemeral=True)
+        finally:
+            # After the reply, whichever way it went: a request that ended
+            # while nobody was looking is still worth a DM, and the DMs are
+            # paced a second apart.
+            await self._announce_synced_transitions(transitions)
 
     @discord.slash_command(name="request_admin", description="Interface for managing ROM requests (admin only)")
     @is_admin()
@@ -1063,10 +1153,11 @@ class Request(commands.Cog):
         """Admin interface for managing requests - shows pending by default"""
         await ctx.defer(ephemeral=True)
 
+        transitions = []
         try:
             # Sync statuses from ggrequestz first
-            await self._sync_statuses_from_ggrequestz()
-            
+            transitions = await self._sync_statuses_from_ggrequestz()
+
             requests = (
                 await self.repo.list_all() if show_all
                 else await self.repo.list_pending()
@@ -1125,3 +1216,8 @@ class Request(commands.Cog):
         except Exception as e:
             logger.error(f"Error in request admin command: {e}")
             await ctx.respond("❌ An error occurred while loading the requests interface.", ephemeral=True)
+        finally:
+            # This sync covers everyone's requests, not just the admin's, so
+            # the fan-out here can be large. All the more reason for it to
+            # happen after the interface has been rendered.
+            await self._announce_synced_transitions(transitions)

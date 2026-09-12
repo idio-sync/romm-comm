@@ -10,6 +10,8 @@ from .notifications import (
     notify,
     notify_subscribers,
     rejected_message,
+    requester_fulfilled_message,
+    requester_rejected_message,
 )
 from .repo import RequestsRepo
 
@@ -228,7 +230,7 @@ class RequestAdminView(discord.ui.View):
             await notify(
                 self.bot,
                 current_request['user_id'],
-                f"✅ Your request for '{display_game_name}' has been fulfilled!"
+                requester_fulfilled_message(display_game_name),
             )
 
             # Everyone who joined the wait list for this request was promised
@@ -321,10 +323,11 @@ class RequestAdminView(discord.ui.View):
 
                     # DMs last, so the admin sees the rejection land before the
                     # wait list is walked a second at a time.
-                    message = f"❌ Your request for '{display_game_name}' has been rejected."
-                    if reason:
-                        message += f"\nReason: {reason}"
-                    await notify(self.view.bot, self.request_data['user_id'], message)
+                    await notify(
+                        self.view.bot,
+                        self.request_data['user_id'],
+                        requester_rejected_message(display_game_name, reason),
+                    )
 
                     # And everyone waiting on it. A rejected request stops
                     # blocking duplicates, so they are told they can file

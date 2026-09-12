@@ -25,6 +25,29 @@ DM_INTERVAL = 1
 REQUEST_IT_YOURSELF = "You can request it yourself with /request if you still want it."
 
 
+def requester_fulfilled_message(game_name: str) -> str:
+    return f"✅ Your request for '{game_name}' has been fulfilled!"
+
+
+def requester_rejected_message(game_name: str, reason: Optional[str] = None) -> str:
+    message = f"❌ Your request for '{game_name}' has been rejected."
+    if reason:
+        message += f"\nReason: {reason}"
+    return message
+
+
+def requester_cancelled_message(game_name: str) -> str:
+    """Only for a cancellation that came from elsewhere.
+
+    Someone cancelling their own request through /my_requests already knows;
+    one cancelled on the ggrequestz side is news.
+    """
+    return (
+        f"🚫 Your request for '{game_name}' was cancelled."
+        f"\n{REQUEST_IT_YOURSELF}"
+    )
+
+
 def fulfilled_message(game_name: str) -> str:
     return f"✅ The request you're following for '{game_name}' has been fulfilled!"
 

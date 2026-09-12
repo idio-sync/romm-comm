@@ -158,7 +158,8 @@ class RequestsRepo:
             params = (user_id,)
         async with self.db.get_connection() as conn:
             cursor = await conn.execute(
-                f"SELECT id, ggr_request_id, status, user_id, game_name FROM requests {clause}",
+                "SELECT id, ggr_request_id, status, user_id, game_name, igdb_game_name "
+                f"FROM requests {clause}",
                 params
             )
             return await cursor.fetchall()

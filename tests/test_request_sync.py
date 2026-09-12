@@ -7,6 +7,7 @@ to find out whether they still agree with it.
 """
 
 import asyncio
+import contextlib
 import os
 import tempfile
 import unittest
@@ -43,6 +44,71 @@ class FakeBot:
 
     async def fetch_api_endpoint(self, endpoint, **kwargs):
         return self.platforms if endpoint == "platforms" else None
+
+
+class RecordingBot(FakeBot):
+    """Records every DM, in order, and can make a recipient unreachable."""
+
+    def __init__(self, db, platforms=None, unreachable=(), events=None):
+        super().__init__(db, platforms)
+        self.dms = []
+        self.unreachable = set(unreachable)
+        # Shared with a FakeCtx when the order of DMs against the reply matters.
+        self.events = events
+
+    def get_user(self, user_id):
+        return None
+
+    async def fetch_user(self, user_id):
+        if user_id in self.unreachable:
+            raise TimeoutError("connection dropped")
+
+        bot = self
+
+        class Recipient:
+            avatar = None
+            default_avatar = SimpleNamespace(url="https://example/default.png")
+
+            async def send(self, message):
+                bot.dms.append((user_id, message))
+                if bot.events is not None:
+                    bot.events.append(f"dm:{user_id}")
+
+        return Recipient()
+
+
+class FakeCtx:
+    """Enough ApplicationContext for /my_requests."""
+
+    def __init__(self, events=None):
+        self.author = SimpleNamespace(id=42)
+        self.events = events
+        self.responses = []
+
+    async def defer(self, **kwargs):
+        return None
+
+    async def respond(self, *args, **kwargs):
+        self.responses.append((args, kwargs))
+        if self.events is not None:
+            self.events.append("respond")
+        return SimpleNamespace(id=1)
+
+
+@contextlib.contextmanager
+def instant_dms():
+    """Skip the one-second pacing between DMs."""
+    import cogs.requests.notifications as module
+
+    async def no_sleep(_seconds):
+        return None
+
+    original = module.asyncio.sleep
+    module.asyncio.sleep = no_sleep
+    try:
+        yield
+    finally:
+        module.asyncio.sleep = original
 
 
 class FakeGGR:
@@ -192,6 +258,173 @@ class GGRequestzSyncTests(unittest.TestCase):
             return ggr.asked
 
         self.assertEqual([], run(go))
+
+
+class SyncedTransitionNotificationTests(unittest.TestCase):
+    """A request ggrequestz closed is an ending like any other.
+
+    The three paths that end a request inside Discord all DM the requester and
+    the wait list. This one reached the same end and said nothing, so whether
+    anybody heard depended on which side of the integration did the closing.
+    """
+
+    async def _announce(self, db, ggr_status, *, subscribers=(), notes=None,
+                        igdb_game_name=None):
+        repo = RequestsRepo(db)
+        request_id = await make_request(repo, igdb_game_name=igdb_game_name)
+        await repo.set_ggr_request_id(request_id, 500)
+        for user_id in subscribers:
+            await repo.add_subscriber(request_id, user_id, f"watcher{user_id}")
+
+        payload = {"status": ggr_status}
+        if notes is not None:
+            payload["admin_notes"] = notes
+
+        bot = RecordingBot(db)
+        cog = make_cog(bot, db, FakeGGR({500: payload}))
+        transitions = await cog._sync_statuses_from_ggrequestz()
+        with instant_dms():
+            await cog._announce_synced_transitions(transitions)
+        return bot.dms
+
+    def test_the_requester_is_told_their_request_landed(self):
+        async def go(db):
+            return await self._announce(db, "fulfilled")
+
+        self.assertEqual(
+            [(42, "✅ Your request for 'GoldenEye 007' has been fulfilled!")],
+            run(go),
+        )
+
+    def test_the_wait_list_is_told_too_and_in_their_own_words(self):
+        async def go(db):
+            return await self._announce(db, "fulfilled", subscribers=[7, 8])
+
+        dms = run(go)
+        self.assertEqual([42, 7, 8], [user_id for user_id, _ in dms])
+        self.assertIn("Your request for", dms[0][1])
+        self.assertIn("The request you're following for", dms[1][1])
+        self.assertIn("The request you're following for", dms[2][1])
+
+    def test_a_rejection_carries_the_reason_ggrequestz_gave(self):
+        async def go(db):
+            return await self._announce(
+                db, "rejected", subscribers=[7], notes="not obtainable"
+            )
+
+        dms = run(go)
+        self.assertIn("has been rejected", dms[0][1])
+        self.assertIn("not obtainable", dms[0][1])
+        self.assertIn("was rejected", dms[1][1])
+        self.assertIn("/request", dms[1][1], "a dead end should point somewhere")
+
+    def test_a_cancellation_elsewhere_is_news_to_the_requester(self):
+        """Unlike cancelling through /my_requests, where they already know."""
+        async def go(db):
+            return await self._announce(db, "cancelled")
+
+        dms = run(go)
+        self.assertIn("was cancelled", dms[0][1])
+        self.assertIn("/request", dms[0][1])
+
+    def test_the_igdb_name_is_preferred_when_there_is_one(self):
+        async def go(db):
+            return await self._announce(
+                db, "fulfilled", igdb_game_name="GoldenEye 007 (1997)"
+            )
+
+        self.assertIn("GoldenEye 007 (1997)", run(go)[0][1])
+
+    def test_a_status_that_is_not_an_ending_tells_nobody(self):
+        async def go(db):
+            return await self._announce(db, "approved", subscribers=[7])
+
+        self.assertEqual([], run(go))
+
+    def test_a_second_sync_says_nothing_more(self):
+        """The status is written before anyone is told, so it only lands once."""
+        async def go(db):
+            repo = RequestsRepo(db)
+            request_id = await make_request(repo)
+            await repo.set_ggr_request_id(request_id, 500)
+            await repo.add_subscriber(request_id, 7, "watcher")
+
+            bot = RecordingBot(db)
+            cog = make_cog(bot, db, FakeGGR({500: {"status": "fulfilled"}}))
+
+            with instant_dms():
+                await cog._announce_synced_transitions(
+                    await cog._sync_statuses_from_ggrequestz()
+                )
+                first = list(bot.dms)
+                await cog._announce_synced_transitions(
+                    await cog._sync_statuses_from_ggrequestz()
+                )
+            return first, bot.dms
+
+        first, total = run(go)
+        self.assertEqual(2, len(first))
+        self.assertEqual(first, total, "the second pass found nothing to announce")
+
+    def test_an_unreachable_recipient_does_not_stop_the_rest(self):
+        async def go(db):
+            repo = RequestsRepo(db)
+            request_id = await make_request(repo)
+            await repo.set_ggr_request_id(request_id, 500)
+            await repo.add_subscriber(request_id, 7, "watcher")
+
+            bot = RecordingBot(db, unreachable={42})
+            cog = make_cog(bot, db, FakeGGR({500: {"status": "fulfilled"}}))
+            with instant_dms():
+                await cog._announce_synced_transitions(
+                    await cog._sync_statuses_from_ggrequestz()
+                )
+            return bot.dms
+
+        self.assertEqual([7], [user_id for user_id, _ in run(go)])
+
+
+class MyRequestsWiringTests(unittest.TestCase):
+    """The command has to actually announce what the sync found.
+
+    Ordering is the point: the DMs are paced a second apart, so they belong
+    after the reply rather than in front of it.
+    """
+
+    def test_my_requests_replies_first_then_announces(self):
+        async def go(db):
+            events = []
+            repo = RequestsRepo(db)
+            request_id = await make_request(repo)
+            await repo.set_ggr_request_id(request_id, 500)
+            await repo.add_subscriber(request_id, 7, "watcher")
+
+            bot = RecordingBot(db, events=events)
+            cog = make_cog(bot, db, FakeGGR({500: {"status": "fulfilled"}}))
+
+            with instant_dms():
+                await Request.my_requests.callback(
+                    cog, FakeCtx(events), show_pending_only=False
+                )
+            return events
+
+        events = run(go)
+        self.assertEqual(["respond", "dm:42", "dm:7"], events)
+
+    def test_a_sync_with_nothing_to_report_sends_no_dms(self):
+        async def go(db):
+            events = []
+            repo = RequestsRepo(db)
+            await make_request(repo)
+
+            bot = RecordingBot(db, events=events)
+            cog = make_cog(bot, db, FakeGGR({}))
+            await Request.my_requests.callback(
+                cog, FakeCtx(events), show_pending_only=False
+            )
+            return events
+
+        self.assertEqual(["respond"], run(go))
 
 
 class PlatformSyncTests(unittest.TestCase):
