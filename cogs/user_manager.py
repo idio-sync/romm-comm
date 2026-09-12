@@ -725,9 +725,13 @@ class UserManagementView(discord.ui.View):
 
         await confirm_view.wait()
 
+        # Cancelling or timing out changes nothing, so the panel behind the
+        # confirmation is already correct and is left alone.
         if not confirm_view.action:
             await confirm_msg.edit(content="Operation cancelled.", embed=None, view=None)
-        elif confirm_view.action == 'unlink_only':
+            return
+
+        if confirm_view.action == 'unlink_only':
             await self._unlink_only(confirm_msg, discord_user, romm_username)
         elif confirm_view.action == 'unlink_disable':
             await self._unlink_and_disable(confirm_msg, discord_user, romm_username, user)
@@ -763,8 +767,10 @@ class UserManagementView(discord.ui.View):
         """
         disabled, error_msg = await self._disable_romm_account(user, romm_username)
 
-        await self._unlink_and_refresh(discord_user)
-
+        # Reported before the link is dropped, not after. Editing the message
+        # is the step that can still fail here - it is a Discord call on a
+        # message the admin may have dismissed - and if it does, the safe place
+        # to fail is with the link still intact.
         if not disabled:
             await confirm_msg.edit(
                 content=(
@@ -775,7 +781,10 @@ class UserManagementView(discord.ui.View):
                 embed=None,
                 view=None
             )
+            await self._unlink_and_refresh(discord_user)
             return
+
+        await self._unlink_and_refresh(discord_user)
 
         await confirm_msg.edit(
             content=(

@@ -292,6 +292,160 @@ class UnlinkOutcomeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, view.populated)
 
 
+class RecordingInteraction:
+    """An interaction that logs what it was asked to do, in order.
+
+    It is its own `response` and `followup`, which is all the dispatcher uses.
+    """
+
+    def __init__(self, events):
+        self.events = events
+        self.response = self
+        self.followup = self
+        self.messages = []
+
+    async def defer(self):
+        self.events.append("defer")
+
+    async def send(self, *args, **kwargs):
+        self.events.append("followup.send")
+        self.messages.append(RecordingMessage(self.events))
+        return self.messages[-1]
+
+    async def edit_original_response(self, **kwargs):
+        self.events.append("edit_original_response")
+
+
+class RecordingMessage(FakeMessage):
+    def __init__(self, events):
+        super().__init__()
+        self.events = events
+
+    async def edit(self, **kwargs):
+        self.events.append("confirm_msg.edit")
+        await super().edit(**kwargs)
+
+
+class RecordingDB(FakeDB):
+    def __init__(self, events, link=None):
+        super().__init__(link)
+        self.events = events
+
+    async def delete_user_link(self, discord_id):
+        self.events.append("delete_user_link")
+        return await super().delete_user_link(discord_id)
+
+
+class DispatcherTests(unittest.IsolatedAsyncioTestCase):
+    """unlink_account_callback itself, not just the helpers it calls.
+
+    Every helper was covered; the method that sequences them was not, and two
+    differences from the original 287-line version lived in exactly that gap -
+    an extra panel refresh on the cancel path, and the disable path dropping
+    the link before reporting the failure rather than after.
+    """
+
+    LINK = {"romm_username": "casey", "romm_id": 7}
+
+    def drive(self, action, *, link=LINK, users_data=None,
+              request_result=FakeBot._MISSING, selected=True):
+        """Build a view whose confirmation dialog is already answered."""
+        import cogs.user_manager as module
+
+        events = []
+
+        class AnsweredConfirmView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=1)
+                self.action = action
+
+            async def wait(self):
+                return False
+
+        original = module.UnlinkConfirmView
+        module.UnlinkConfirmView = AnsweredConfirmView
+        self.addCleanup(setattr, module, "UnlinkConfirmView", original)
+
+        cog = FakeCog(found_user={"id": 7})
+        cog.db_manager = RecordingDB(events, link)
+        bot = FakeBot(users_data=users_data, request_result=request_result,
+                      channel=FakeChannel())
+        view = make_view(cog, bot)
+        view.create_status_embed = lambda: discord.Embed(title="panel")
+        if not selected:
+            view.selected_discord_user = None
+
+        return view, cog, events, RecordingInteraction(events)
+
+    async def test_cancelling_leaves_the_panel_alone(self):
+        """Nothing changed, so there is nothing to redraw behind the dialog."""
+        view, cog, events, interaction = self.drive(None)
+
+        await view.unlink_account_callback(interaction)
+
+        self.assertEqual([], cog.db_manager.deleted)
+        self.assertNotIn("edit_original_response", events)
+        self.assertEqual("Operation cancelled.", interaction.messages[-1].content)
+
+    async def test_acting_redraws_the_panel(self):
+        view, cog, events, interaction = self.drive('unlink_only')
+
+        await view.unlink_account_callback(interaction)
+
+        self.assertEqual([1234], cog.db_manager.deleted)
+        self.assertEqual("edit_original_response", events[-1])
+
+    async def test_a_failed_disable_reports_before_it_unlinks(self):
+        """Editing the message is the step that can still fail here, and if it
+        does the safe place to fail is with the link still intact."""
+        view, cog, events, interaction = self.drive('unlink_disable', request_result=None)
+
+        with self.assertLogs("romm_bot.users", level="ERROR"):
+            await view.unlink_account_callback(interaction)
+
+        self.assertEqual([1234], cog.db_manager.deleted, "a failed disable still unlinks")
+        self.assertLess(
+            events.index("confirm_msg.edit"),
+            events.index("delete_user_link"),
+            "the failure is reported before the link is dropped",
+        )
+
+    async def test_a_successful_disable_unlinks_before_reporting(self):
+        """The mirror image: nothing left to go wrong, so order the other way."""
+        view, cog, events, interaction = self.drive('unlink_disable')
+
+        await view.unlink_account_callback(interaction)
+
+        self.assertEqual([1234], cog.db_manager.deleted)
+        self.assertLess(events.index("delete_user_link"), events.index("confirm_msg.edit"))
+
+    async def test_an_admin_account_is_refused_before_anything_happens(self):
+        view, cog, events, interaction = self.drive(
+            'unlink_delete', users_data=[{"id": 7, "role": "ADMIN"}]
+        )
+
+        await view.unlink_account_callback(interaction)
+
+        self.assertEqual([], cog.db_manager.deleted)
+        self.assertNotIn("edit_original_response", events)
+
+    async def test_a_user_with_no_link_is_refused(self):
+        view, cog, events, interaction = self.drive('unlink_only', link=None)
+
+        await view.unlink_account_callback(interaction)
+
+        self.assertEqual([], cog.db_manager.deleted)
+        self.assertNotIn("edit_original_response", events)
+
+    async def test_nothing_selected_is_refused(self):
+        view, cog, events, interaction = self.drive('unlink_only', selected=False)
+
+        await view.unlink_account_callback(interaction)
+
+        self.assertEqual([], cog.db_manager.deleted)
+        self.assertEqual(["defer", "followup.send"], events)
+
+
 class LogChannelTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_missing_log_channel_is_not_an_error(self):
         view = make_view(FakeCog(), FakeBot(channel=None))
