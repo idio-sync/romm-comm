@@ -12,6 +12,8 @@ import asyncio
 import logging
 from typing import Optional
 
+import discord
+
 logger = logging.getLogger(__name__)
 
 # Seconds between consecutive DMs, matching the scan notifications.
@@ -57,8 +59,15 @@ async def notify(bot, user_id: int, message: str) -> bool:
         user = await bot.fetch_user(user_id)
         await user.send(message)
         return True
-    except Exception as e:
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
+        # An ordinary undeliverable message. One line is the whole story.
         logger.warning(f"Could not DM user {user_id}: {e}")
+        return False
+    except Exception as e:
+        # Swallowed all the same, but this is not a routine outcome - a
+        # traceback is the difference between finding a bug here and never
+        # knowing there was one.
+        logger.warning(f"Could not DM user {user_id}: {e}", exc_info=True)
         return False
 
 

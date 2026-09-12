@@ -488,6 +488,38 @@ class RowStorageAfterActionTests(unittest.IsolatedAsyncioTestCase):
         await view.back_callback(FakeInteraction())
         self.assertEqual(0, view.current_index)
 
+    async def test_navigating_after_a_cancel_does_not_crash(self):
+        """The same substitution happens on the user's own view.
+
+        cancel_callback replaces the actioned row with a dict exactly as the
+        admin paths do, and its navigation callbacks read the requester id off
+        whatever is there - so it is the same trap, one class over.
+        """
+        requester = FakeUser(42)
+        bot = FakeBot([requester])
+        rows = [request_row(id=7, user_id=42), request_row(id=8, user_id=42)]
+
+        view = UserRequestsView(bot, rows, user_id=42, db=None)
+        view.repo = FakeRepo()
+        view.message = type("M", (), {"id": 1})()
+
+        interaction = FakeInteraction(user_id=42)
+        await view.cancel_callback(interaction)
+        modal = interaction.response.modal
+        modal.reason.value = "changed my mind"
+
+        with instant_dms():
+            await modal.callback(FakeInteraction(user_id=42))
+
+        self.assertIsInstance(view.requests[0], dict)
+        self.assertEqual("cancelled", view.requests[0]["status"])
+
+        await view.forward_callback(FakeInteraction(user_id=42))
+        self.assertEqual(1, view.current_index)
+
+        await view.back_callback(FakeInteraction(user_id=42))
+        self.assertEqual(0, view.current_index)
+
 
 if __name__ == "__main__":
     unittest.main()

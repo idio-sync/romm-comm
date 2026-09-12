@@ -324,6 +324,50 @@ class SubscriberTests(unittest.TestCase):
 
         self.assertEqual([], run(go))
 
+    def test_subscriber_ids_returns_this_request_s_watchers_only(self):
+        """The query behind every subscriber DM.
+
+        The notification tests drive it through a fake repository, so until now
+        nothing ran the query itself. That matters more since notify_subscribers
+        started reporting a failed wait-list read rather than raising: a wrong
+        query here would now go quiet rather than loud.
+        """
+        async def go(db):
+            repo = RequestsRepo(db)
+            watched = await make_request(repo)
+            other = await make_request(repo, game_name="Something Else")
+            await repo.add_subscriber(watched, 7, "watcher")
+            await repo.add_subscriber(watched, 8, "other")
+            await repo.add_subscriber(other, 9, "unrelated")
+            return sorted(await repo.subscriber_ids(watched))
+
+        self.assertEqual([7, 8], run(go))
+
+    def test_subscriber_ids_of_an_unwatched_request_is_empty(self):
+        async def go(db):
+            repo = RequestsRepo(db)
+            return await repo.subscriber_ids(await make_request(repo))
+
+        self.assertEqual([], run(go))
+
+    def test_a_user_cannot_join_the_same_wait_list_twice(self):
+        """The schema's UNIQUE(request_id, user_id) is what stops a double DM."""
+        import aiosqlite
+
+        async def go(db):
+            repo = RequestsRepo(db)
+            request_id = await make_request(repo)
+            await repo.add_subscriber(request_id, 7, "watcher")
+            try:
+                await repo.add_subscriber(request_id, 7, "watcher")
+            except aiosqlite.IntegrityError:
+                return "refused", await repo.subscriber_ids(request_id)
+            return "allowed", await repo.subscriber_ids(request_id)
+
+        outcome, ids = run(go)
+        self.assertEqual("refused", outcome)
+        self.assertEqual([7], ids)
+
 
 class ScanListenerTests(unittest.TestCase):
     """Queries the scan-completion listener runs."""
