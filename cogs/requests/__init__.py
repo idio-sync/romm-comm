@@ -13,6 +13,7 @@ from admin_checks import is_admin
 from ..igdb_client import IGDBClient
 from ..search import ROM_View, build_rom_download_url
 from .embeds import build_request_embed
+from .matching import edit_distance_ratio, filter_out_existing
 
 logger = logging.getLogger(__name__)
 
@@ -1179,7 +1180,7 @@ class ExistingGameWithIGDBView(discord.ui.View):
         self.message = None
 
         # Filter IGDB matches to remove games that already exist
-        self.filtered_igdb_matches = self._filter_igdb_matches(existing_matches, igdb_matches)
+        self.filtered_igdb_matches = filter_out_existing(existing_matches, igdb_matches)
         
         # Add select menu for existing games if multiple
         if len(existing_matches) > 1:
@@ -1256,55 +1257,7 @@ class ExistingGameWithIGDBView(discord.ui.View):
         cancel_button.callback = self.cancel_callback
         self.add_item(cancel_button)
     
-    def _filter_igdb_matches(self, existing_roms, igdb_matches):
-        """Filter out IGDB games that already exist in the collection"""
-        if not igdb_matches:
-            return []
-        
-        filtered = []
-        
-        for igdb_game in igdb_matches:
-            igdb_name = igdb_game.get('name', '').lower()
-            
-            # Normalize IGDB name for comparison
-            import re
-            igdb_normalized = re.sub(r'[:\-\s]+', ' ', igdb_name).strip()
-            
-            # Check if this IGDB game matches any existing ROM
-            is_existing = False
-            for rom in existing_roms:
-                rom_name = rom.get('name', '').lower()
-                rom_normalized = re.sub(r'[:\-\s]+', ' ', rom_name).strip()
-                
-                # Check for high similarity or exact match
-                if (igdb_normalized == rom_normalized or 
-                    self._calculate_similarity(igdb_normalized, rom_normalized) > 0.85):
-                    is_existing = True
-                    break
-            
-            # Only include if it doesn't match any existing game
-            if not is_existing:
-                filtered.append(igdb_game)
-        
-        return filtered
     
-    def _calculate_similarity(self, str1: str, str2: str) -> float:
-        """Simple similarity calculation (you can reuse the one from Request cog)"""
-        if not str1 or not str2:
-            return 0.0
-        
-        # Remove common words
-        common_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to'}
-        words1 = set(word for word in str1.lower().split() if word not in common_words)
-        words2 = set(word for word in str2.lower().split() if word not in common_words)
-        
-        if not words1 or not words2:
-            return 0.0
-        
-        intersection = words1.intersection(words2)
-        union = words1.union(words2)
-        
-        return len(intersection) / len(union) if union else 0.0
     
     async def existing_select_callback(self, interaction: discord.Interaction):
         """Handle existing game selection for download"""
@@ -1938,7 +1891,7 @@ class Request(commands.Cog):
                 # Simple matching - let the user decide what they want
                 if (game_name_lower in rom_name or 
                     rom_name in game_name_lower or
-                    self.calculate_similarity(game_name_lower, rom_name) > 0.7):
+                    edit_distance_ratio(game_name_lower, rom_name) > 0.7):
                     matches.append(rom)
 
             return bool(matches), matches
@@ -1947,44 +1900,7 @@ class Request(commands.Cog):
             logger.error(f"Error checking game existence: {e}")
             return False, []
     
-    def calculate_similarity(self, str1: str, str2: str) -> float:
-        """Calculate similarity between two strings"""
-        # Remove common words and characters that might differ
-        common_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to'}
-        special_chars = r'[^\w\s]'
-        
-        str1_clean = re.sub(special_chars, '', ' '.join(word for word in str1.lower().split() if word not in common_words))
-        str2_clean = re.sub(special_chars, '', ' '.join(word for word in str2.lower().split() if word not in common_words))
-        
-        # Simple Levenshtein distance calculation
-        if not str1_clean or not str2_clean:
-            return 0.0
-            
-        longer = str1_clean if len(str1_clean) > len(str2_clean) else str2_clean
-        shorter = str2_clean if len(str1_clean) > len(str2_clean) else str1_clean
-        
-        distance = self._levenshtein_distance(longer, shorter)
-        return 1 - (distance / len(longer))
 
-    def _levenshtein_distance(self, s1: str, s2: str) -> int:
-        """Calculate the Levenshtein distance between two strings"""
-        if len(s1) < len(s2):
-            return self._levenshtein_distance(s2, s1)
-
-        if len(s2) == 0:
-            return len(s1)
-
-        previous_row = range(len(s2) + 1)
-        for i, c1 in enumerate(s1):
-            current_row = [i + 1]
-            for j, c2 in enumerate(s2):
-                insertions = previous_row[j + 1] + 1
-                deletions = current_row[j] + 1
-                substitutions = previous_row[j] + (c1 != c2)
-                current_row.append(min(insertions, deletions, substitutions))
-            previous_row = current_row
-
-        return previous_row[-1]
         
     @commands.Cog.listener()
     async def on_batch_scan_complete(self, new_games: List[Dict[str, str]]):
@@ -2035,7 +1951,7 @@ class Request(commands.Cog):
                         
                         # PRIORITIZE IGDB NAME FOR SIMILARITY CHECK ---
                         name_to_compare = req_igdb_game_name if req_igdb_game_name else req_game
-                        name_match = self.calculate_similarity(name_to_compare, new_game['name']) > 0.8
+                        name_match = edit_distance_ratio(name_to_compare, new_game['name']) > 0.8
                         
                         igdb_match = req_igdb_id is not None and new_game_igdb_id is not None and req_igdb_id == new_game_igdb_id
 
@@ -2143,7 +2059,7 @@ class Request(commands.Cog):
 
                 fulfilled_requests = []
                 for req_id, user_id, req_game in pending_requests:
-                    if self.calculate_similarity(game_name.lower(), req_game.lower()) > 0.8:
+                    if edit_distance_ratio(game_name.lower(), req_game.lower()) > 0.8:
                         fulfilled_requests.append((req_id, user_id, req_game))
 
                 return fulfilled_requests
@@ -2248,7 +2164,7 @@ class Request(commands.Cog):
                                 user_already_requested = True
                                 break
                         # Otherwise use name similarity
-                        elif self.calculate_similarity(game.lower(), req_game.lower()) > 0.8:
+                        elif edit_distance_ratio(game.lower(), req_game.lower()) > 0.8:
                             existing_request_id = req_id
                             original_requester_id = req_user_id
                             original_requester_name = req_username
