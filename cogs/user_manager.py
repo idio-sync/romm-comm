@@ -8,7 +8,13 @@ import asyncio
 import aiohttp
 import aiosqlite
 import time
+import json
+import base64
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 from enum import Enum
+
+from dateutil import parser as date_parser
 
 from admin_checks import is_admin
 
@@ -30,8 +36,56 @@ class InviteOutcome(Enum):
 
     SENT = "sent"
     ALREADY_LINKED = "already_linked"
+    ALREADY_INVITED = "already_invited"
     DM_BLOCKED = "dm_blocked"
     FAILED = "failed"
+
+
+# How often to look for RomM accounts created from invites we sent.
+INVITE_RECONCILE_MINUTES = 10
+
+# Used only when an invite token carries no readable exp claim.
+DEFAULT_INVITE_TTL_SECONDS = 14 * 24 * 60 * 60
+
+
+def parse_timestamp(value) -> Optional[datetime]:
+    """Parse a timestamp from RomM or from our own bookkeeping.
+
+    Anything without an explicit zone is read as UTC, which is what both sides
+    produce, so the results are always safe to compare.
+    """
+    if not value:
+        return None
+    
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = date_parser.parse(str(value))
+        except (ValueError, TypeError, OverflowError):
+            logger.warning(f"Could not parse timestamp {value!r}")
+            return None
+    
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def invite_token_claims(token: str) -> Dict[str, Any]:
+    """Read the unverified claims out of a RomM invite JWT.
+
+    These are never trusted for anything security related - only to key and
+    expire our own bookkeeping - so the signature is deliberately not checked
+    and no JWT dependency is needed.
+    """
+    try:
+        payload = token.split('.')[1]
+        payload += '=' * (-len(payload) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+        return claims if isinstance(claims, dict) else {}
+    except Exception:
+        logger.debug("Could not read claims from invite token", exc_info=True)
+        return {}
 
 class UserManagementView(discord.ui.View):
     """Comprehensive user management interface for admins"""
@@ -791,6 +845,12 @@ class UserManagementView(discord.ui.View):
                 f"ℹ️ {mention} is already linked{detail} - no invite was sent.",
                 ephemeral=True
             )
+        elif outcome is InviteOutcome.ALREADY_INVITED:
+            await interaction.followup.send(
+                f"ℹ️ {mention} already has an invite outstanding - "
+                "no second one was sent.",
+                ephemeral=True
+            )
         elif outcome is InviteOutcome.DM_BLOCKED:
             await interaction.followup.send(
                 f"⚠️ The invite for {mention} was created, but their DMs are closed. "
@@ -859,8 +919,11 @@ class UserManagementView(discord.ui.View):
         members_to_invite = []
         for member in role.members:
             link = await self.cog.db_manager.get_user_link(member.id)
-            if not link:
-                members_to_invite.append(member)
+            if link:
+                continue
+            if await self.cog.has_outstanding_invite(member.id):
+                continue
+            members_to_invite.append(member)
         
         if not members_to_invite:
             await interaction.followup.send("✅ All role members already have accounts or pending invites", ephemeral=True)
@@ -875,6 +938,7 @@ class UserManagementView(discord.ui.View):
         
         sent = 0
         dm_blocked = 0
+        skipped = 0
         failed = 0
         
         for index, member in enumerate(members_to_invite):
@@ -888,6 +952,8 @@ class UserManagementView(discord.ui.View):
                 sent += 1
             elif outcome is InviteOutcome.DM_BLOCKED:
                 dm_blocked += 1
+            elif outcome in (InviteOutcome.ALREADY_LINKED, InviteOutcome.ALREADY_INVITED):
+                skipped += 1
             else:
                 failed += 1
             
@@ -907,6 +973,8 @@ class UserManagementView(discord.ui.View):
         summary = f"✅ Sent: {sent} invites"
         if dm_blocked:
             summary += f"\n⚠️ DMs closed: {dm_blocked} (links are in the log channel)"
+        if skipped:
+            summary += f"\n⏭️ Skipped: {skipped} (already linked or invited)"
         summary += f"\n❌ Failed: {failed} invites"
 
         try:
@@ -1096,6 +1164,8 @@ class UserManager(commands.Cog):
             self.auto_register_role_id = 0 
         self.log_channel_id = self.bot.config.CHANNEL_ID
         self.temp_storage = {}
+        # Invites we have already asked an admin to resolve by hand.
+        self.ambiguous_invites_reported = set()
         
         # Use shared db and set db_manager to point to it
         self.db = bot.db
@@ -1115,7 +1185,25 @@ class UserManager(commands.Cog):
         
         # await self.store_discord_info_for_existing_links()
         
+        self.invite_reconcile_loop.start()
+
         logger.debug("User Manager cog loaded successfully")
+
+    async def cog_unload(self):
+        """Stop background work when the cog is unloaded"""
+        self.invite_reconcile_loop.cancel()
+
+    @tasks.loop(minutes=INVITE_RECONCILE_MINUTES)
+    async def invite_reconcile_loop(self):
+        """Periodically link accounts created from invites we sent"""
+        try:
+            await self.reconcile_pending_invites()
+        except Exception as e:
+            logger.error(f"Invite reconciliation failed: {e}", exc_info=True)
+
+    @invite_reconcile_loop.before_loop
+    async def before_invite_reconcile_loop(self):
+        await self.bot.wait_until_ready()
     
     async def generate_secure_password(self, length=16):
         """Generate a secure random password"""
@@ -1255,6 +1343,10 @@ class UserManager(commands.Cog):
                 logger.info(f"User {member.display_name} already has a linked account.")
                 return InviteOutcome.ALREADY_LINKED
 
+            if await self.has_outstanding_invite(member.id):
+                logger.info(f"User {member.display_name} already has an outstanding invite.")
+                return InviteOutcome.ALREADY_INVITED
+
             invite_data = await self.bot.make_authenticated_request(
                 method="POST",
                 endpoint="users/invite-link",
@@ -1307,6 +1399,7 @@ class UserManager(commands.Cog):
                     )
                     await log_channel.send(embed=log_embed)
                 
+                await self.record_pending_invite(member, invite_token, role)
                 logger.info(f"Successfully sent invite link to {member.display_name}")
                 return InviteOutcome.SENT
                 
@@ -1325,12 +1418,189 @@ class UserManager(commands.Cog):
                             color=discord.Color.yellow()
                         )
                     )
+                # The token exists and an admin may still deliver it by hand,
+                # so this invite is every bit as outstanding as a delivered one.
+                await self.record_pending_invite(member, invite_token, role)
                 return InviteOutcome.DM_BLOCKED
                 
         except Exception as e:
             logger.error(f"Error sending invite link to {member.display_name}: {e}", exc_info=True)
             return InviteOutcome.FAILED
     
+    async def has_outstanding_invite(self, discord_id: int) -> bool:
+        """Whether an invite we sent is still live for this Discord ID."""
+        pending = await self.db_manager.get_pending_invite(discord_id)
+        if not pending:
+            return False
+
+        expires_at = parse_timestamp(pending.get('expires_at'))
+        if expires_at is None:
+            return True
+        return datetime.now(timezone.utc) < expires_at
+
+    async def record_pending_invite(self, member: discord.Member,
+                                    invite_token: str, role: str) -> None:
+        """Note that we are expecting a registration from this member.
+
+        RomM cannot tell us when a token is consumed, so without this row a
+        member who registers through an invite is never linked: they get
+        re-invited forever and role removal cannot deprovision them.
+        """
+        claims = invite_token_claims(invite_token)
+        now = datetime.now(timezone.utc)
+
+        try:
+            expires_at = datetime.fromtimestamp(float(claims.get('exp')), tz=timezone.utc)
+        except (TypeError, ValueError, OverflowError, OSError):
+            expires_at = now + timedelta(seconds=DEFAULT_INVITE_TTL_SECONDS)
+
+        await self.db_manager.add_pending_invite(
+            discord_id=member.id,
+            jti=claims.get('jti'),
+            role=role,
+            sent_at=now.isoformat(),
+            expires_at=expires_at.isoformat()
+        )
+
+    async def reconcile_pending_invites(self) -> int:
+        """Link RomM accounts created from invites we sent.
+
+        RomM exposes no way to observe a token being consumed - no list of
+        outstanding invites, no registration event on the socket - so the only
+        available signal is a new account appearing. An account is claimed for
+        an invite when it was created after that invite went out, is not linked
+        already, and no other outstanding invite could equally claim it.
+        Anything less certain is handed to an admin rather than guessed at.
+
+        Returns the number of links made.
+        """
+        pending = await self.db_manager.get_all_pending_invites()
+        if not pending:
+            return 0
+
+        users = await self.bot.fetch_api_endpoint('users', bypass_cache=True)
+        if users is None:
+            logger.warning("Invite reconciliation skipped: could not fetch RomM users")
+            return 0
+
+        links = await self.db_manager.get_all_user_links()
+        linked_ids = {link['romm_id'] for link in links}
+        now = datetime.now(timezone.utc)
+
+        # Which unlinked accounts each outstanding invite could account for.
+        candidates = {}
+        for invite in pending:
+            sent_at = parse_timestamp(invite.get('sent_at'))
+            if sent_at is None:
+                continue
+
+            candidates[invite['discord_id']] = [
+                user for user in users
+                if user.get('id') not in linked_ids
+                and (parse_timestamp(user.get('created_at')) or now) >= sent_at
+            ]
+
+        # An account that more than one outstanding invite could claim is not
+        # attributable to any of them.
+        claims = Counter(
+            user['id'] for matches in candidates.values() for user in matches
+        )
+
+        linked = 0
+        for invite in pending:
+            discord_id = invite['discord_id']
+            matches = candidates.get(discord_id, [])
+
+            if len(matches) == 1 and claims[matches[0]['id']] == 1:
+                if await self.link_reconciled_account(discord_id, matches[0]):
+                    linked += 1
+            elif matches:
+                await self.report_ambiguous_invite(discord_id, matches)
+            else:
+                expires_at = parse_timestamp(invite.get('expires_at'))
+                if expires_at is not None and now >= expires_at:
+                    await self.db_manager.delete_pending_invite(discord_id)
+                    logger.info(
+                        f"Invite for Discord ID {discord_id} expired without a registration"
+                    )
+
+        return linked
+
+    async def link_reconciled_account(self, discord_id: int, user: Dict[str, Any]) -> bool:
+        """Link a RomM account we attributed to an invite we sent.
+
+        Marked created_by_bot so that losing the auto-register role deprovisions
+        it, which is the behaviour the invite flow was always meant to have.
+        """
+        member = None
+        try:
+            guild = self.bot.get_guild(int(self.bot.config.GUILD_ID))
+        except (AttributeError, TypeError, ValueError):
+            guild = None
+        if guild:
+            member = guild.get_member(discord_id)
+
+        linked = await self.db_manager.add_user_link(
+            discord_id=discord_id,
+            romm_username=user['username'],
+            romm_id=user['id'],
+            discord_username=member.display_name if member else None,
+            discord_avatar=self.get_member_avatar_url(member) if member else None,
+            created_by_bot=True
+        )
+        if not linked:
+            return False
+
+        await self.db_manager.delete_pending_invite(discord_id)
+        self.ambiguous_invites_reported.discard(discord_id)
+        logger.info(
+            f"Linked Discord ID {discord_id} to RomM account {user['username']} "
+            "from an outstanding invite"
+        )
+
+        log_channel = self.bot.get_channel(self.log_channel_id)
+        if log_channel:
+            who = member.mention if member else f"Discord ID {discord_id}"
+            await log_channel.send(
+                embed=discord.Embed(
+                    title="🔗 Invite Registration Linked",
+                    description=f"{who} registered as `{user['username']}`.",
+                    color=discord.Color.green()
+                )
+            )
+        return True
+
+    async def report_ambiguous_invite(self, discord_id: int,
+                                      matches: List[Dict[str, Any]]) -> None:
+        """Ask an admin to resolve an invite we cannot attribute.
+
+        Reported once per invite per bot run: the situation persists until
+        somebody acts on it, and repeating it every sweep would only be noise.
+        """
+        if discord_id in self.ambiguous_invites_reported:
+            return
+        self.ambiguous_invites_reported.add(discord_id)
+
+        names = ", ".join(f"`{user.get('username')}`" for user in matches[:10])
+        logger.info(
+            f"Invite for Discord ID {discord_id} matches {len(matches)} unlinked "
+            "RomM accounts; leaving it for manual linking"
+        )
+
+        log_channel = self.bot.get_channel(self.log_channel_id)
+        if log_channel:
+            await log_channel.send(
+                embed=discord.Embed(
+                    title="❓ Invite Needs Manual Linking",
+                    description=(
+                        f"<@{discord_id}> was invited, and more than one new RomM "
+                        f"account could be theirs: {names}\n"
+                        "Link the right one with `/user_manager`."
+                    ),
+                    color=discord.Color.yellow()
+                )
+            )
+
     async def handle_role_removal(self, member: discord.Member) -> bool:
         """Handle removal of the auto-register role"""
         try:
@@ -1613,7 +1883,11 @@ class UserManager(commands.Cog):
             # Use the new invite-based system. This function's callers only care
             # whether the member ends up with a route to an account.
             outcome = await self.send_invite_link(member)
-            return outcome in (InviteOutcome.SENT, InviteOutcome.ALREADY_LINKED)
+            return outcome in (
+                InviteOutcome.SENT,
+                InviteOutcome.ALREADY_LINKED,
+                InviteOutcome.ALREADY_INVITED
+            )
         
         try:
             # Check if user already has a linked account

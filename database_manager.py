@@ -581,7 +581,22 @@ class MasterDatabase:
             ON user_links(romm_username COLLATE NOCASE)
         ''')
         
-        logger.debug("user_links table and indexes created")
+        logger.debug("Creating pending_invites table...")
+        
+        # Rows live only between sending an invite and seeing the resulting RomM
+        # account. RomM cannot tell us when a token is consumed, so this is what
+        # lets the reconciler know a registration is expected and who it is for.
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS pending_invites (
+                discord_id INTEGER PRIMARY KEY,
+                jti TEXT,
+                role TEXT,
+                sent_at TIMESTAMP NOT NULL,
+                expires_at TIMESTAMP
+            )
+        ''')
+        
+        logger.debug("user_links and pending_invites tables and indexes created")
     
     async def _create_emoji_tables(self, db):
         """Create tables for emoji management"""
@@ -614,6 +629,7 @@ class MasterDatabase:
             'request_subscribers',
             'platform_mappings',
             'user_links',
+            'pending_invites',
             'emoji_sync_state',
             'db_version'
         ]
@@ -735,6 +751,99 @@ class MasterDatabase:
         except Exception as e:
             logger.error(f"Error getting all user links: {e}")
             return []
+
+    async def add_pending_invite(self, discord_id: int, jti: Optional[str],
+                                 role: str, sent_at: str,
+                                 expires_at: Optional[str]) -> bool:
+        """Record that an invite is outstanding for a Discord member.
+
+        sent_at and expires_at are ISO 8601 UTC strings so they compare directly
+        against the created_at RomM reports for its users.
+        """
+        try:
+            async with self.get_connection() as db:
+                await db.execute(
+                    """
+                    INSERT OR REPLACE INTO pending_invites
+                    (discord_id, jti, role, sent_at, expires_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (discord_id, jti, role, sent_at, expires_at)
+                )
+                await db.commit()
+                logger.info(f"Recorded pending invite for Discord ID {discord_id}")
+                return True
+        except Exception as e:
+            logger.error(f"Error recording pending invite: {e}")
+            return False
+
+    async def get_pending_invite(self, discord_id: int) -> Optional[Dict[str, Any]]:
+        """Get the outstanding invite for a Discord ID, if any"""
+        try:
+            async with self.get_connection() as db:
+                cursor = await db.execute(
+                    """
+                    SELECT discord_id, jti, role, sent_at, expires_at
+                    FROM pending_invites
+                    WHERE discord_id = ?
+                    """,
+                    (discord_id,)
+                )
+                row = await cursor.fetchone()
+                
+                if row:
+                    return {
+                        'discord_id': row[0],
+                        'jti': row[1],
+                        'role': row[2],
+                        'sent_at': row[3],
+                        'expires_at': row[4]
+                    }
+                return None
+        except Exception as e:
+            logger.error(f"Error getting pending invite for {discord_id}: {e}")
+            return None
+
+    async def get_all_pending_invites(self) -> List[Dict[str, Any]]:
+        """Get every outstanding invite"""
+        try:
+            async with self.get_connection() as db:
+                cursor = await db.execute(
+                    """
+                    SELECT discord_id, jti, role, sent_at, expires_at
+                    FROM pending_invites
+                    """
+                )
+                rows = await cursor.fetchall()
+                
+                return [
+                    {
+                        'discord_id': row[0],
+                        'jti': row[1],
+                        'role': row[2],
+                        'sent_at': row[3],
+                        'expires_at': row[4]
+                    }
+                    for row in rows
+                ]
+        except Exception as e:
+            logger.error(f"Error getting pending invites: {e}")
+            return []
+
+    async def delete_pending_invite(self, discord_id: int) -> bool:
+        """Delete the outstanding invite for a Discord ID"""
+        try:
+            async with self.get_connection() as db:
+                await db.execute(
+                    "DELETE FROM pending_invites WHERE discord_id = ?",
+                    (discord_id,)
+                )
+                await db.commit()
+                logger.info(f"Cleared pending invite for Discord ID {discord_id}")
+                return True
+        except Exception as e:
+            logger.error(f"Error deleting pending invite: {e}")
+            return False
     
     async def initialize_platform_mappings(self, session: Optional[aiohttp.ClientSession] = None):
         """Initialize the master platform list from remote JSON file with local fallback
