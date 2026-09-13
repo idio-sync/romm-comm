@@ -73,6 +73,7 @@ stale seconds later. The tests pin the endpoint and params so a later
 refactor cannot quietly switch helpers.
 """
 
+import pathlib
 import unittest
 from typing import Any, Dict, Optional
 
@@ -133,15 +134,21 @@ class GetServerConfigTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await client.get_server_config())
 
 
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
 class ScopeTests(unittest.TestCase):
+    """Anchored on ROOT rather than the cwd, as tests/test_cog_lookups.py is."""
+
     def test_oauth_grant_requests_assets_read(self):
         """netplay/list is scope assets.read; without it every call 403s."""
-        source = open("romm_client.py", encoding="utf-8").read()
-        scope_line = next(ln for ln in source.splitlines() if "add_field('scope'" in ln)
-        self.assertIn("assets.read", scope_line)
+        source = (ROOT / "romm_client.py").read_text(encoding="utf-8")
+        scope_lines = [ln for ln in source.splitlines() if "add_field('scope'" in ln]
+        self.assertTrue(scope_lines, "no OAuth scope line found in romm_client.py")
+        self.assertIn("assets.read", scope_lines[0])
 
     def test_readme_documents_assets_read(self):
-        readme = open("README.md", encoding="utf-8").read()
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("assets.read", readme)
 
 
@@ -249,13 +256,15 @@ poll."
 - Consumes: nothing (pure module — no Discord, no HTTP)
 - Produces:
   - `NetplayState` enum: `PENDING`, `LIVE`, `ENDED`, `EXPIRED`
-  - `NetplayWatcher` dataclass with fields `rom_id: int`, `rom_name: str`, `platform_name: str`, `requester_id: int`, `channel_id: int`, `created_at: float`, `message_id: Optional[int] = None`, `state: NetplayState = PENDING`, `rooms: Dict[str, Any] = {}`, `consecutive_failures: int = 0`, `last_render_key: Optional[str] = None`
+  - `NetplayWatcher` dataclass with fields `rom_id: int`, `rom_name: str`, `requester_id: int`, `requester_name: str`, `channel_id: int`, `created_at: float`, `platform_display: str = ""`, `cover_url: Optional[str] = None`, `message_id: Optional[int] = None`, `state: NetplayState = PENDING`, `rooms: Dict[str, Any] = {}`, `consecutive_failures: int = 0`, `last_render_key: Optional[str] = None`
   - `NetplayWatcher.is_terminal -> bool`
 
-> `platform_name` holds a **display name** ("Super Nintendo Entertainment
-> System"), sourced from RomM's `rom['platform_display_name']`. That is what
-> `PlatformEmoji.format()` keys on — its `PLATFORM_VARIANTS` table is keyed by
-> display name, not slug. Storing a slug here would silently lose the emoji.
+> `platform_display` holds the **already-formatted** string from
+> `bot.platform_emoji.format(name)` — `"Nintendo 64 <emoji>"`, a name *and* an
+> emoji. Formatting once at announce time rather than on every render keeps the
+> emoji lookup out of the poll loop, and means the watcher carries everything
+> the embed needs. `requester_name` is likewise captured at announce time: the
+> poll loop cannot rely on `bot.get_user()` still having the user cached.
   - `advance(watcher, rooms, now, pending_timeout=900.0, failure_threshold=3) -> bool` — mutates the watcher, returns whether anything a reader would see changed
 
 **Context:** This is the whole behavioural core, and it is pure so it can be tested exhaustively without a bot. Two rules matter most: a `None` poll is a failure and must not end a session, and terminal states never change again.
@@ -285,8 +294,8 @@ def make_watcher(**overrides):
     values = {
         "rom_id": 50265,
         "rom_name": "Super Bomberman",
-        "platform_name": "Super Nintendo Entertainment System",
         "requester_id": 1,
+        "requester_name": "alice",
         "channel_id": 2,
         "created_at": 1000.0,
     }
@@ -384,6 +393,15 @@ class FailureTests(unittest.TestCase):
         for t in (1010.0, 1020.0, 1030.0, 1040.0):
             advance(w, None, now=t, failure_threshold=3)
         self.assertIs(w.state, NetplayState.PENDING)
+
+    def test_pending_still_expires_while_polls_keep_failing(self):
+        """Otherwise an unreachable RomM fills the watcher cap permanently."""
+        w = make_watcher()
+        advance(w, None, now=1010.0, pending_timeout=900.0, failure_threshold=3)
+        self.assertIs(w.state, NetplayState.PENDING)
+        changed = advance(w, None, now=1900.0, pending_timeout=900.0, failure_threshold=3)
+        self.assertIs(w.state, NetplayState.EXPIRED)
+        self.assertTrue(changed)
 
 
 class TerminalTests(unittest.TestCase):
@@ -489,10 +507,15 @@ class NetplayWatcher:
 
     rom_id: int
     rom_name: str
-    platform_name: str
     requester_id: int
+    # Captured at announce time: the poll loop cannot assume bot.get_user()
+    # still has this user cached, and a guild nickname is not what
+    # get_user().display_name returns anyway.
+    requester_name: str
     channel_id: int
     created_at: float
+    platform_display: str = ""
+    cover_url: Optional[str] = None
     message_id: Optional[int] = None
     state: NetplayState = NetplayState.PENDING
     rooms: Dict[str, Any] = field(default_factory=dict)
@@ -522,7 +545,7 @@ def advance(
         return False
 
     if rooms is None:
-        return _handle_failure(watcher, failure_threshold)
+        return _handle_failure(watcher, now, pending_timeout, failure_threshold)
 
     watcher.consecutive_failures = 0
 
@@ -535,7 +558,12 @@ def advance(
     return _handle_empty(watcher, now, pending_timeout)
 
 
-def _handle_failure(watcher: NetplayWatcher, failure_threshold: int) -> bool:
+def _handle_failure(
+    watcher: NetplayWatcher,
+    now: float,
+    pending_timeout: float,
+    failure_threshold: int,
+) -> bool:
     """A failed poll is not an ended session - until it keeps failing.
 
     There is no retry underneath this: list_netplay_rooms goes through
@@ -543,11 +571,19 @@ def _handle_failure(watcher: NetplayWatcher, failure_threshold: int) -> bool:
     resilience the design has, so it is deliberately forgiving.
     """
     watcher.consecutive_failures += 1
-    if (
-        watcher.state is NetplayState.LIVE
-        and watcher.consecutive_failures >= failure_threshold
-    ):
-        watcher.state = NetplayState.ENDED
+
+    if watcher.state is NetplayState.LIVE:
+        if watcher.consecutive_failures >= failure_threshold:
+            watcher.state = NetplayState.ENDED
+            return True
+        return False
+
+    # PENDING. The timeout has to be checked here too, not only on the empty
+    # -success path: with RomM unreachable, every announcement would otherwise
+    # sit in PENDING forever, fill the watcher cap, and never drain - which is
+    # exactly the self-limiting property the poll set depends on.
+    if now - watcher.created_at >= pending_timeout:
+        watcher.state = NetplayState.EXPIRED
         return True
     return False
 
@@ -568,7 +604,7 @@ def _handle_empty(watcher: NetplayWatcher, now: float, pending_timeout: float) -
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_netplay_watcher.py -v`
-Expected: PASS (18 tests)
+Expected: PASS (19 tests)
 
 - [ ] **Step 6: Lint**
 
@@ -604,12 +640,12 @@ consecutive-failure count is the only resilience in the design."
 - Consumes: `NetplayState`, `NetplayWatcher` from Task 2
 - Produces:
   - `render_key(watcher: NetplayWatcher) -> str` — everything the embed shows, flattened; used for edit suppression
-  - `build_netplay_embed(watcher, *, domain, requester_name, core_name=None, cover_url=None, platform_display='') -> discord.Embed`
+  - `build_netplay_embed(watcher, *, domain, core_name=None) -> discord.Embed`
 
-> `platform_display` is the already-formatted string from
-> `bot.platform_emoji.format(name)`, which returns `"Nintendo 64 <emoji>"` —
-> a name *and* an emoji, not a bare emoji. It is rendered as its own field
-> rather than spliced into the title.
+> Everything else the embed shows — `requester_name`, `platform_display`,
+> `cover_url` — rides on the watcher, captured once at announce time. That
+> keeps the poll loop from re-deriving them (and from depending on
+> `bot.get_user()` still having the requester cached).
   - `STATE_COLORS`, `STATE_TITLES` dicts
   - `ENDED_HINT` constant
 
@@ -646,8 +682,8 @@ def make_watcher(**overrides):
     values = {
         "rom_id": 50265,
         "rom_name": "Super Bomberman",
-        "platform_name": "Super Nintendo Entertainment System",
         "requester_id": 1,
+        "requester_name": "alice",
         "channel_id": 2,
         "created_at": 1000.0,
     }
@@ -657,7 +693,6 @@ def make_watcher(**overrides):
 
 def build(watcher, **kwargs):
     kwargs.setdefault("domain", "https://roms.example.com")
-    kwargs.setdefault("requester_name", "alice")
     return build_netplay_embed(watcher, **kwargs)
 
 
@@ -731,12 +766,16 @@ class EmbedTests(unittest.TestCase):
         self.assertIn("snes9x", body)
 
     def test_missing_cover_art_is_not_fatal(self):
-        embed = build(make_watcher(), cover_url=None)
+        embed = build(make_watcher(cover_url=None))
         self.assertIsNotNone(embed)
 
     def test_cover_art_is_used_when_present(self):
-        embed = build(make_watcher(), cover_url="https://example.com/c.png")
+        embed = build(make_watcher(cover_url="https://example.com/c.png"))
         self.assertEqual(embed.thumbnail.url, "https://example.com/c.png")
+
+    def test_platform_is_shown_when_known(self):
+        embed = build(make_watcher(platform_display="SNES ⭐"))
+        self.assertIn("SNES ⭐", [f.value for f in embed.fields])
 
 
 if __name__ == "__main__":
@@ -845,13 +884,13 @@ def render_key(watcher: NetplayWatcher) -> str:
     return "\n".join(parts)
 
 
-def build_description(watcher: NetplayWatcher, domain: str, requester_name: str) -> str:
+def build_description(watcher: NetplayWatcher, domain: str) -> str:
     """The line under the title, which is what carries the call to action."""
     link = player_link(domain, watcher.rom_id)
 
     if watcher.state is NetplayState.PENDING:
         return (
-            f"**{requester_name}** wants to play — no room is open yet.\n"
+            f"**{watcher.requester_name}** wants to play — no room is open yet.\n"
             f"[Open the player]({link}) and start one, or wait for theirs."
         )
     if watcher.state is NetplayState.LIVE:
@@ -865,28 +904,25 @@ def build_netplay_embed(
     watcher: NetplayWatcher,
     *,
     domain: str,
-    requester_name: str,
     core_name: Optional[str] = None,
-    cover_url: Optional[str] = None,
-    platform_display: str = "",
 ) -> discord.Embed:
     """The announcement, in whatever state it is currently in.
 
-    `platform_display` is whatever bot.platform_emoji.format() returned - a
-    platform name with its emoji appended, not a bare emoji - so it goes in a
+    watcher.platform_display is whatever bot.platform_emoji.format() returned -
+    a platform name with its emoji appended, not a bare emoji - so it goes in a
     field of its own rather than being spliced into the title.
     """
     embed = discord.Embed(
         title=f"{STATE_TITLES[watcher.state]} · {watcher.rom_name}"[:256],
-        description=build_description(watcher, domain, requester_name),
+        description=build_description(watcher, domain),
         color=STATE_COLORS[watcher.state](),
     )
 
-    if cover_url:
-        embed.set_thumbnail(url=cover_url)
+    if watcher.cover_url:
+        embed.set_thumbnail(url=watcher.cover_url)
 
-    if platform_display:
-        embed.add_field(name="Platform", value=platform_display, inline=True)
+    if watcher.platform_display:
+        embed.add_field(name="Platform", value=watcher.platform_display, inline=True)
 
     if core_name:
         embed.add_field(name="Core", value=core_name, inline=True)
@@ -922,7 +958,7 @@ __all__ = [
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_netplay_embeds.py -v`
-Expected: PASS (14 tests)
+Expected: PASS (15 tests)
 
 - [ ] **Step 6: Lint**
 
@@ -1074,11 +1110,18 @@ generalising the other one would mean changing the request flow."
 - Produces:
   - `Netplay(commands.Cog)` with `bot`, `enabled: bool`, `server_enabled: bool`, `watchers: Dict[int, NetplayWatcher]`
   - `async Netplay.check_server() -> None` — sets `server_enabled`
-  - `async Netplay.resolve_roms(platform: str, game: str) -> Tuple[List[Dict], bool]` — `(roms, truncated)`
+  - `async Netplay.resolve_roms(platform, game) -> Tuple[Optional[List[Dict]], bool, str]` — `(roms, truncated, platform_display)`
   - `Netplay.domain_configured() -> bool`
   - `setup(bot)` in `cogs/netplay/__init__.py`
 
 **Context:** `core_cogs` (bot.py:677-687) is an unconditional list — no core cog is env-gated, and the `{STEM}_ENABLED` convention belongs to `load_integration_cogs`, which this cog deliberately does not use. So `NETPLAY_ENABLED` is enforced inside the cog, not at load time. Every core cog also has an entry in the parallel `cog_dependencies` dict; omitting it is easy to miss.
+
+**Two py-cord facts dictate how the startup probe is wired.** Both were verified against the installed py-cord 2.6.1, and getting either wrong makes `/netplay` refuse every invocation on a real bot:
+
+1. **`cog_load` is not a py-cord hook.** `commands.Cog` exposes `cog_unload` and nothing else — `cog_load` is discord.py. The spec's §8 mentions it; the spec is wrong on that point. (`cogs/user_manager.py:1199` already has a dead `cog_load`, which is why its `invite_reconcile_loop` never starts — a pre-existing bug, out of scope here.)
+2. **An `on_ready` listener on this cog will not fire on first boot.** `bot.py:779` calls `load_all_cogs()` from *inside* `on_ready`, and `Client.dispatch` snapshots its listener list before invoking them — so a cog added during that dispatch is never called for it.
+
+So the probe is kicked off from `__init__`, and `server_enabled` starts `True` so that a probe which cannot reach RomM fails **open**, as spec §9 requires.
 
 `DOMAIN` defaults to the literal string `No website configured` (bot.py:309). Unset, the join link would render as `No website configured/rom/50265/ejs`.
 
@@ -1101,12 +1144,21 @@ from types import SimpleNamespace
 from cogs.netplay.cog import Netplay
 from cogs.netplay.views import MAX_SELECT_OPTIONS
 
+PLATFORM = "Super Nintendo Entertainment System"
 
-def make_cog(rom_payload=None, domain="https://roms.example.com"):
+
+def make_cog(rom_payload=None, domain="https://roms.example.com", platform_id=1):
     cog = object.__new__(Netplay)
+
+    async def find_platform_by_name(name, platforms_data=None):
+        """Mirrors bot.find_platform_by_name's (id, display_name) tuple."""
+        return (platform_id, PLATFORM) if platform_id else (None, None)
+
     cog.bot = SimpleNamespace(
         config=SimpleNamespace(DOMAIN=domain),
         fetch_api_endpoint=_fetcher(rom_payload),
+        find_platform_by_name=find_platform_by_name,
+        platform_emoji=SimpleNamespace(format=lambda name: name + " :snes:"),
     )
     cog.enabled = True
     cog.server_enabled = True
@@ -1126,33 +1178,59 @@ def roms(count):
 
 class ResolveRomsTests(unittest.IsolatedAsyncioTestCase):
     async def test_no_matches_returns_empty(self):
-        found, truncated = await make_cog(roms(0)).resolve_roms("snes", "nothing")
+        found, truncated, _ = await make_cog(roms(0)).resolve_roms("snes", "nothing")
         self.assertEqual(found, [])
         self.assertFalse(truncated)
 
     async def test_single_match_is_returned_alone(self):
-        found, truncated = await make_cog(roms(1)).resolve_roms("snes", "bomberman")
+        found, truncated, _ = await make_cog(roms(1)).resolve_roms("snes", "bomberman")
         self.assertEqual(len(found), 1)
         self.assertFalse(truncated)
 
     async def test_several_matches_all_returned(self):
-        found, truncated = await make_cog(roms(5)).resolve_roms("snes", "bomberman")
+        found, truncated, _ = await make_cog(roms(5)).resolve_roms("snes", "bomberman")
         self.assertEqual(len(found), 5)
         self.assertFalse(truncated)
 
     async def test_exactly_the_cap_is_not_truncated(self):
-        found, truncated = await make_cog(roms(MAX_SELECT_OPTIONS)).resolve_roms("snes", "b")
+        found, truncated, _ = await make_cog(roms(MAX_SELECT_OPTIONS)).resolve_roms("snes", "b")
         self.assertEqual(len(found), MAX_SELECT_OPTIONS)
         self.assertFalse(truncated)
 
     async def test_over_the_cap_truncates_and_says_so(self):
-        found, truncated = await make_cog(roms(40)).resolve_roms("snes", "b")
+        found, truncated, _ = await make_cog(roms(40)).resolve_roms("snes", "b")
         self.assertEqual(len(found), MAX_SELECT_OPTIONS)
         self.assertTrue(truncated)
 
     async def test_a_failed_search_is_not_an_empty_one(self):
-        found, truncated = await make_cog(None).resolve_roms("snes", "b")
+        found, _, _ = await make_cog(None).resolve_roms("snes", "b")
         self.assertIsNone(found)
+
+    async def test_unknown_platform_returns_no_roms(self):
+        cog = make_cog(roms(5), platform_id=None)
+        found, truncated, _ = await cog.resolve_roms("nope", "b")
+        self.assertEqual(found, [])
+        self.assertFalse(truncated)
+
+    async def test_platform_display_comes_from_the_platform_lookup(self):
+        """Not from the ROM payload, which has no reliable display-name key."""
+        _, _, display = await make_cog(roms(1)).resolve_roms("snes", "b")
+        self.assertIn(PLATFORM, display)
+
+    async def test_search_term_is_encoded_and_both_platform_params_sent(self):
+        """An & in a title would otherwise truncate the query string."""
+        cog = make_cog(roms(1))
+        seen = []
+
+        async def capture(endpoint, bypass_cache=False):
+            seen.append(endpoint)
+            return roms(1)
+
+        cog.bot.fetch_api_endpoint = capture
+        await cog.resolve_roms("snes", "Tetris & Dr. Mario")
+        query = [e for e in seen if e.startswith("roms?")][0]
+        self.assertNotIn("& Dr", query)
+        self.assertIn("platform_ids=", query)
 
 
 class DomainGuardTests(unittest.TestCase):
@@ -1219,6 +1297,7 @@ load_integration_cogs, which this cog is deliberately not part of.
 import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 import discord
 from discord.ext import commands
@@ -1241,11 +1320,20 @@ class Netplay(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.enabled = bot.config.NETPLAY_ENABLED
-        self.server_enabled = False
+        # Starts True so a probe that cannot reach RomM fails open. Flipped to
+        # False only when RomM positively reports netplay off.
+        self.server_enabled = True
         self.watchers: Dict[int, NetplayWatcher] = {}
 
         if not self.enabled:
             logger.info("Netplay disabled (NETPLAY_ENABLED=false)")
+            return
+
+        # Not an on_ready listener: bot.py:779 calls load_all_cogs() from
+        # inside on_ready, and Client.dispatch snapshots its listener list
+        # before running them, so a cog added during that dispatch never sees
+        # that event. Not cog_load either - py-cord has no such hook.
+        bot.loop.create_task(self.check_server())
 
     # ------------------------------------------------------------- readiness
 
@@ -1255,12 +1343,14 @@ class Netplay(commands.Cog):
         return bool(domain) and domain != UNSET_DOMAIN
 
     async def check_server(self) -> None:
-        """Ask RomM once whether netplay is on, and warn about ICE servers.
+        """Ask RomM once whether netplay is usable, and say so in the log.
 
-        Fails open: a probe that cannot reach RomM (it is still starting, say)
-        leaves the feature enabled rather than silently disabling it until the
-        next bot restart.
+        Fails open throughout: a probe that cannot reach RomM (it is still
+        starting, say) leaves the feature enabled rather than silently
+        disabling it until the next bot restart.
         """
+        await self.bot.wait_until_ready()
+
         config = await self.bot.romm.get_server_config()
 
         if config is None:
@@ -1268,7 +1358,6 @@ class Netplay(commands.Cog):
                 "Could not read RomM config to check netplay support; leaving "
                 "netplay enabled. Commands will fail if the server has it off."
             )
-            self.server_enabled = True
             return
 
         self.server_enabled = bool(config.get("EJS_NETPLAY_ENABLED"))
@@ -1287,7 +1376,26 @@ class Netplay(commands.Cog):
                 "generally fail to connect."
             )
 
+        await self.check_scope()
+
         logger.info("✅ RomM netplay available")
+
+    async def check_scope(self) -> None:
+        """Name the missing scope now rather than leaving a silent dead poll.
+
+        /api/config needs no special scope, so it cannot detect this: a token
+        without assets.read passes that check and then returns None from every
+        single room poll. Every announcement would expire with "No session
+        started" and nothing would say why. One throwaway call finds it.
+        """
+        probe = await self.bot.romm.list_netplay_rooms(0)
+        if probe is None:
+            logger.warning(
+                "Netplay room lookup failed on startup. The most likely cause "
+                "is that the RomM token is missing the 'assets.read' scope, "
+                "which /api/netplay/list requires - reissue the token with it. "
+                "Announcements will post but never find a room."
+            )
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -1298,52 +1406,84 @@ class Netplay(commands.Cog):
 
     async def resolve_roms(
         self, platform: str, game: str
-    ) -> Tuple[Optional[List[Dict[str, Any]]], bool]:
+    ) -> Tuple[Optional[List[Dict[str, Any]]], bool, str]:
         """Search RomM for ROMs matching `game` on `platform`.
 
-        Returns (roms, truncated). `roms` is None when the search itself
-        failed, which is not the same as finding nothing. Truncation is
-        reported rather than hidden: Discord caps a select at 25 options and
-        the caller has to tell the user when matches were dropped.
+        Returns (roms, truncated, platform_display). `roms` is None when the
+        search itself failed, which is not the same as finding nothing.
+        Truncation is reported rather than hidden: Discord caps a select at 25
+        options and the caller has to tell the user when matches were dropped.
+
+        The display name comes from the platform lookup we already did, not
+        from the ROM payload - no RomM rom row in this codebase is read for a
+        display-name key, and inventing one risks it silently being absent.
         """
-        platform_id, _ = await self.bot.find_platform_by_name(
+        platform_id, platform_name = await self.bot.find_platform_by_name(
             platform, await self.bot.fetch_api_endpoint('platforms')
         )
         if not platform_id:
-            return [], False
+            return [], False, ""
 
+        display = self.bot.platform_emoji.format(platform_name) if platform_name else ""
+
+        # Both platform_id and platform_ids, matching every other call site
+        # (cogs/search.py:1495, :1708). The term is quoted because an & or #
+        # in a game title would otherwise truncate or corrupt the query.
         payload = await self.bot.fetch_api_endpoint(
-            f'roms?platform_id={platform_id}&search_term={game}&limit={ROM_SEARCH_LIMIT}',
+            f'roms?platform_id={platform_id}&platform_ids={platform_id}'
+            f'&search_term={quote(game)}&limit={ROM_SEARCH_LIMIT}',
             bypass_cache=True,
         )
         if payload is None:
-            return None, False
+            return None, False, display
 
-        items = payload.get('items', payload if isinstance(payload, list) else [])
+        if isinstance(payload, dict):
+            items = payload.get('items', [])
+        elif isinstance(payload, list):
+            items = payload
+        else:
+            items = []
+
         truncated = len(items) > MAX_SELECT_OPTIONS
-        return list(items[:MAX_SELECT_OPTIONS]), truncated
+        return list(items[:MAX_SELECT_OPTIONS]), truncated, display
 ```
 
-> `find_platform_by_name` already exists on the bot and is what `cogs/search.py` uses; `resolve_roms` returning `([], False)` for an unknown platform lets the command give a platform-specific error.
+> `find_platform_by_name` already exists on the bot (bot.py:585) and is what `cogs/search.py` uses; returning `([], False, "")` for an unknown platform lets the command give a platform-specific error.
 
 - [ ] **Step 6: Add `setup()` to the package**
 
-Append to `cogs/netplay/__init__.py`:
+Rewrite `cogs/netplay/__init__.py` so it has a single import block and a
+single `__all__`, matching `cogs/requests/__init__.py`. Keep the docstring
+already at the top of the file, then:
 
 ```python
-from .cog import Netplay  # noqa: E402  (after the pure modules, to avoid a cycle)
+from .cog import Netplay
+from .embeds import ENDED_HINT, build_netplay_embed, render_key
+from .watcher import NetplayState, NetplayWatcher, advance
 
-__all__.append("Netplay")
+__all__ = [
+    "ENDED_HINT",
+    "Netplay",
+    "NetplayState",
+    "NetplayWatcher",
+    "advance",
+    "build_netplay_embed",
+    "render_key",
+]
 
 
 def setup(bot):
     bot.add_cog(Netplay(bot))
 ```
 
+There is no import cycle: `cog.py` imports from `.embeds`, `.views` and
+`.watcher` directly, never from the package. Because everything sits in one
+block at the top, no `# noqa: E402` is needed.
+
 - [ ] **Step 7: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_netplay_resolution.py -v`
-Expected: PASS (9 tests)
+Expected: PASS (12 tests)
 
 - [ ] **Step 8: Run the whole suite — the extension test now covers this cog**
 
@@ -1386,10 +1526,16 @@ domain_configured() guards it before it can be pasted into a join URL."
 - Consumes: `resolve_roms`, `domain_configured` (Task 5); `RomSelectView` (Task 4); `NetplayWatcher` (Task 2); `build_netplay_embed` (Task 3)
 - Produces:
   - `Netplay.netplay` slash command
-  - `Netplay.register_watcher(rom, ctx) -> NetplayWatcher`
-  - `Netplay.platform_autocomplete` (reuses `platforms_repo.search_for_autocomplete`)
+  - `Netplay.register_watcher(rom, *, requester_id, requester_name, channel_id, platform_display) -> NetplayWatcher`
+  - `Netplay.live_watcher_for(rom_id) -> Optional[NetplayWatcher]`
+  - `Netplay.platform_autocomplete` (from `bot.fetch_api_endpoint('platforms')`)
 
 **Context:** The command mirrors `/search`'s shape — a `platform` autocomplete plus a free-text `game` — because that is the proven pattern in this codebase and there is no ROM-name autocomplete to do better with.
+
+Two things to get right, both verified against the repo:
+
+- **Autocomplete from `bot.fetch_api_endpoint('platforms')`, like `cogs/search.py:1341`** — *not* from the requests cog's `platforms_repo`. That repo returns `aiosqlite.Row` objects with three columns (`display_name, in_romm, folder_name`), so unpacking them as pairs raises `ValueError`; and it would couple netplay to `cogs.requests` and `aiosqlite`, which `cog_dependencies` does not declare. Netplay only wants platforms RomM actually has, which is exactly what the API returns.
+- **`ctx.respond`, never `ctx.send`.** `ApplicationContext.send` is `Messageable.send` — a plain channel message that does **not** resolve the deferred interaction, leaving the user with a stuck "thinking…" placeholder. There is no `ctx.send(` anywhere in this repo. After a `defer()`, `ctx.respond()` returns a `WebhookMessage` (application webhooks force `wait=True`), so its return value has `.id` and `.edit`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1425,38 +1571,60 @@ def make_cog(max_watchers=25):
     return cog
 
 
-ROM = {"id": 50265, "name": "Super Bomberman",
-       "platform_display_name": "Super Nintendo Entertainment System"}
+ROM = {"id": 50265, "name": "Super Bomberman", "url_cover": "https://x/c.png"}
+
+
+def register(cog, rom=ROM, requester_id=7):
+    return cog.register_watcher(
+        rom,
+        requester_id=requester_id,
+        requester_name="alice",
+        channel_id=9,
+        platform_display="SNES",
+    )
 
 
 class RegisterWatcherTests(unittest.TestCase):
     def test_new_watcher_starts_pending(self):
-        cog = make_cog()
-        watcher = cog.register_watcher(ROM, requester_id=7, channel_id=9)
+        watcher = register(make_cog())
         self.assertIs(watcher.state, NetplayState.PENDING)
         self.assertEqual(watcher.rom_id, 50265)
         self.assertEqual(watcher.rom_name, "Super Bomberman")
 
+    def test_watcher_carries_what_the_embed_needs(self):
+        """The poll loop re-renders without a ctx, so this is captured now."""
+        watcher = register(make_cog())
+        self.assertEqual(watcher.requester_name, "alice")
+        self.assertEqual(watcher.platform_display, "SNES")
+        self.assertEqual(watcher.cover_url, "https://x/c.png")
+
     def test_watcher_is_stored_by_rom_id(self):
         cog = make_cog()
-        cog.register_watcher(ROM, requester_id=7, channel_id=9)
+        register(cog)
         self.assertIn(50265, cog.watchers)
 
     def test_at_capacity_is_reported(self):
         cog = make_cog(max_watchers=1)
-        cog.register_watcher(ROM, requester_id=7, channel_id=9)
+        register(cog)
         self.assertTrue(cog.at_capacity())
 
     def test_below_capacity_is_not(self):
         self.assertFalse(make_cog(max_watchers=1).at_capacity())
 
-    def test_re_announcing_the_same_rom_reuses_the_slot(self):
-        """Two posts polling one rom id would double the request rate."""
+    def test_a_live_watcher_for_the_rom_is_found(self):
+        """Re-announcing must not orphan the first post."""
         cog = make_cog()
-        first = cog.register_watcher(ROM, requester_id=7, channel_id=9)
-        second = cog.register_watcher(ROM, requester_id=8, channel_id=9)
-        self.assertEqual(len(cog.watchers), 1)
-        self.assertIsNot(first, second)
+        register(cog)
+        self.assertIsNotNone(cog.live_watcher_for(50265))
+
+    def test_no_live_watcher_for_an_unannounced_rom(self):
+        self.assertIsNone(make_cog().live_watcher_for(50265))
+
+    def test_a_terminal_watcher_does_not_block_re_announcing(self):
+        cog = make_cog()
+        watcher = register(cog)
+        watcher.state = NetplayState.ENDED
+        self.assertIsNone(cog.live_watcher_for(50265))
 
 
 if __name__ == "__main__":
@@ -1484,21 +1652,41 @@ Append to the `Netplay` class in `cogs/netplay/cog.py`:
         """
         return len(self.watchers) >= self.bot.config.NETPLAY_MAX_WATCHERS
 
-    def register_watcher(
-        self, rom: Dict[str, Any], requester_id: int, channel_id: int
-    ) -> NetplayWatcher:
-        """Start tracking one ROM. Keyed by rom id, so re-announcing replaces.
+    def live_watcher_for(self, rom_id: int) -> Optional[NetplayWatcher]:
+        """A non-terminal watcher already tracking this ROM, if there is one.
 
-        One watcher per ROM rather than per post: two posts for the same game
-        would poll the same endpoint twice a tick for identical answers.
+        One watcher per ROM: two posts for the same game would poll the same
+        endpoint twice a tick for identical answers, and whichever post lost
+        the registry slot would never be edited again - stranded forever on
+        "waiting for a room".
+        """
+        watcher = self.watchers.get(rom_id)
+        return watcher if watcher and not watcher.is_terminal else None
+
+    def register_watcher(
+        self,
+        rom: Dict[str, Any],
+        *,
+        requester_id: int,
+        requester_name: str,
+        channel_id: int,
+        platform_display: str,
+    ) -> NetplayWatcher:
+        """Start tracking one ROM.
+
+        Everything the embed will need is captured here rather than looked up
+        per render: the poll loop has no ctx, and bot.get_user() may no longer
+        have the requester cached by the time a room opens.
         """
         watcher = NetplayWatcher(
             rom_id=int(rom["id"]),
             rom_name=str(rom.get("name") or rom.get("fs_name") or "Unknown"),
-            platform_name=str(rom.get("platform_display_name") or ""),
             requester_id=requester_id,
+            requester_name=requester_name,
             channel_id=channel_id,
             created_at=time.time(),
+            platform_display=platform_display,
+            cover_url=rom.get("url_cover") or None,
         )
         self.watchers[watcher.rom_id] = watcher
         return watcher
@@ -1506,13 +1694,25 @@ Append to the `Netplay` class in `cogs/netplay/cog.py`:
     # --------------------------------------------------------------- command
 
     async def platform_autocomplete(self, ctx: discord.AutocompleteContext):
-        """Same platform list the request flow offers."""
+        """Platforms RomM actually has, the way cogs/search.py:1341 does it.
+
+        Not the requests cog's platforms_repo: that returns three-column
+        aiosqlite Rows (display_name, in_romm, folder_name), it offers
+        platforms RomM does *not* have - which cannot be played - and it would
+        couple this cog to cogs.requests and aiosqlite.
+        """
         try:
-            requests_cog = self.bot.get_cog('Request')
-            if requests_cog is None:
+            raw_platforms = await self.bot.fetch_api_endpoint('platforms')
+            if not raw_platforms:
                 return []
-            results = await requests_cog.platforms_repo.search_for_autocomplete(ctx.value)
-            return [name for name, _ in results] if results else []
+
+            names = [
+                self.bot.get_platform_display_name(p)
+                for p in raw_platforms
+                if self.bot.get_platform_display_name(p)
+            ]
+            user_input = ctx.value.lower()
+            return [name for name in names if user_input in name.lower()][:25]
         except Exception as e:
             logger.error(f"Error in netplay platform autocomplete: {e}")
             return []
@@ -1546,6 +1746,8 @@ Append to the `Netplay` class in `cogs/netplay/cog.py`:
             )
             return
 
+        # Checked again in announce() against the resolved rom id, which is
+        # what lets an already-watched ROM through without needing a new slot.
         if self.at_capacity():
             await ctx.respond(
                 "I am already tracking as many netplay sessions as I can. "
@@ -1553,7 +1755,7 @@ Append to the `Netplay` class in `cogs/netplay/cog.py`:
             )
             return
 
-        roms, truncated = await self.resolve_roms(platform, game)
+        roms, truncated, platform_display = await self.resolve_roms(platform, game)
 
         if roms is None:
             await ctx.respond("Could not reach RomM to search for that game.")
@@ -1564,7 +1766,7 @@ Append to the `Netplay` class in `cogs/netplay/cog.py`:
             return
 
         if len(roms) == 1:
-            await self.announce(ctx, roms[0])
+            await self.announce(ctx, roms[0], platform_display)
             return
 
         note = ""
@@ -1581,35 +1783,47 @@ Append to the `Netplay` class in `cogs/netplay/cog.py`:
         if view.selected_rom is None:
             return
 
-        await self.announce(ctx, view.selected_rom)
+        await self.announce(ctx, view.selected_rom, platform_display)
 
-    async def announce(self, ctx: discord.ApplicationContext, rom: Dict[str, Any]) -> None:
+    async def announce(
+        self,
+        ctx: discord.ApplicationContext,
+        rom: Dict[str, Any],
+        platform_display: str,
+    ) -> None:
         """Post the PENDING embed and register the watcher behind it."""
+        existing = self.live_watcher_for(int(rom["id"]))
+        if existing is not None:
+            await ctx.respond(
+                f"**{existing.rom_name}** already has a live announcement in "
+                "this server. Use that post rather than starting a second one."
+            )
+            return
+
         watcher = self.register_watcher(
-            rom, requester_id=ctx.author.id, channel_id=ctx.channel_id
+            rom,
+            requester_id=ctx.author.id,
+            requester_name=ctx.author.display_name,
+            channel_id=ctx.channel_id,
+            platform_display=platform_display,
         )
 
-        embed = self.render(watcher, ctx.author.display_name)
-        message = await ctx.send(embed=embed)
+        # ctx.respond, not ctx.send: after a defer only a response or followup
+        # clears Discord's "thinking..." placeholder, and ApplicationContext
+        # .send is the plain Messageable send. It returns a WebhookMessage
+        # here, so .id is available.
+        message = await ctx.respond(embed=self.render(watcher))
 
         watcher.message_id = message.id
         watcher.last_render_key = render_key(watcher)
 
-    def render(self, watcher: NetplayWatcher, requester_name: str) -> discord.Embed:
-        """Build the embed for a watcher's current state."""
-        # PlatformEmoji.format() takes a display name and returns that name
-        # with its emoji appended ("Nintendo 64 <emoji>"), so this is a whole
-        # display string, not a bare emoji.
-        platform_display = ""
-        if getattr(self.bot, 'platform_emoji', None) and watcher.platform_name:
-            platform_display = self.bot.platform_emoji.format(watcher.platform_name)
+    def render(self, watcher: NetplayWatcher) -> discord.Embed:
+        """Build the embed for a watcher's current state.
 
-        return build_netplay_embed(
-            watcher,
-            domain=self.bot.config.DOMAIN,
-            requester_name=requester_name,
-            platform_display=platform_display,
-        )
+        Everything it needs was captured on the watcher at announce time, so
+        this works identically from a command and from the poll loop.
+        """
+        return build_netplay_embed(watcher, domain=self.bot.config.DOMAIN)
 ```
 
 - [ ] **Step 4: Add the new imports**
@@ -1625,22 +1839,91 @@ from .watcher import NetplayWatcher
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_netplay_cog.py -v`
-Expected: PASS (5 tests)
+Expected: PASS (8 tests)
 
-- [ ] **Step 6: Confirm the command registers**
+- [ ] **Step 6: Write the registration test spec §10 requires**
+
+The AST check in `tests/test_extension_loading.py` only proves the module
+imports and exposes a callable `setup()`. The substantive per-cog checks are
+hand-written, so netplay needs its own — this is the test that catches a cog
+whose `__init__` raises, or a command that silently fails to register.
+
+First extend `fake_bot` (`tests/test_extension_loading.py:44`) with the config
+this cog reads in `__init__`:
+
+```python
+    bot.config = SimpleNamespace(
+        REQUESTS_ENABLED=True,
+        # Absent credentials are a supported configuration: the cog is
+        # expected to come up with IGDB disabled rather than fail to load.
+        IGDB_CLIENT_ID=None,
+        IGDB_CLIENT_SECRET=None,
+        # Netplay reads these in __init__. NETPLAY_ENABLED=False keeps the
+        # startup probe and the poll loop from starting under test.
+        NETPLAY_ENABLED=False,
+        NETPLAY_POLL_INTERVAL=20,
+        NETPLAY_PENDING_TIMEOUT=900,
+        NETPLAY_MAX_WATCHERS=25,
+        DOMAIN="https://roms.example.com",
+    )
+```
+
+Then append the netplay analogue of `RequestsExtensionTests`:
+
+```python
+class NetplayExtensionTests(unittest.IsolatedAsyncioTestCase):
+    async def load(self):
+        bot = fake_bot(asyncio.get_running_loop())
+        bot.load_extension("cogs.netplay")
+        await asyncio.sleep(0)
+        return bot
+
+    async def test_the_extension_loads_and_registers_the_cog(self):
+        bot = await self.load()
+
+        self.assertIsNotNone(bot.get_cog("Netplay"))
+
+    async def test_it_registers_the_netplay_command(self):
+        bot = await self.load()
+
+        self.assertEqual(
+            ["netplay"],
+            sorted(command.name for command in bot.get_cog("Netplay").get_commands()),
+        )
+
+    async def test_the_netplay_command_keeps_its_option_signature(self):
+        """Read at decoration time, so a broken annotation never reaches a call."""
+        bot = await self.load()
+        command = next(
+            c for c in bot.get_cog("Netplay").get_commands() if c.name == "netplay"
+        )
+
+        self.assertEqual(
+            [("platform", True, True), ("game", True, False)],
+            [(o.name, o.required, bool(o.autocomplete)) for o in command.options],
+        )
+
+    async def test_disabled_netplay_starts_no_poll_loop(self):
+        """NETPLAY_ENABLED=false must not leave a task running."""
+        bot = await self.load()
+
+        self.assertFalse(bot.get_cog("Netplay").poll_sessions.is_running())
+```
+
+- [ ] **Step 7: Run it**
 
 Run: `python -m pytest tests/test_extension_loading.py -v`
-Expected: PASS — py-cord reads the `Option` annotations at decoration time, so a malformed signature fails here rather than at runtime.
+Expected: PASS — including the four new netplay cases.
 
-- [ ] **Step 7: Lint**
+- [ ] **Step 8: Lint**
 
-Run: `python -m ruff check cogs/netplay tests/test_netplay_cog.py`
+Run: `python -m ruff check cogs/netplay tests/test_netplay_cog.py tests/test_extension_loading.py`
 Expected: clean
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add cogs/netplay/cog.py tests/test_netplay_cog.py
+git add cogs/netplay/cog.py tests/test_netplay_cog.py tests/test_extension_loading.py
 git commit -m "feat(netplay): the /netplay command
 
 Mirrors /search's shape - a platform autocomplete plus free-text game -
@@ -1699,6 +1982,7 @@ class FakeChannel:
 def make_polling_cog(poll_results, message=None):
     """A cog whose room polls return canned results, one per tick."""
     cog = make_cog()
+    cog.bot.config.DOMAIN = "https://roms.example.com"
     cog._results = list(poll_results)
     message = message or FakeMessage()
     cog._message = message
@@ -1708,8 +1992,6 @@ def make_polling_cog(poll_results, message=None):
 
     cog.bot.romm = SimpleNamespace(list_netplay_rooms=list_rooms)
     cog.bot.get_channel = lambda cid: FakeChannel(message)
-    cog.bot.get_user = lambda uid: SimpleNamespace(display_name="alice")
-    cog.bot.platform_emoji = None
     return cog
 
 
@@ -1720,7 +2002,7 @@ ROOM = {"r1": {"room_name": "Bomberman", "current": 2, "max": 4,
 class TickTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_room_appearing_edits_the_message(self):
         cog = make_polling_cog([ROOM])
-        watcher = cog.register_watcher(ROM, requester_id=7, channel_id=9)
+        watcher = register(cog)
         watcher.message_id = 1
         await cog.tick(now=1000.0)
         self.assertEqual(cog._message.edits, 1)
@@ -1729,7 +2011,7 @@ class TickTests(unittest.IsolatedAsyncioTestCase):
     async def test_an_unchanged_poll_does_not_edit(self):
         """Edit suppression: 25 watchers editing every 20s hits Discord limits."""
         cog = make_polling_cog([ROOM, ROOM])
-        watcher = cog.register_watcher(ROM, requester_id=7, channel_id=9)
+        watcher = register(cog)
         watcher.message_id = 1
         await cog.tick(now=1000.0)
         await cog.tick(now=1020.0)
@@ -1737,7 +2019,7 @@ class TickTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_terminal_watchers_are_dropped(self):
         cog = make_polling_cog([ROOM, {}])
-        watcher = cog.register_watcher(ROM, requester_id=7, channel_id=9)
+        watcher = register(cog)
         watcher.message_id = 1
         await cog.tick(now=1000.0)
         await cog.tick(now=1020.0)
@@ -1746,15 +2028,13 @@ class TickTests(unittest.IsolatedAsyncioTestCase):
     async def test_registering_during_a_tick_does_not_raise(self):
         """The loop awaits per watcher; a command can mutate the registry."""
         cog = make_polling_cog([ROOM])
-        watcher = cog.register_watcher(ROM, requester_id=7, channel_id=9)
+        watcher = register(cog)
         watcher.message_id = 1
 
         original = cog.bot.romm.list_netplay_rooms
 
         async def mutate_then_poll(rom_id):
-            cog.register_watcher(
-                {"id": 999, "name": "Other"}, requester_id=1, channel_id=9
-            )
+            register(cog, rom={"id": 999, "name": "Other"})
             return await original(rom_id)
 
         cog.bot.romm.list_netplay_rooms = mutate_then_poll
@@ -1763,7 +2043,7 @@ class TickTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_failed_poll_leaves_the_watcher_alone(self):
         cog = make_polling_cog([None])
-        watcher = cog.register_watcher(ROM, requester_id=7, channel_id=9)
+        watcher = register(cog)
         watcher.state = NetplayState.LIVE
         watcher.rooms = ROOM
         watcher.message_id = 1
@@ -1832,12 +2112,9 @@ Append to the `Netplay` class in `cogs/netplay/cog.py`:
         if channel is None or watcher.message_id is None:
             return
 
-        user = self.bot.get_user(watcher.requester_id)
-        requester_name = user.display_name if user else "Someone"
-
         try:
             message = await channel.fetch_message(watcher.message_id)
-            await message.edit(embed=self.render(watcher, requester_name))
+            await message.edit(embed=self.render(watcher))
             watcher.last_render_key = key
         except discord.NotFound:
             # The post is gone; stop tracking it rather than retrying forever.
@@ -1945,16 +2222,23 @@ In `### Current`, after the **Search** bullet:
 - **Netplay announcements**: Announce a RomM netplay session from Discord. The embed tracks the session live — waiting for a room, who is hosting, how many seats are filled — and links players straight into the browser player. Requires RomM netplay to be enabled server-side.
 ```
 
-- [ ] **Step 3: Add the configuration section**
+- [ ] **Step 3: Add the section to the Table of Contents**
 
-After the `## Requests` section, add:
+The ToC at `README.md:15-32` is hand-maintained. Add after the `- [Requests](#requests)` line:
 
 ```markdown
-## Netplay
+- [Netplay](#netplay)
+```
 
-<img align="right" width="300" src=".github/screenshots/Netplay.png">
+- [ ] **Step 4: Add the configuration section**
 
-`/netplay [platform] [game]` posts an announcement for a game in your library
+After the `## Requests` section, add the following. **Note:** it contains
+fenced code blocks, so paste the body rather than copying an outer fence —
+there is no screenshot for this section yet, so no image tag is included.
+
+> ## Netplay
+>
+> `/netplay [platform] [game]` posts an announcement for a game in your library
 and keeps it current: it starts as "waiting for a room", flips to the host and
 seat count once someone opens one, and marks itself ended when the session
 finishes.
@@ -2007,7 +2291,7 @@ NETPLAY_MAX_WATCHERS=25
 link and `/netplay` will refuse to run.
 ```
 
-- [ ] **Step 4: Add the env vars to the sample block**
+- [ ] **Step 5: Add the env vars to the sample block**
 
 In the `.env` example under `## Configuration`, after the `GGREQUESTZ_*` lines:
 
@@ -2015,12 +2299,17 @@ In the `.env` example under `## Configuration`, after the `GGREQUESTZ_*` lines:
 NETPLAY_ENABLED=true
 ```
 
-- [ ] **Step 5: Verify the docs match the code**
+- [ ] **Step 6: Verify the docs match the code**
 
 Run: `python -m pytest tests/test_netplay_client.py::ScopeTests -v`
 Expected: PASS — confirms `assets.read` is documented and requested.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Run the full suite one last time**
+
+Run: `python -m pytest -q && python -m ruff check .`
+Expected: all green.
+
+- [ ] **Step 8: Commit**
 
 ```bash
 git add README.md
@@ -2062,27 +2351,79 @@ configured server look unconfigured."
 | §10 testing | every task |
 | §13 scope-string coordination | 1 (Step 4 note) |
 
-**Gap found and closed:** §6.2 says the embed shows the core from
-`EJS_DEFAULT_CORES`. `build_netplay_embed` accepts `core_name` and Task 3
-tests it, but Task 6's `render()` never passes it. This is deliberate and
-recorded here rather than left silent: `EJS_DEFAULT_CORES` was **empty** on
-the reference server, so there is nothing to show and no way to test the
-wiring against reality. The parameter exists and is covered; populating it is
-a one-line change in `render()` once a server has cores configured.
-
 **Placeholder scan:** none — every step has real code or a real command.
-
-**Type error found and fixed:** an earlier draft had `render()` calling
-`bot.platform_emoji.get_emoji(slug)`. No such method exists — the real API is
-`PlatformEmoji.format(display_name)` (`cogs/platform_emoji.py:117`), it is keyed
-by **display name** rather than slug, and it returns `"Name <emoji>"` rather
-than a bare emoji. The watcher field is now `platform_name`, sourced from
-RomM's `platform_display_name`, and the embed renders it as its own field.
-Exactly the unchecked-string class of bug `tests/test_cog_lookups.py` exists to
-catch.
 
 **Type consistency:** `advance()` signature matches between Task 2 and Task 7.
 `render_key`/`build_netplay_embed` names match between Tasks 3, 6 and 7.
-`resolve_roms` returns `(roms, truncated)` in Tasks 5 and 6.
+`resolve_roms` returns `(roms, truncated, platform_display)` in Tasks 5 and 6.
 `MAX_SELECT_OPTIONS` is defined in Task 4 and used in Tasks 5 and 6.
 `NetplayWatcher` field names match across Tasks 2, 3, 6 and 7.
+
+---
+
+## Defects found in review and fixed
+
+The planned code was extracted and run before this revision. Every item below
+was verified against the repo or the installed py-cord 2.6.1, not reasoned
+about. They are recorded because several are non-obvious enough to be
+reintroduced by a well-meaning edit.
+
+**Would have stopped execution outright:**
+
+1. **Task 5's tests could not pass.** `make_cog`'s fake bot provided only
+   `fetch_api_endpoint`, but `resolve_roms` calls `bot.find_platform_by_name`
+   first — six failures at the exact step the plan claimed green. The fake now
+   provides it, returning the real `(id, display_name)` tuple shape.
+2. **The startup probe never ran on a real boot.** `bot.py:779` calls
+   `load_all_cogs()` from *inside* `on_ready`, and `Client.dispatch` snapshots
+   its listener list before invoking them — so a cog added during that dispatch
+   never receives that event. `server_enabled` stayed `False` and `/netplay`
+   answered "this server has netplay turned off" forever. It also inverted
+   spec §9's fail-open requirement into fail-closed. The probe is now kicked
+   from `__init__` and `server_enabled` starts `True`.
+   Related: **`cog_load` is not a py-cord hook** — `commands.Cog` has only
+   `cog_unload`. Spec §8 suggests using it; the spec is wrong. This is also a
+   live bug in `cogs/user_manager.py:1199`, whose `invite_reconcile_loop` has
+   therefore never started. Out of scope here, worth a separate issue.
+3. **The autocomplete always returned nothing.** It unpacked
+   `search_for_autocomplete` rows as pairs, but that query selects three
+   columns (`display_name, in_romm, folder_name`); the `ValueError` was
+   swallowed by the bare `except` into an empty list. Now sourced from
+   `bot.fetch_api_endpoint('platforms')` like `cogs/search.py:1341`, which also
+   drops an undeclared dependency on `cogs.requests` and `aiosqlite`, and only
+   offers platforms RomM actually has.
+
+**Would have shipped broken:**
+
+4. **`ctx.send` after `ctx.defer()`** leaves Discord's "thinking…" placeholder
+   unresolved — `ApplicationContext.send` is `Messageable.send`, not a
+   response. No cog in this repo uses it. Now `ctx.respond`, which returns a
+   `WebhookMessage` after a defer, so `.id` is available.
+5. **A PENDING watcher never expired while polls failed.** The timeout was
+   only evaluated on the empty-success path, so an unreachable RomM would fill
+   the watcher cap permanently — the opposite of §5.1's self-limiting claim.
+6. **Cover art was specified, tested, and never wired.** Now carried on the
+   watcher and passed through, alongside `requester_name` and
+   `platform_display`.
+7. **`platform_display_name` was an unverified payload key.** No RomM rom row
+   in this codebase is read for it. The display name now comes from
+   `find_platform_by_name`, which `resolve_roms` was already calling and
+   discarding.
+8. **The ROM query** omitted `platform_ids` (every other call site sends both)
+   and interpolated the search term raw, so an `&` in a title corrupted it.
+9. **`payload.get('items', payload if isinstance(payload, list) else [])`** —
+   `.get` raises on a list before the default is evaluated, so that branch was
+   unreachable. Replaced with an explicit `isinstance` ladder.
+10. **Re-announcing a ROM orphaned the previous post,** which then sat on
+    "waiting for a room" forever. Now refused, pointing at the live one.
+11. **Spec §10's registration test was missing.** Added, along with the
+    `NETPLAY_*` attributes `fake_bot` needs. It is the test that would have
+    caught defects 2 and 3.
+12. **`requester_name` drifted between announce and edit** (guild nick vs
+    global name, or `"Someone"` if uncached). Captured on the watcher.
+
+**Known and deliberately not built:** the embed's `core_name` parameter is
+built and tested but never passed, because `EJS_DEFAULT_CORES` was **empty**
+on the reference server — there is nothing to display and no way to test the
+wiring against reality. It is a one-line change in `render()` once a server
+has cores configured. Recorded rather than left silent.
