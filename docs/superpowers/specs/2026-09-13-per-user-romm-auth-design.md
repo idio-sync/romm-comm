@@ -147,7 +147,7 @@ So the rule is explicit: **on the acting path a 401 or 403 is terminal.** No ref
 All three sites become `await self._auth_header(grant)`, where `grant is None` means the bot. On top of that seam:
 
 ```python
-client.acting_as(grant) -> ActingClient
+client.acting_as(grant, on_auth_failure=None) -> ActingClient
 
 class ActingClient:
     async def request(
@@ -157,6 +157,8 @@ class ActingClient:
     ) -> tuple[int, Optional[dict]]:
         """Raises RommAuthError on 401/403. Never retries. Never caches."""
 ```
+
+**Callers do not build these; the store does.** `store.acting_client(discord_id)` reads the grant and returns an `ActingClient` with `on_auth_failure` already wired to the store's own generation-guarded invalidation. `RommClient` stays dependent on `Config` alone — it never imports `romm_tokens`, and the callback is how the policy reaches it. The alternative, leaving each caller to invalidate after catching `RommAuthError`, is the same forgettable-step failure mode that `ActingClient` exists to remove; a revoked credential would stay live in the database until the hourly loop noticed.
 
 `ActingClient` shares the session, connector and rate limiter, has the grant pre-bound, and exposes only this one method. Per-user code holds an object that *cannot* act as the bot; bot code changes in zero places. The alternative — an `identity=` kwarg threaded through every call site — was rejected because forgetting it fails silently as the bot.
 
@@ -175,6 +177,7 @@ CREATE TABLE IF NOT EXISTS romm_user_tokens (
     romm_username     TEXT    NOT NULL,    -- cached for the audit view
     device_id         TEXT    NOT NULL,
     token_id          INTEGER,             -- from GET /api/client-tokens; enables revocation
+    generation        INTEGER NOT NULL DEFAULT 1,  -- bumped on every re-pair; see below
     scopes            TEXT    NOT NULL,    -- JSON array, as granted (may be less than requested)
     expires_at        TIMESTAMP,           -- nullable: RomM permits non-expiring tokens
     key_fingerprint   TEXT    NOT NULL,
@@ -190,6 +193,16 @@ CREATE TABLE IF NOT EXISTS romm_user_tokens (
 A separate table rather than columns on `user_links`, for three reasons. The lifecycles differ — a link is an admin-asserted mapping, a pairing is a user-granted credential, and either can exist without the other. The sensitivities differ. And `get_all_user_links()` splats rows into dicts that views render directly; ciphertext must never be reachable from a code path that ends in an embed.
 
 `repo.py` therefore returns two different shapes: an **audit row** (everything except `sealed` and `key_fingerprint`) for every caller, and the sealed blob only to `store.get_grant()`. Exactly one function in the tree can produce a bearer token.
+
+**`generation` exists so a slow failure cannot kill a fresh credential.** Every background write is conditional on it:
+
+```sql
+UPDATE romm_user_tokens SET invalid_since = ? WHERE discord_id = ? AND generation = ?
+```
+
+Without it there is a live race. The revalidation loop probes token A; while that request is in flight the user runs `/pair` and stores token B; the probe returns 401 for the *already-replaced* token A, and the loop writes `invalid_since` against a row that now holds a working credential. The user is told to re-pair immediately after re-pairing, and the streaming queue skips them. The window is exactly as long as one HTTP timeout, which is to say it is reachable on any instance that restarts while people are pairing.
+
+`generation` is incremented on every successful store, `Grant` carries the value it was read at, and **every** deferred write keyed by `discord_id` — `invalid_since`, `last_verified_at`, `last_used_at`, `expiry_warned_at` — carries the `AND generation = ?` guard. A write that affects zero rows is not an error; it means the credential moved on and the result is stale, which is logged at debug and otherwise ignored. This is also what makes step 8's "still the current attempt" check enforceable at the database rather than only in memory.
 
 **`romm_user_id` is not unique, and that is a reportable condition rather than a constraint.** `discord_id` is the primary key, so two Discord users can pair the same RomM account. A `UNIQUE` constraint would be wrong — a re-pair after a botched `/unpair`, or a genuinely shared household account, would fail at the database layer with nothing useful to say. Instead `/pairings` surfaces a shared `romm_user_id` as a first-class warning, and `/pair` refuses a second pairing of an already-paired RomM account unless an admin overrides. With step 7's identity check this is defence in depth rather than the primary barrier.
 
@@ -262,12 +275,27 @@ The precedence is: `ROMM_PAIR_BASE_URL` if set → `DOMAIN` **only if it parses 
    - `GET /api/users/me` on the new token → `romm_user_id`, `romm_username`. Without this the bot holds a credential it cannot attribute.
    - `GET /api/client-tokens` → `token_id`. Matched on `device_id`, but that match is **not** unique: step 3 deliberately reuses one device row across re-pairings, so several client tokens can share a `device_id`, and `ClientTokenSchema.device_id` is itself nullable. The tiebreak is the newest `created_at` among rows whose `name` carries the bot's prefix; a null `device_id` or no matching row leaves `token_id` null, which `/unpair` handles. Recording the wrong `token_id` would mean revoking the wrong credential, so this is stated rather than left to taste.
    - Granted `scopes` vs requested. **If `roms.user.write` was not granted, discard the token** and tell the user which scope to approve. Storing a credential that cannot do its job is worse than storing none.
-7. **Identity check — refuse on contradiction.** Two cases, deliberately different:
+7. **Identity check — refuse on contradiction, and never guess.** Three cases, deliberately different:
    - **No `user_links` row** → store, and flag the unverified pairing in the admin audit view. This is the ordinary case for a server where the bot did not create accounts.
    - **A `user_links` row naming a *different* `romm_user_id`** → **discard the token**, tell the user which account the bot expected, and alert the admin channel.
+   - **The lookup failed** → **discard the token** and tell the user to try again. Not "store and flag".
+
+   That third case needs its own accessor, because the existing one cannot express it. `MasterDatabase.get_user_link` ends (`database_manager.py:663-665`):
+
+   ```python
+   except Exception as e:
+       logger.error(f"Error getting user link for {discord_id}: {e}")
+       return None
+   ```
+
+   A locked database, a corrupt row or a closed pool is therefore indistinguishable from "this user has no link" — and under the first bullet above, "no link" means *store the pairing*. The identity check would fail open precisely when the database is unhealthy, which is also when an attacker would most like it to. So the store uses a strict accessor, `get_user_link_strict(discord_id)`, which returns `Optional[dict]` for the genuine present/absent answer and **lets the exception propagate** for everything else; pairing aborts on it. The existing swallowing accessor keeps its current behaviour for the existing callers, where a degraded read is cosmetic rather than load-bearing.
 
    The second case is the phishing defence, and it is the one the earlier draft got wrong by storing and logging a warning. The attack is not exotic: `device/init` is unauthenticated, so an attacker runs `/pair`, forwards their own DM — URL, QR and matching confirmation code — to a victim, and the victim approves. `GET /api/users/me` then returns the *victim's* identity, and storing it would file the victim's credential under the attacker's Discord ID. `user_links` is admin-asserted and is the one authenticated cross-check the bot holds; spending it on a log line was the single place this design inverted its own stated priority. `ROMM_PAIR_ALLOW_IDENTITY_DRIFT` exists for operators who genuinely need the old behaviour, and defaults to false.
-8. **Seal and store**, then edit the DM to confirm.
+8. **Re-check the gate, then seal and store**, then edit the DM to confirm.
+
+   Step 1's gate ran when the user typed `/pair`. Approval can arrive up to `expires_in` later, so everything the gate checked may since have become false. Before the row is written the store re-checks: the in-flight attempt is **still the current one** for this Discord ID (a second `/pair` supersedes the first, and the loser must not overwrite the winner), the member is **still in the guild**, still holds `ROMM_PAIR_ROLE_ID`, and the feature is still enabled. Any of these failing discards the token and attempts the admin revoke, because a credential that was minted for someone who is no longer eligible should not outlive the check that would have refused it.
+
+   Without this, departure is not final: a member can start `/pair`, leave the guild, approve in their browser, and the completion path writes a fresh row for someone who is gone — recreating exactly the credential `on_member_remove` just deleted.
 
 **On the 4-char confirmation code.** It is hygiene, not a control, and the spec should not lean on it. It defends only against an unsolicited bare URL — in the realistic attack above the attacker holds the code, shows the victim a matching one, and the check passes. The controls that actually do work are: the URL only ever reaching the initiator's DM, the `name` field rendered on RomM's approve screen, and the identity check in step 7. That makes verification item 4 — *does RomM's approve screen actually render `name`?* — load-bearing rather than cosmetic. `DeviceAuthPendingSchema` does expose `name`, `client`, `platform` and `requested_scopes` to that screen, so the data is there; only the rendering is unconfirmed.
 
@@ -297,13 +325,15 @@ A `tasks.loop` at roughly 60 minutes, alongside `invite_reconcile_loop`. Each pa
 - `RommAuthError` → set `invalid_since`, DM a re-pair prompt once.
 - `RommApiError` or timeout → **leave the row untouched.**
 
+Every one of those writes carries `AND generation = ?` against the value read when the probe started, so a slow result cannot land on a credential that has since been replaced. A DM is sent only if the write actually affected a row.
+
 That last distinction matters more than it looks: marking every token dead during a RomM restart would be the worst bug this loop could have. The existing `RommApiError` / `RommAuthError` split already encodes it.
 
 Expiry warnings are DM'd once at 7 days and once at 1 day. `expiry_warned_at` records when the last warning was sent, and a threshold fires only when it is crossed *and* `expiry_warned_at` predates that crossing — so a restart mid-window does not re-send, and the 1-day warning still fires after the 7-day one. Non-expiring tokens are revalidated but never warned.
 
 ### Departure and role loss
 
-`on_member_remove` deletes the row and attempts the admin revoke, logging to `CHANNEL_ID`. A departed member's live credential sitting in the bot's database is the case where leaving one behind is worst.
+`on_member_remove` **cancels any in-flight pairing attempt** for that Discord ID, then deletes the row and attempts the admin revoke, logging to `CHANNEL_ID`. A departed member's live credential sitting in the bot's database is the case where leaving one behind is worst — and cancelling the attempt is half the fix, step 8's re-check being the other half. Cancellation alone would not be enough, because the poll task could already be between "token received" and "row written"; the re-check alone would not be enough either, because the attempt would otherwise keep polling a RomM instance on behalf of someone who has gone.
 
 Loss of `ROMM_PAIR_ROLE_ID` also unpairs, but **`cogs/pair` owns its own `on_member_update` listener** for this. The earlier draft said it would reuse `user_manager`'s `handle_role_removal`, which was wrong twice over: that function is about the *RomM account* — it looks up `user_links` and disables or deletes the account unless `created_by_bot` is false — and it is wired to `AUTO_REGISTER_ROLE_ID`, so it would never fire for a distinct `ROMM_PAIR_ROLE_ID`. Reusing it would also mean one of the two cogs importing the other, which is the layering this design otherwise avoids. The two listeners watch different roles for different reasons and share no code; `cogs/pair` never imports `user_manager`, and reads `user_links` through the database manager.
 
@@ -317,7 +347,19 @@ store.get_grant(discord_id) -> Grant | None      # token, romm_user_id, scopes, 
 
 `None` covers absent, expired, invalid and undecryptable, and is an **ordinary outcome**. A queue turn arriving for someone whose grant has lapsed skips them, DMs a re-pair prompt, and advances — it is not an error path.
 
-`integrations/romm_streaming.py` changes narrowly: `_send` grows a `grant` parameter and routes through `self.romm.acting_as(grant)` — whose `(status, body)` return is exactly what `_send` already produces, so `ClaimOutcome` survives unchanged. `get_config` and `list_sessions` keep passing `None` and stay on the bot token. `claim` and the in-session controls take the acting user's grant. Polite reclaim (`save_and_exit`) uses the owner's grant; `force_release_all` stays on the bot token as an admin action, subject to verification 7.
+`integrations/romm_streaming.py` changes narrowly: `_send` grows a `grant` parameter and routes through the store-vended acting client — whose `(status, body)` return is exactly what `_send` already produces, so `ClaimOutcome` survives unchanged.
+
+**One line of that file has to change or the whole error taxonomy collapses.** `_send` ends (`integrations/romm_streaming.py:175-177`):
+
+```python
+except Exception as e:
+    logger.error(f"Streaming request {method} {path} failed: {e}")
+    return 0, None
+```
+
+`RommAuthError` is an `Exception`, so a revoked credential would be caught here and returned as status `0`. `0` is absent from `_CLAIM_OUTCOMES`, so line 208 maps it to `ClaimOutcome.ERROR` — "the broker is down, tell an admin" — when the truth is `DENIED`, "this user's credential is dead, tell *them* to re-pair". The queue would report an outage and retry against a credential that will never work again.
+
+So `_send` catches `RommAuthError` **before** the catch-all and returns `(401, None)`, which `_CLAIM_OUTCOMES` already maps to `DENIED`. The layering is: `ActingClient` detects and raises; the store's `on_auth_failure` callback invalidates, guarded by `generation`; `_send` translates the exception back into the status code its own taxonomy is built on. Each layer does one thing, and `ClaimOutcome` keeps meaning what it says. `ClaimOutcome.DENIED`'s comment — currently "our token lacks roms.user.write" — becomes "the acting user's credential is revoked, expired or under-scoped". `get_config` and `list_sessions` keep passing `None` and stay on the bot token. `claim` and the in-session controls take the acting user's grant. Polite reclaim (`save_and_exit`) uses the owner's grant; `force_release_all` stays on the bot token as an admin action, subject to verification 7.
 
 (The scope table lists `mute` and `volume` for completeness of the endpoint survey; the sketched client implements `save_state` and `load_state` only. No action needed — it is a list of endpoints, not of methods.)
 
@@ -329,9 +371,15 @@ New tests, `tests/`, pytest:
 
 - **`test_romm_tokens_crypto.py`** — seal/open round-trip; a wrong key fails; **a row moved between `discord_id`s fails the AAD check**; the fingerprint is recorded and drives re-seal.
 - **`test_device_flow.py`** — `init` payload shape and scope list; a `DOMAIN` left at its `'No website configured'` default does **not** become the pairing origin; the URL is built from `ROMM_PAIR_BASE_URL` when set; the poll honours `interval` and gives up at `expires_in`.
-- **`test_romm_tokens_store.py`** — a granted-scope shortfall discards the token; a `user_links` row naming a different RomM user makes the pairing refuse; a missing `user_links` row stores and flags; an invalid row makes `get_grant` return `None`; the audit row has no `sealed` or `key_fingerprint` key.
+- **`test_romm_tokens_store.py`** — a granted-scope shortfall discards the token; a `user_links` row naming a different RomM user makes the pairing refuse; a missing `user_links` row stores and flags; **a failing `user_links` lookup discards rather than storing** (the fail-open case: raise from the strict accessor, assert nothing is written); an invalid row makes `get_grant` return `None`; the audit row has no `sealed` or `key_fingerprint` key.
+- **`test_romm_tokens_lifecycle.py`** — the four ordering hazards, each as a named scenario:
+  - a member who leaves mid-pairing has their attempt cancelled, and a completion that arrives anyway writes no row;
+  - a second `/pair` supersedes the first, and the loser's completion does not overwrite the winner;
+  - an `invalid_since` write for generation *n* affects zero rows once a re-pair has stored generation *n+1*, and sends no DM;
+  - `last_verified_at`, `last_used_at` and `expiry_warned_at` carry the same guard.
 - **`test_romm_client_identity.py`** — bot-path headers are byte-identical to today (regression); the acting path uses the grant's token; **a 401 on the acting path raises rather than refreshing, and leaves the bot's `access_token` untouched** (this is the `romm_client.py:358` trap); `ActingClient` exposes no cache-backed method and the acting path writes nothing to `APICache`.
 - **`test_romm_tokens_secrecy.py`** — no token material in any emitted log record (assert over `caplog` across a full pair-and-use cycle); `repr(grant)` does not contain the token.
+- **`test_streaming_auth_outcome.py`** — a `RommAuthError` raised inside `_send` surfaces as `ClaimOutcome.DENIED`, not `ERROR`; the same failure invalidates the stored credential exactly once. This is a regression test for `integrations/romm_streaming.py:175`'s catch-all, which would otherwise swallow it into status `0`.
 
 Extensions to the structural suite. **Two of these need new scan roots, not new assertions** — `test_sql_boundaries.py`'s `modules()` collects `Path(".").glob("*.py")`, which is non-recursive, and `test_import_boundaries.py` walks only `Path("cogs")`. Adding `romm_tokens/repo.py` to `REPOSITORIES` without widening the scan would be a no-op that also leaves `store.py`, `crypto.py` and `device_flow.py` with zero SQL-boundary enforcement while appearing covered:
 
