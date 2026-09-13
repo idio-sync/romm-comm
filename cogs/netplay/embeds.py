@@ -51,7 +51,7 @@ def sanitize_name(name: Any) -> str:
     authentication: the name still proves nothing about who anyone is.
     """
     text = str(name or "Unknown")
-    for char in ("<", ">", "@", "`", "*", "_", "~", "|"):
+    for char in ("<", ">", "@", "`", "*", "_", "~", "|", "\n", "\r"):
         text = text.replace(char, "")
     return text.strip()[:64] or "Unknown"
 

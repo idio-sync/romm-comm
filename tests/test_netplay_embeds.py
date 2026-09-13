@@ -93,6 +93,15 @@ class EmbedTests(unittest.TestCase):
         body = embed.description + "".join(f.value for f in embed.fields)
         self.assertNotIn("<@1234567890>", body)
 
+    def test_newlines_in_player_name_do_not_inject_rooms(self):
+        """Newlines in player_name must be stripped to prevent visual line injection."""
+        # A spoofed name with newline that would fake another room without sanitization
+        injected = {"r1": dict(ROOM["r1"], player_name="idiosync\n**FAKE ROOM** - 1/1")}
+        embed = build(make_watcher(state=NetplayState.LIVE, rooms=injected))
+        # The room field should be a single line (no newlines that could fake rooms)
+        room_field = [f.value for f in embed.fields if f.name.startswith("Room")][0]
+        self.assertEqual(room_field.count("\n"), 0)
+
     def test_multiple_rooms_all_render(self):
         two = {"r1": ROOM["r1"], "r2": dict(ROOM["r1"], room_name="Second")}
         embed = build(make_watcher(state=NetplayState.LIVE, rooms=two))
