@@ -9,10 +9,14 @@ view, and a cog that does the IO - because the interesting behaviour is the
 state machine and it is worth testing without a bot.
 """
 
+from .embeds import ENDED_HINT, build_netplay_embed, render_key
 from .watcher import NetplayState, NetplayWatcher, advance
 
 __all__ = [
+    "ENDED_HINT",
     "NetplayState",
     "NetplayWatcher",
     "advance",
+    "build_netplay_embed",
+    "render_key",
 ]
