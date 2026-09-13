@@ -1,23 +1,30 @@
 """Calling into the optional ggrequestz integration.
 
-Two of the methods this package calls are not implemented on
-GGRequestzIntegration and, as far as the endpoint map shows, never were:
+Two directions, and they are not equally possible.
 
-    update_request_status   3 call sites  (manual fulfil, manual reject,
-                                           auto-fulfilment)
-    get_request_by_id       1 call site   (pulling status changes back in)
+Pulling status changes back IN works. ggrequestz has no "one request by id"
+endpoint, so GGRequestzIntegration.get_request_by_id pages the caller's own
+request list; that list authenticates with the bearer API key this integration
+already holds.
 
-Calling a missing method raised AttributeError. In the two admin views that
-landed after the database write had already committed, so the request really
-was fulfilled or rejected, but everything queued behind the call -- refreshing
-the embed, re-enabling the buttons, the requester's DM and the wait list's DMs
--- was skipped. The suite did not catch it because the only definition of
-`update_request_status` in the tree is on a test double.
+Pushing a status change OUT cannot be done at all. ggrequestz does have the
+endpoint -- POST /admin/api/requests/update, taking request_id, status and
+admin_notes -- but its route handler accepts a `session` or
+`basic_auth_session` cookie and nothing else, and checks a
+request.approve/request.edit permission on the logged-in user. It does not
+accept `Authorization: Bearer`, which is the only credential this integration
+has. So GGRequestzIntegration has no update_request_status, and cannot have
+one without the bot logging in as a user and holding a session.
 
-These wrappers make a missing or failing method a logged warning and a False
-return, so a sync that cannot happen costs the sync and nothing else. They are
-a guard, not an implementation: when the two methods are written, the
-`_call` indirection can go and these become plain calls.
+(Verified against XTREEMMAK/ggrequestz: src/lib/openapi.json and
+src/routes/admin/api/requests/update/+server.js, September 2026.)
+
+That gap used to be an AttributeError. Because it was raised in the middle of
+an admin action that had already committed its database write, the request
+really was fulfilled or rejected, but the embed refresh, the requester's DM and
+the wait list's DMs were all skipped. The wrappers here turn a missing or
+failing method into a logged line and a False return, so a sync that cannot
+happen costs the sync and nothing else.
 """
 
 import logging
@@ -41,14 +48,23 @@ def active_integration(bot):
     return ggr
 
 
+# Logged once per process, not once per fulfilment. The outbound gap is a
+# standing property of the upstream API, not an incident, and an admin working
+# through a queue should not get a warning per button press.
+_reported_missing = set()
+
+
 async def _call(ggr, method_name: str, *args, **kwargs) -> Optional[Any]:
     """Call a method on the integration if it has one. None if it does not."""
     method = getattr(ggr, method_name, None)
     if method is None:
-        logger.warning(
-            f"ggrequestz integration has no {method_name}(); skipping the sync. "
-            "The request itself is unaffected."
-        )
+        if method_name not in _reported_missing:
+            _reported_missing.add(method_name)
+            logger.warning(
+                f"ggrequestz integration has no {method_name}(); skipping this "
+                "sync and any like it. The request itself is unaffected. See "
+                "the module docstring in cogs/requests/ggr_sync.py for why."
+            )
         return None
     try:
         return await method(*args, **kwargs)

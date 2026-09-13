@@ -10,6 +10,12 @@ from discord.ext import commands
 
 logger = logging.getLogger(__name__)
 
+# ggrequestz has no "one request by id" endpoint, so get_request_by_id pages
+# the caller's request list. The page size is the list endpoint's own
+# parameter; the page cap stops a bad id walking an unbounded history.
+GGR_REQUEST_PAGE_SIZE = 100
+GGR_REQUEST_MAX_PAGES = 20
+
 class GGRequestzIntegration(commands.Cog):
     """Integration with GGRequestz API using API key authentication"""
     
@@ -409,6 +415,52 @@ class GGRequestzIntegration(commands.Cog):
             logger.error(f"Error getting user requests: {e}")
             return None
     
+    async def get_request_by_id(self, request_id) -> Optional[Dict[str, Any]]:
+        """One request as ggrequestz currently sees it, or None.
+
+        ggrequestz has no endpoint for a single request: /api/request offers
+        POST (create) and GET (list the caller's own requests) and nothing
+        else. So this pages the list and matches on id.
+
+        Two details that make a naive version silently never match:
+
+        - the list returns `id` as a string, while ggr_request_id is stored
+          here as an integer, so the comparison is done on str() of both;
+        - the list response carries no `admin_notes`. That field exists only
+          on the admin update response, so a status synced back from
+          ggrequestz arrives without the reason attached, and the caller's
+          note falls back to a bare "Synced from ggrequestz".
+
+        Verified against XTREEMMAK/ggrequestz src/lib/openapi.json.
+        """
+        if not await self.ensure_session():
+            return None
+
+        wanted = str(request_id)
+        offset = 0
+        for _ in range(GGR_REQUEST_MAX_PAGES):
+            page = await self.get_user_requests(
+                limit=GGR_REQUEST_PAGE_SIZE, offset=offset
+            )
+            if not page:
+                return None
+
+            entries = page.get('requests') or []
+            for entry in entries:
+                if str(entry.get('id')) == wanted:
+                    return entry
+
+            # A short page is the last page.
+            if len(entries) < GGR_REQUEST_PAGE_SIZE:
+                return None
+            offset += GGR_REQUEST_PAGE_SIZE
+
+        logger.warning(
+            f"Gave up looking for ggrequestz request {request_id} after "
+            f"{GGR_REQUEST_MAX_PAGES} pages"
+        )
+        return None
+
     async def rescind_request(self, request_id: str) -> Dict[str, Any]:
         """Rescind/cancel a request"""
         if not await self.ensure_session():

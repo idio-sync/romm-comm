@@ -127,22 +127,33 @@ class FetchRequestTests(IsolatedAsyncioTestCase):
         self.assertEqual(cog.args, ((99,), {}))
 
 
-class TheMissingMethodsAreStillMissingTests(unittest.TestCase):
-    """A ratchet on the two methods the guards above exist for.
+class OutboundStatusSyncStaysUnavailableTests(unittest.TestCase):
+    """A ratchet on the one method that cannot exist.
 
-    When either is implemented on GGRequestzIntegration this fails, which is
-    the prompt to drop the getattr() indirection in ggr_sync._call and let the
-    call be a plain call again. tests/test_cog_lookups.py cannot see these,
-    because reaching them through getattr() is not an attribute access.
+    ggrequestz updates a request's status at POST /admin/api/requests/update,
+    which takes a session cookie and refuses bearer tokens. This integration
+    has an API key and no session, so update_request_status is unimplementable
+    rather than unimplemented.
+
+    If it ever appears -- because upstream started accepting API keys, or
+    because the bot grew a session -- this fails, which is the prompt to drop
+    the getattr() indirection in ggr_sync._call and let the call be a plain
+    call. test_cog_lookups.py cannot see this, because reaching a method
+    through getattr() is not an attribute access.
     """
 
-    def test_update_request_status_and_get_request_by_id_are_not_implemented(self):
+    def test_update_request_status_is_still_not_implementable(self):
         from integrations.ggrequestz import GGRequestzIntegration
 
-        for name in ("update_request_status", "get_request_by_id"):
-            with self.subTest(method=name):
-                self.assertFalse(
-                    hasattr(GGRequestzIntegration, name),
-                    f"GGRequestzIntegration.{name} exists now - remove the "
-                    "getattr() guard in cogs/requests/ggr_sync.py and this test.",
-                )
+        self.assertFalse(
+            hasattr(GGRequestzIntegration, "update_request_status"),
+            "GGRequestzIntegration.update_request_status exists now - if the "
+            "upstream endpoint accepts the API key, remove the getattr() guard "
+            "in cogs/requests/ggr_sync.py and this test.",
+        )
+
+    def test_get_request_by_id_is_implemented(self):
+        """The other half of the pair, which is implemented and must stay so."""
+        from integrations.ggrequestz import GGRequestzIntegration
+
+        self.assertTrue(hasattr(GGRequestzIntegration, "get_request_by_id"))
