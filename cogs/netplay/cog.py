@@ -11,12 +11,15 @@ load_integration_cogs, which this cog is deliberately not part of.
 """
 
 import logging
+import time
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
+import discord
 from discord.ext import commands
 
-from .views import MAX_SELECT_OPTIONS
+from .embeds import build_netplay_embed, render_key
+from .views import MAX_SELECT_OPTIONS, RomSelectView
 from .watcher import NetplayWatcher
 
 logger = logging.getLogger(__name__)
@@ -173,3 +176,225 @@ class Netplay(commands.Cog):
 
         truncated = len(items) > MAX_SELECT_OPTIONS
         return list(items[:MAX_SELECT_OPTIONS]), truncated, display
+
+    # -------------------------------------------------------------- registry
+
+    def at_capacity(self) -> bool:
+        """Whether the poll set is full.
+
+        The cap exists because every watcher costs a request per tick against
+        RomM, and RommClient has no working client-side throttle - RateLimit
+        is instantiated but acquire() is never called.
+        """
+        return len(self.watchers) >= self.bot.config.NETPLAY_MAX_WATCHERS
+
+    def live_watcher_for(self, rom_id: int) -> Optional[NetplayWatcher]:
+        """A non-terminal watcher already tracking this ROM, if there is one.
+
+        One watcher per ROM: two posts for the same game would poll the same
+        endpoint twice a tick for identical answers, and whichever post lost
+        the registry slot would never be edited again - stranded forever on
+        "waiting for a room".
+        """
+        watcher = self.watchers.get(rom_id)
+        return watcher if watcher and not watcher.is_terminal else None
+
+    def register_watcher(
+        self,
+        rom: Dict[str, Any],
+        *,
+        requester_id: int,
+        requester_name: str,
+        channel_id: int,
+        platform_display: str,
+    ) -> NetplayWatcher:
+        """Start tracking one ROM.
+
+        Everything the embed will need is captured here rather than looked up
+        per render: the poll loop has no ctx, and bot.get_user() may no longer
+        have the requester cached by the time a room opens.
+        """
+        watcher = NetplayWatcher(
+            rom_id=int(rom["id"]),
+            rom_name=str(rom.get("name") or rom.get("fs_name") or "Unknown"),
+            requester_id=requester_id,
+            requester_name=requester_name,
+            channel_id=channel_id,
+            created_at=time.time(),
+            platform_display=platform_display,
+            cover_url=rom.get("url_cover") or None,
+        )
+        self.watchers[watcher.rom_id] = watcher
+        return watcher
+
+    # --------------------------------------------------------------- command
+
+    async def platform_autocomplete(self, ctx: discord.AutocompleteContext):
+        """Platforms RomM actually has, the way cogs/search.py:1341 does it.
+
+        Not the requests cog's platforms_repo: that returns three-column
+        aiosqlite Rows (display_name, in_romm, folder_name), it offers
+        platforms RomM does *not* have - which cannot be played - and it would
+        couple this cog to cogs.requests and aiosqlite.
+        """
+        try:
+            raw_platforms = await self.bot.fetch_api_endpoint('platforms')
+            if not raw_platforms:
+                return []
+
+            names = [
+                self.bot.get_platform_display_name(p)
+                for p in raw_platforms
+                if self.bot.get_platform_display_name(p)
+            ]
+            user_input = ctx.value.lower()
+            return [name for name in names if user_input in name.lower()][:25]
+        except Exception as e:
+            logger.error(f"Error in netplay platform autocomplete: {e}")
+            return []
+
+    @discord.slash_command(name="netplay", description="Announce a netplay session for a game")
+    async def netplay(
+        self,
+        ctx: discord.ApplicationContext,
+        platform: discord.Option(str, "Platform the game is on", required=True,
+                                 autocomplete=platform_autocomplete),
+        game: discord.Option(str, "Game to play", required=True),
+    ):
+        """Post an announcement and start tracking the session."""
+        await ctx.defer()
+
+        if not self.enabled:
+            await ctx.respond("Netplay is disabled on this bot.")
+            return
+
+        if not self.server_enabled:
+            await ctx.respond(
+                "This RomM server has netplay turned off. An admin needs to set "
+                "`emulatorjs.netplay.enabled: true` in RomM's config.yml."
+            )
+            return
+
+        if not self.scope_ok:
+            # Refusing beats posting an announcement that can never update.
+            await ctx.respond(
+                "My RomM token is missing the `assets.read` scope, so I cannot "
+                "see netplay rooms. An admin needs to reissue it with that "
+                "scope added."
+            )
+            return
+
+        if not self.domain_configured():
+            await ctx.respond(
+                "No public RomM URL is configured, so I cannot build a join "
+                "link. An admin needs to set the `DOMAIN` environment variable."
+            )
+            return
+
+        # Checked here to fail fast, and again in announce() - everything
+        # between the two is awaited (a ROM search, possibly a human picking
+        # from a select), and other invocations register watchers during it.
+        if self.at_capacity():
+            await ctx.respond(
+                "I am already tracking as many netplay sessions as I can. "
+                "Wait for one to finish and try again."
+            )
+            return
+
+        roms, truncated, platform_display = await self.resolve_roms(platform, game)
+
+        if roms is None:
+            await ctx.respond("Could not reach RomM to search for that game.")
+            return
+
+        if not roms:
+            await ctx.respond(f"No ROMs on **{platform}** matching **{game}**.")
+            return
+
+        if len(roms) == 1:
+            await self.announce(ctx, roms[0], platform_display)
+            return
+
+        note = ""
+        if truncated:
+            note = (
+                f"\nShowing the first {MAX_SELECT_OPTIONS} matches — "
+                "narrow your search if the one you want is missing."
+            )
+
+        view = RomSelectView(roms, requester_id=ctx.author.id)
+        view.message = await ctx.respond(f"Which one?{note}", view=view)
+        await view.wait()
+
+        if view.selected_rom is None:
+            return
+
+        await self.announce(ctx, view.selected_rom, platform_display)
+
+    async def announce(
+        self,
+        ctx: discord.ApplicationContext,
+        rom: Dict[str, Any],
+        platform_display: str,
+    ) -> None:
+        """Post the PENDING embed and register the watcher behind it."""
+        existing = self.live_watcher_for(int(rom["id"]))
+        if existing is not None:
+            await ctx.respond(
+                f"**{existing.rom_name}** already has a live announcement in "
+                "this server. Use that post rather than starting a second one."
+            )
+            return
+
+        # Re-checked here rather than trusting the check in netplay(): a ROM
+        # search and possibly a human picking from a select happened in
+        # between, and other invocations were free to take the last slot.
+        if self.at_capacity():
+            await ctx.respond(
+                "I am already tracking as many netplay sessions as I can. "
+                "Wait for one to finish and try again."
+            )
+            return
+
+        watcher = self.register_watcher(
+            rom,
+            requester_id=ctx.author.id,
+            requester_name=ctx.author.display_name,
+            channel_id=ctx.channel_id,
+            platform_display=platform_display,
+        )
+
+        # Captured before the await, not after. The watcher is already in the
+        # registry, so a poll can advance it to LIVE while this message is in
+        # flight; recording render_key(watcher) afterwards would claim we had
+        # delivered a LIVE embed when what actually went out said PENDING, and
+        # the post would never be corrected. refresh_message skips a watcher
+        # whose message_id is still None, so the tick in between is a no-op.
+        embed = self.render(watcher)
+        sent_key = render_key(watcher)
+
+        # ctx.respond, not ctx.send: after a defer only a response or followup
+        # clears Discord's "thinking..." placeholder, and ApplicationContext
+        # .send is the plain Messageable send. It returns a WebhookMessage
+        # here, so .id is available.
+        try:
+            message = await ctx.respond(embed=embed)
+        except discord.HTTPException as e:
+            # Release the slot. Leaving a watcher with no message behind would
+            # hold a capacity slot and block this ROM forever, polling to
+            # update a post that does not exist.
+            logger.warning(f"Could not post netplay announcement: {e}")
+            if self.watchers.get(watcher.rom_id) is watcher:
+                del self.watchers[watcher.rom_id]
+            return
+
+        watcher.message_id = message.id
+        watcher.last_render_key = sent_key
+
+    def render(self, watcher: NetplayWatcher) -> discord.Embed:
+        """Build the embed for a watcher's current state.
+
+        Everything it needs was captured on the watcher at announce time, so
+        this works identically from a command and from the poll loop.
+        """
+        return build_netplay_embed(watcher, domain=self.bot.config.DOMAIN)

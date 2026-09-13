@@ -56,6 +56,13 @@ def fake_bot(loop):
         # expected to come up with IGDB disabled rather than fail to load.
         IGDB_CLIENT_ID=None,
         IGDB_CLIENT_SECRET=None,
+        # Netplay reads these in __init__. NETPLAY_ENABLED=False keeps the
+        # startup probe and the poll loop from starting under test.
+        NETPLAY_ENABLED=False,
+        NETPLAY_POLL_INTERVAL=20,
+        NETPLAY_PENDING_TIMEOUT=900,
+        NETPLAY_MAX_WATCHERS=25,
+        DOMAIN="https://roms.example.com",
     )
 
     async def fetch_api_endpoint(*args, **kwargs):
@@ -123,3 +130,36 @@ class RequestsExtensionTests(unittest.IsolatedAsyncioTestCase):
         bot = await self.load()
 
         self.assertFalse(bot.get_cog("Request").igdb_enabled)
+
+
+class NetplayExtensionTests(unittest.IsolatedAsyncioTestCase):
+    async def load(self):
+        bot = fake_bot(asyncio.get_running_loop())
+        bot.load_extension("cogs.netplay")
+        await asyncio.sleep(0)
+        return bot
+
+    async def test_the_extension_loads_and_registers_the_cog(self):
+        bot = await self.load()
+
+        self.assertIsNotNone(bot.get_cog("Netplay"))
+
+    async def test_it_registers_the_netplay_command(self):
+        bot = await self.load()
+
+        self.assertEqual(
+            ["netplay"],
+            sorted(command.name for command in bot.get_cog("Netplay").get_commands()),
+        )
+
+    async def test_the_netplay_command_keeps_its_option_signature(self):
+        """Read at decoration time, so a broken annotation never reaches a call."""
+        bot = await self.load()
+        command = next(
+            c for c in bot.get_cog("Netplay").get_commands() if c.name == "netplay"
+        )
+
+        self.assertEqual(
+            [("platform", True, True), ("game", True, False)],
+            [(o.name, o.required, bool(o.autocomplete)) for o in command.options],
+        )
