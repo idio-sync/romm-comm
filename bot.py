@@ -345,6 +345,14 @@ class Config:
         self.IGDB_CLIENT_SECRET = os.getenv('IGDB_CLIENT_SECRET')
         self.AUTO_REGISTER_ROLE_ID = os.getenv('AUTO_REGISTER_ROLE_ID')
 
+        # Netplay announcements. The cog is always loaded (core_cogs is an
+        # unconditional list); NETPLAY_ENABLED is enforced inside it, which is
+        # also where the server's own EJS_NETPLAY_ENABLED is checked.
+        self.NETPLAY_ENABLED = self.parse_bool(os.getenv('NETPLAY_ENABLED', 'true'), True)
+        self.NETPLAY_POLL_INTERVAL = int(os.getenv('NETPLAY_POLL_INTERVAL', '20'))
+        self.NETPLAY_PENDING_TIMEOUT = int(os.getenv('NETPLAY_PENDING_TIMEOUT', '900'))
+        self.NETPLAY_MAX_WATCHERS = int(os.getenv('NETPLAY_MAX_WATCHERS', '25'))
+
         # GGRequestz integration. The URL is stored without a trailing /api;
         # the integration appends the path itself.
         ggr_url = os.getenv('GGREQUESTZ_URL', '').rstrip('/')
@@ -683,9 +691,10 @@ class RommBot(discord.Bot):
             'cogs.requests',
             'cogs.user_manager',
             'cogs.recent_roms',
-            'cogs.achievements'
+            'cogs.achievements',
+            'cogs.netplay'
         ]
-        
+
         # Dependencies for each cog
         cog_dependencies = {
             'cogs.emoji_manager': ['aiohttp'],
@@ -696,7 +705,8 @@ class RommBot(discord.Bot):
             'cogs.requests': ['aiosqlite'],
             'cogs.user_manager': ['aiohttp','aiosqlite'],
             'cogs.recent_roms': ['aiosqlite'],
-            'cogs.achievements': []
+            'cogs.achievements': [],
+            'cogs.netplay': ['aiohttp']
         }
 
         for cog in core_cogs:
