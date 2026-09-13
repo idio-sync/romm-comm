@@ -16,11 +16,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from .embeds import build_netplay_embed, render_key
 from .views import MAX_SELECT_OPTIONS, RomSelectView
-from .watcher import NetplayWatcher
+from .watcher import NetplayWatcher, advance
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,9 @@ class Netplay(commands.Cog):
         # before running them, so a cog added during that dispatch never sees
         # that event. Not cog_load either - py-cord has no such hook.
         bot.loop.create_task(self.check_server())
+
+        if self.enabled:
+            self.poll_sessions.start()
 
     # ------------------------------------------------------------- readiness
 
@@ -398,3 +401,106 @@ class Netplay(commands.Cog):
         this works identically from a command and from the poll loop.
         """
         return build_netplay_embed(watcher, domain=self.bot.config.DOMAIN)
+
+    # ------------------------------------------------------------- poll loop
+
+    async def tick(self, now: float) -> None:
+        """One pass over every watcher.
+
+        Iterates a snapshot, not the live dict: each watcher costs an awaited
+        HTTP call, and a /netplay invocation during any of those awaits
+        mutates the registry. Terminal watchers are collected and removed
+        after the pass rather than during it.
+        """
+        finished = []
+
+        for rom_id, watcher in list(self.watchers.items()):
+            rooms = await self.bot.romm.list_netplay_rooms(rom_id)
+
+            advance(
+                watcher,
+                rooms,
+                now=now,
+                pending_timeout=self.bot.config.NETPLAY_PENDING_TIMEOUT,
+            )
+
+            # Called every tick, not only when advance() reported a change.
+            # refresh_message compares the desired render against the last one
+            # actually delivered, so an edit that failed last tick is retried
+            # this tick even though nothing new happened. Gating this on
+            # advance() would strand a message on its previous contents
+            # forever.
+            delivered = await self.refresh_message(watcher)
+
+            # A terminal watcher stops being polled only once its final embed
+            # is on Discord. Dropping it on a failed edit would leave the post
+            # reading "live" for a session that ended.
+            if watcher.is_terminal and delivered:
+                finished.append((rom_id, watcher))
+
+        for rom_id, watcher in finished:
+            # Identity, not just the key: a fresh /netplay for this same ROM
+            # can have registered during any of the awaits above, and popping
+            # by id alone would delete that new watcher instead.
+            if self.watchers.get(rom_id) is watcher:
+                del self.watchers[rom_id]
+
+    async def refresh_message(self, watcher: NetplayWatcher) -> bool:
+        """Bring the post in line with the watcher. Returns whether it now is.
+
+        `last_render_key` records the last render Discord actually *accepted*,
+        not the last one attempted - so this is idempotent and self-retrying:
+        call it every tick, and it does nothing when the post is current and
+        retries when it is not. That is what keeps a single failed edit from
+        stranding a message permanently.
+
+        The comparison is also what protects the rate limit. Without it, 25
+        watchers on a 20s interval issue 25 edits every 20s into a handful of
+        channels, which is the fastest way into Discord's per-channel throttle.
+        """
+        key = render_key(watcher)
+        if key == watcher.last_render_key:
+            return True
+
+        # Still being published (see announce): the message id is not known
+        # yet, and last_render_key will be set to whatever was actually sent.
+        if watcher.message_id is None:
+            return False
+
+        channel = self.bot.get_channel(watcher.channel_id)
+        if channel is None:
+            return False
+
+        try:
+            message = await channel.fetch_message(watcher.message_id)
+            await message.edit(embed=self.render(watcher))
+            watcher.last_render_key = key
+            return True
+        except discord.NotFound:
+            # The post is gone; stop tracking it rather than retrying forever.
+            logger.debug(f"Netplay message for rom {watcher.rom_id} was deleted")
+            if self.watchers.get(watcher.rom_id) is watcher:
+                del self.watchers[watcher.rom_id]
+            return True
+        except discord.HTTPException as e:
+            logger.warning(f"Could not update netplay embed for {watcher.rom_id}: {e}")
+            return False
+
+    @tasks.loop(seconds=20)
+    async def poll_sessions(self):
+        """Advance every tracked session. Interval set in before_loop."""
+        try:
+            await self.tick(time.time())
+        except Exception as e:
+            # A raise here stops the loop permanently, taking every live
+            # announcement with it.
+            logger.error(f"Netplay poll failed: {e}", exc_info=True)
+
+    @poll_sessions.before_loop
+    async def before_poll(self):
+        """tasks.loop fixes its interval at decoration time; override it here."""
+        await self.bot.wait_until_ready()
+        self.poll_sessions.change_interval(seconds=self.bot.config.NETPLAY_POLL_INTERVAL)
+
+    def cog_unload(self):
+        self.poll_sessions.cancel()

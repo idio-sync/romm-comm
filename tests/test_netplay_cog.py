@@ -8,7 +8,10 @@ pointed at the right ROM.
 import unittest
 from types import SimpleNamespace
 
+import discord
+
 from cogs.netplay.cog import Netplay
+from cogs.netplay.embeds import render_key
 from cogs.netplay.watcher import NetplayState
 
 
@@ -81,6 +84,173 @@ class RegisterWatcherTests(unittest.TestCase):
         watcher = register(cog)
         watcher.state = NetplayState.ENDED
         self.assertIsNone(cog.live_watcher_for(50265))
+
+
+class FakeMessage:
+    def __init__(self):
+        self.edits = 0
+
+    async def edit(self, **kwargs):
+        self.edits += 1
+
+
+class FlakyMessage(FakeMessage):
+    """Rejects the first `fail_times` edits the way Discord would."""
+
+    def __init__(self, fail_times):
+        super().__init__()
+        self.remaining_failures = fail_times
+
+    async def edit(self, **kwargs):
+        if self.remaining_failures:
+            self.remaining_failures -= 1
+            raise discord.HTTPException(
+                SimpleNamespace(status=500, reason="Internal Server Error"),
+                "rate limited",
+            )
+        await super().edit(**kwargs)
+
+
+class FakeChannel:
+    def __init__(self, message):
+        self._message = message
+
+    async def fetch_message(self, message_id):
+        return self._message
+
+
+def make_polling_cog(poll_results, message=None):
+    """A cog whose room polls return canned results, one per tick."""
+    cog = make_cog()
+    cog.bot.config.DOMAIN = "https://roms.example.com"
+    cog._results = list(poll_results)
+    message = message or FakeMessage()
+    cog._message = message
+
+    async def list_rooms(rom_id):
+        return cog._results.pop(0) if cog._results else {}
+
+    cog.bot.romm = SimpleNamespace(list_netplay_rooms=list_rooms)
+    cog.bot.get_channel = lambda cid: FakeChannel(message)
+    return cog
+
+
+ROOM = {"r1": {"room_name": "Bomberman", "current": 2, "max": 4,
+               "player_name": "idiosync", "hasPassword": False}}
+
+
+class TickTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_room_appearing_edits_the_message(self):
+        cog = make_polling_cog([ROOM])
+        watcher = register(cog)
+        watcher.message_id = 1
+        await cog.tick(now=1000.0)
+        self.assertEqual(cog._message.edits, 1)
+        self.assertIs(watcher.state, NetplayState.LIVE)
+
+    async def test_an_unchanged_poll_does_not_edit(self):
+        """Edit suppression: 25 watchers editing every 20s hits Discord limits."""
+        cog = make_polling_cog([ROOM, ROOM])
+        watcher = register(cog)
+        watcher.message_id = 1
+        await cog.tick(now=1000.0)
+        await cog.tick(now=1020.0)
+        self.assertEqual(cog._message.edits, 1)
+
+    async def test_terminal_watchers_are_dropped(self):
+        cog = make_polling_cog([ROOM, {}])
+        watcher = register(cog)
+        watcher.message_id = 1
+        await cog.tick(now=1000.0)
+        await cog.tick(now=1020.0)
+        self.assertEqual(cog.watchers, {})
+
+    async def test_registering_during_a_tick_does_not_raise(self):
+        """The loop awaits per watcher; a command can mutate the registry."""
+        cog = make_polling_cog([ROOM])
+        watcher = register(cog)
+        watcher.message_id = 1
+
+        original = cog.bot.romm.list_netplay_rooms
+
+        async def mutate_then_poll(rom_id):
+            register(cog, rom={"id": 999, "name": "Other"})
+            return await original(rom_id)
+
+        cog.bot.romm.list_netplay_rooms = mutate_then_poll
+        await cog.tick(now=1000.0)  # must not raise RuntimeError
+        self.assertIn(999, cog.watchers)
+
+    async def test_a_failed_poll_leaves_the_watcher_alone(self):
+        cog = make_polling_cog([None])
+        watcher = register(cog)
+        watcher.state = NetplayState.LIVE
+        watcher.rooms = ROOM
+        watcher.message_id = 1
+        # Already up to date, as it would be straight out of announce().
+        watcher.last_render_key = render_key(watcher)
+        await cog.tick(now=1000.0)
+        self.assertIs(watcher.state, NetplayState.LIVE)
+        self.assertEqual(cog._message.edits, 0)
+
+    async def test_a_failed_edit_is_retried_on_the_next_tick(self):
+        """The poll may report nothing new; the post is still wrong."""
+        message = FlakyMessage(fail_times=1)
+        cog = make_polling_cog([ROOM, ROOM], message=message)
+        watcher = register(cog)
+        watcher.message_id = 1
+
+        await cog.tick(now=1000.0)
+        self.assertEqual(message.edits, 0)
+        self.assertIsNone(watcher.last_render_key)
+
+        await cog.tick(now=1020.0)
+        self.assertEqual(message.edits, 1)
+
+    async def test_a_terminal_watcher_survives_a_failed_final_edit(self):
+        """Dropping it would leave the post reading live for a dead session."""
+        message = FlakyMessage(fail_times=99)
+        cog = make_polling_cog([{}], message=message)
+        watcher = register(cog)
+        watcher.state = NetplayState.LIVE
+        watcher.rooms = ROOM
+        watcher.message_id = 1
+
+        await cog.tick(now=1000.0)
+        self.assertIs(watcher.state, NetplayState.ENDED)
+        self.assertIn(50265, cog.watchers)
+
+    async def test_cleanup_does_not_delete_a_replacement_watcher(self):
+        """A new /netplay for the same ROM can land during the awaits."""
+        cog = make_polling_cog([{}])
+        old = register(cog)
+        old.state = NetplayState.LIVE
+        old.rooms = ROOM
+        old.message_id = 1
+
+        original = cog.bot.romm.list_netplay_rooms
+
+        async def replace_then_poll(rom_id):
+            result = await original(rom_id)
+            cog.watchers[50265] = register(cog)
+            return result
+
+        cog.bot.romm.list_netplay_rooms = replace_then_poll
+        await cog.tick(now=1000.0)
+
+        self.assertIn(50265, cog.watchers)
+        self.assertIsNot(cog.watchers[50265], old)
+
+    async def test_a_watcher_still_publishing_is_skipped(self):
+        """message_id is None until announce() finishes sending."""
+        cog = make_polling_cog([ROOM])
+        watcher = register(cog)
+        self.assertIsNone(watcher.message_id)
+
+        await cog.tick(now=1000.0)
+
+        self.assertEqual(cog._message.edits, 0)
+        self.assertIsNone(watcher.last_render_key)
 
 
 if __name__ == "__main__":

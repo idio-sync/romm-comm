@@ -163,3 +163,9 @@ class NetplayExtensionTests(unittest.IsolatedAsyncioTestCase):
             [("platform", True, True), ("game", True, False)],
             [(o.name, o.required, bool(o.autocomplete)) for o in command.options],
         )
+
+    async def test_disabled_netplay_starts_no_poll_loop(self):
+        """NETPLAY_ENABLED=false must not leave a task running."""
+        bot = await self.load()
+
+        self.assertFalse(bot.get_cog("Netplay").poll_sessions.is_running())
