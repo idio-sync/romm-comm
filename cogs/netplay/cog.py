@@ -415,22 +415,31 @@ class Netplay(commands.Cog):
         finished = []
 
         for rom_id, watcher in list(self.watchers.items()):
-            rooms = await self.bot.romm.list_netplay_rooms(rom_id)
+            # Per watcher, not per tick. The loop's own handler would let one
+            # watcher's failure skip every watcher ordered after it, and a
+            # failure that repeats - a room payload advance() cannot read,
+            # say - would starve them on every tick from then on, with one
+            # log line an interval as the only symptom.
+            try:
+                rooms = await self.bot.romm.list_netplay_rooms(rom_id)
 
-            advance(
-                watcher,
-                rooms,
-                now=now,
-                pending_timeout=self.bot.config.NETPLAY_PENDING_TIMEOUT,
-            )
+                advance(
+                    watcher,
+                    rooms,
+                    now=now,
+                    pending_timeout=self.bot.config.NETPLAY_PENDING_TIMEOUT,
+                )
 
-            # Called every tick, not only when advance() reported a change.
-            # refresh_message compares the desired render against the last one
-            # actually delivered, so an edit that failed last tick is retried
-            # this tick even though nothing new happened. Gating this on
-            # advance() would strand a message on its previous contents
-            # forever.
-            delivered = await self.refresh_message(watcher)
+                # Called every tick, not only when advance() reported a
+                # change. refresh_message compares the desired render against
+                # the last one actually delivered, so an edit that failed last
+                # tick is retried this tick even though nothing new happened.
+                # Gating this on advance() would strand a message on its
+                # previous contents forever.
+                delivered = await self.refresh_message(watcher)
+            except Exception:
+                logger.exception(f"Netplay watcher for rom {rom_id} failed to update")
+                continue
 
             # A terminal watcher stops being polled only once its final embed
             # is on Discord. Dropping it on a failed edit would leave the post
@@ -469,7 +478,14 @@ class Netplay(commands.Cog):
 
         channel = self.bot.get_channel(watcher.channel_id)
         if channel is None:
-            return False
+            # Unreachable for the same reasons NotFound is, and just as
+            # permanent: the channel was deleted, or the bot lost access to
+            # it. Retrying forever would hold a watcher slot and spend a
+            # request per tick on a post nobody can be shown.
+            logger.debug(f"Netplay channel {watcher.channel_id} is unreachable")
+            if self.watchers.get(watcher.rom_id) is watcher:
+                del self.watchers[watcher.rom_id]
+            return True
 
         try:
             message = await channel.fetch_message(watcher.message_id)

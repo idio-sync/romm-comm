@@ -252,6 +252,41 @@ class TickTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cog._message.edits, 0)
         self.assertIsNone(watcher.last_render_key)
 
+    async def test_a_terminal_watcher_with_no_channel_is_dropped(self):
+        """A deleted channel is permanent: keep the watcher and it polls forever."""
+        cog = make_polling_cog([{}])
+        cog.bot.get_channel = lambda cid: None
+        watcher = register(cog)
+        watcher.state = NetplayState.LIVE
+        watcher.rooms = ROOM
+        watcher.message_id = 1
+
+        await cog.tick(now=1000.0)
+
+        self.assertEqual(cog.watchers, {})
+
+    async def test_a_watcher_whose_poll_raises_does_not_starve_the_rest(self):
+        """One deterministic failure must not skip the rest of the snapshot."""
+        cog = make_polling_cog([])
+        first = register(cog)
+        second = register(cog, rom={"id": 999, "name": "Other"})
+        first.message_id = 1
+        second.message_id = 2
+        polled = []
+
+        async def explode_on_the_first(rom_id):
+            polled.append(rom_id)
+            if rom_id == first.rom_id:
+                raise RuntimeError("boom")
+            return ROOM
+
+        cog.bot.romm.list_netplay_rooms = explode_on_the_first
+
+        await cog.tick(now=1000.0)
+
+        self.assertEqual(polled, [first.rom_id, second.rom_id])
+        self.assertIs(second.state, NetplayState.LIVE)
+
 
 if __name__ == "__main__":
     unittest.main()

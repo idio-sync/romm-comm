@@ -77,9 +77,14 @@ def advance(
 ) -> bool:
     """Apply one poll result. Returns whether a reader would see a difference.
 
-    `rooms` is None for a failed request, {} for a successful empty one. The
-    return value drives edit suppression: the caller only re-renders when this
-    says something changed.
+    `rooms` is None for a failed request, {} for a successful empty one.
+
+    The return value is informational - it reports whether this poll changed
+    anything a reader would notice. It is deliberately not what gates the
+    re-render: the cog calls refresh_message every tick and suppresses the
+    edit by comparing against the last render Discord actually accepted, so
+    an edit that failed is retried on a later tick that reports no change.
+    Gating on this instead would strand that post on its old contents.
     """
     if watcher.is_terminal:
         return False
