@@ -41,6 +41,29 @@ def declared_cogs():
     raise AssertionError("core_cogs is no longer a plain list in bot.py")
 
 
+def declared_dependencies():
+    """The cog_dependencies map out of bot.py, read rather than restated.
+
+    Nothing else checks this map. A cog missing from it loads without its
+    import guard; a cog misspelled in it is simply never matched. Both fail
+    silently at startup with a logged error and a skipped cog.
+    """
+    tree = ast.parse(Path("bot.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            if "cog_dependencies" in targets and isinstance(node.value, ast.Dict):
+                return {
+                    key.value: [
+                        element.value for element in value.elts
+                        if isinstance(element, ast.Constant)
+                    ]
+                    for key, value in zip(node.value.keys, node.value.values)
+                    if isinstance(key, ast.Constant) and isinstance(value, ast.List)
+                }
+    raise AssertionError("cog_dependencies is no longer a plain dict in bot.py")
+
+
 def fake_bot(loop):
     """A bot with what the requests cog touches, and nothing else.
 
@@ -82,6 +105,19 @@ class ExtensionListTests(unittest.TestCase):
         """It is a package now; the entry point moved to its __init__."""
         self.assertIn("cogs.requests", declared_cogs())
         self.assertTrue(Path("cogs/requests/__init__.py").exists())
+
+
+class DependencyMapTests(unittest.TestCase):
+    def test_every_declared_cog_has_a_dependency_entry(self):
+        missing = set(declared_cogs()) - set(declared_dependencies())
+        self.assertEqual(missing, set(), f"no cog_dependencies entry for {missing}")
+
+    def test_the_dependency_map_names_no_cog_that_is_not_loaded(self):
+        extra = set(declared_dependencies()) - set(declared_cogs())
+        self.assertEqual(extra, set(), f"cog_dependencies names unloaded {extra}")
+
+    def test_feeds_declares_aiohttp_for_its_probe(self):
+        self.assertIn("aiohttp", declared_dependencies().get("cogs.feeds", []))
 
 
 class RequestsExtensionTests(unittest.IsolatedAsyncioTestCase):

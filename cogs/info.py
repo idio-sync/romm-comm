@@ -18,9 +18,7 @@ class Info(commands.Cog):
         self.bot = bot
         self.stat_channels = {}
         self.last_stats = {}  # Store previous stats for comparison
-        self.has_switch = False
-        bot.loop.create_task(self.check_switch_platform())
-     
+
     async def get_or_create_category(self, guild: discord.Guild, category_name: str) -> discord.CategoryChannel:
         """Get or create a category in the guild."""
         category = discord.utils.get(guild.categories, name=category_name)
@@ -138,41 +136,6 @@ class Info(commands.Cog):
                 )
         except Exception as e:
             logger.error(f"Failed to update presence: {e}")
-    
-    async def check_switch_platform(self):
-        """Check if Switch is available in platforms"""
-        await self.bot.wait_until_ready()
-        try:
-            # Get raw platforms from API to access custom_name field
-            raw_platforms = await self.bot.fetch_api_endpoint('platforms')
-            if raw_platforms:
-                # Check if Switch exists in platforms (checking both regular and custom names)
-                self.has_switch = False
-                for platform in raw_platforms:
-                    # Check regular name (handle None values)
-                    regular_name = (platform.get('name') or '').lower()
-                    # Check custom name (handle None values)
-                    custom_name = (platform.get('custom_name') or '').lower()
-                    
-                    # Look for Switch in either name
-                    if any(switch_name in regular_name or switch_name in custom_name 
-                           for switch_name in ['nintendo switch', 'switch']):
-                        self.has_switch = True
-                        break
-                
-                logger.debug(f"Switch platform {'found' if self.has_switch else 'not found'} in platform list")
-        except Exception as e:
-            logger.error(f"Error checking Switch platform: {e}")
-            self.has_switch = False
-            
-    async def cog_slash_command_check(self, ctx: discord.ApplicationContext) -> bool:
-        """This runs before any slash command in this cog"""
-        # If it's the switch_shop_info command and Switch isn't available, block it
-        if ctx.command.name == 'switch_shop_info' and not self.has_switch:
-            await ctx.respond("❌ Switch platform is not available on this RomM server", ephemeral=True)
-            return False
-        return True
-
     
     # Listener
     @commands.Cog.listener()
@@ -294,88 +257,5 @@ class Info(commands.Cog):
             logger.error(f"Error in platforms command: {e}", exc_info=True)
             await ctx.respond("❌ An error occurred while fetching platform data")
     
-    @discord.slash_command(
-        name="switch_shop_info",
-        description="Instructions for connecting your Switch to this server"
-    )
-    async def switch_shop_info(self, ctx):
-        """Display Switch shop connection setup instructions."""      
-        try:
-            # Get emojis with fallbacks
-                       
-            embed = discord.Embed(
-                title=f"{self.bot.emoji_dict['switch']}  Switch Shop Connection Guide  {self.bot.emoji_dict['switch']}",
-                description="Follow these steps to configure your Switch for connection to this server.\n"
-                            "\n*Note: This guide assumes you have Tinfoil installed and know how to use its basic functions.*",
-                color=discord.Color.blue()
-            )
-
-            # Add steps as separate fields
-            embed.add_field(
-                name="Step 1: Access File Browser",
-                value="Open Tinfoil and navigate to File Browser",
-                inline=False
-            )
-
-            embed.add_field(
-                name="Step 2: Access Settings",
-                value="Scroll over to the selection and press `-` to access the new menu",
-                inline=False
-            )
-
-            # Connection settings in a formatted table
-            connection_settings = (
-                "**Protocol:** `https`\n"
-                f"**Host:** `{self.bot.config.DOMAIN}`\n"
-                "**Port:** `443`\n"
-                "**Path:** `/tinfoil/feed`\n"
-                "**Username:** `Your RomM username`\n"
-                "**Password:** `Your RomM password`\n"
-                "**Title:** `Your choice (free text)`\n"
-                "**Enabled:** `Yes`"
-            )
-            embed.add_field(
-                name="Step 3: Enter Connection Settings",
-                value=connection_settings,
-                inline=False
-            )
-
-            embed.add_field(
-                name="Step 4: Save Configuration",
-                value="Press `X` to save your settings",
-                inline=False
-            )
-
-            embed.add_field(
-                name="Step 5: Restart Tinfoil",
-                value="Close and reopen Tinfoil to scan TitleIDs\n"
-                      "*If configured correctly, you'll see the custom message:* `RomM Switch Library`",
-                inline=False
-            )
-
-            embed.add_field(
-                name="Accessing Content",
-                value=(
-                    " Your RomM content will now be available in:\n"
-                    "• The `New Games` tab in Tinfoil\n"
-                    "• The `File Browser` section you just configured"
-                ),
-                inline=False
-            )
-
-            # Add footer with note
-            embed.set_footer(
-                text=(
-                    "Need help? Check the RomM documentation "
-                    "or ask for support on GitHub/Discord"
-                )
-            )
-
-            await ctx.respond(embed=embed)
-
-        except Exception as e:
-            logger.error(f"Error in switch shop connection info command: {e}", exc_info=True)
-            await ctx.respond("❌ An error occurred while displaying Switch shop connection info")
-     
 def setup(bot):
     bot.add_cog(Info(bot))
