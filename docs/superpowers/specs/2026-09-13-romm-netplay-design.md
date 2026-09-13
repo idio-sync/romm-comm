@@ -15,9 +15,9 @@ peer-to-peer over WebRTC. What RomM does not do is tell anyone a session is
 happening. Someone opens a room and it exists, unlisted, until another person
 happens to open the same game's player and look.
 
-That is the gap this cog fills. `/netplay <game>` posts a Discord embed for a
-game in the library, then keeps it current — no room yet, room open with two of
-four seats filled, session over — by polling RomM.
+That is the gap this cog fills. `/netplay <platform> <game>` posts a Discord
+embed for a game in the library, then keeps it current — no room yet, room open
+with two of four seats filled, session over — by polling RomM.
 
 The bot never hosts, joins, or relays anything. It reads one endpoint and edits
 one message.
@@ -114,19 +114,25 @@ handful of rooms it could read are strangers playing unmatched ROM hacks.
 
 ### v1
 
-- `/netplay <game>` — pick a game from the library, post an announcement embed.
+- `/netplay <platform> <game>` — resolve a library ROM, post an announcement
+  embed.
 - The embed tracks the session: waiting → open → ended.
-- Enrich the owner's name with their Discord identity when the RomM account is
-  linked.
+
+The host is rendered as the **raw `player_name` string RomM reports**, with no
+Discord identity attached. See §6.3 for why.
 
 ### v2 (designed for, not built)
 
+- **Discord identity enrichment.** Mapping `player_name` to a Discord user is
+  deferred, not merely unbuilt — it is unsafe as stated. §6.3 records the
+  constraint any future implementation must satisfy, and §7.1 the database
+  helper it needs.
 - **Interest registry.** "Ping me when someone hosts Bomberman." Needs a table
   via `database_manager.py` and a subscribe/unsubscribe UI. Deferred because it
   is a larger surface than the announce loop, and pointless until the announce
   loop is proven to get used.
 - **Role or channel ping on announce.** Config-driven, cheap, but blunt — the
-  same ping regardless of game. Wants the registry's targeting to be worth much.
+  same ping regardless of game.
 
 ### Non-goals
 
@@ -135,7 +141,7 @@ handful of rooms it could read are strangers playing unmatched ROM hacks.
   participant.
 - No enumeration of all live rooms. The API cannot do it (§2.1).
 - No RetroArch lobby integration (§2.5).
-- No persistence of watchers across restarts (§5.4).
+- No persistence of watchers across restarts (§5.5).
 
 ---
 
@@ -149,19 +155,52 @@ and the user-facing surface is an ordinary cog.
 | File | Responsibility |
 |---|---|
 | `romm_client.py` | Two new methods (§7). Existing session, token, retry. |
-| `cogs/netplay/__init__.py` | Re-exports + `setup()`, mirroring `cogs/requests/__init__.py`. |
-| `cogs/netplay/cog.py` | The `/netplay` command, game picker, watcher registry. |
+| `cogs/netplay/__init__.py` | Re-exports + `setup()`, mirroring [cogs/requests/__init__.py](../../../cogs/requests/__init__.py). |
+| `cogs/netplay/cog.py` | The `/netplay` command, ROM resolution, watcher registry. |
 | `cogs/netplay/watcher.py` | The poll loop and the state machine (§5). |
 | `cogs/netplay/embeds.py` | One formatter per state. |
+| `cogs/netplay/views.py` | The ROM select (§6.1) — new, not reused. |
 
-Registered in `bot.py`'s `core_cogs` list, which `tests/test_extension_loading.py`
-reads directly — so adding it there is what puts it under test.
+Registered in `bot.py`'s `core_cogs` list ([bot.py:677-687](../../../bot.py#L677-L687)),
+with a matching entry in the parallel `cog_dependencies` dict
+([bot.py:689-699](../../../bot.py#L689-L699)) — `['aiohttp']`. Every core cog
+has one; omitting it is easy to miss.
 
-The game picker reuses the paginated select already built for requests
-(`cogs/requests/views_game.py`); platform emoji and slug normalisation come from
-`cogs/platform_emoji.py`. Neither needs changes.
+### 4.1 What is genuinely reusable, and what is not
 
-### Why not a socket.io client
+An earlier draft of this spec claimed the request flow's game picker could be
+reused unchanged. **That is false, and the correction is load-bearing** — it
+concealed the command's entire input surface.
+
+| Component | Reusable? |
+|---|---|
+| [cogs/platform_emoji.py](../../../cogs/platform_emoji.py) — slug normalisation, emoji | Yes |
+| `platforms_repo.search_for_autocomplete` ([cogs/requests/repo.py:449](../../../cogs/requests/repo.py#L449)) | Yes — for the `platform` option |
+| [cogs/requests/views_game.py](../../../cogs/requests/views_game.py) `GameSelect` / `GameSelectView` | **No** |
+
+`GameSelect` is not reusable and not paginated:
+
+- **Not paginated.** It truncates with `matches[:25]`
+  ([views_game.py:312](../../../cogs/requests/views_game.py#L312),
+  [:334](../../../cogs/requests/views_game.py#L334),
+  [:559](../../../cogs/requests/views_game.py#L559)). There is no page state
+  anywhere in the file.
+- **Not generic.** `GameSelectView` hard-wires a "Submit Request" button and a
+  "Not Listed" button that sets `selected_game = "manual"`, and
+  `GameSelect.callback` calls `self.view.update_view_for_selection`
+  ([views_game.py:83-150](../../../cogs/requests/views_game.py#L83-L150)).
+- **Wrong data shape.** Its options are built from `match['release_date']` and
+  `match['platforms']` — IGDB matches. Netplay needs a **RomM rom id** (§2.3).
+
+There is also **no ROM-name autocomplete anywhere in the repo**; every
+`autocomplete=` in the codebase is platform-only.
+
+`cogs/netplay/views.py` therefore contains a new, small select built from RomM
+ROM rows. It is deliberately *not* a generalisation of `GameSelect`; extracting
+a shared abstraction from two dissimilar callers is a change to the request
+flow and out of scope here.
+
+### 4.2 Why not a socket.io client
 
 RomM emits real-time room events, and subscribing would give live updates and
 full enumeration. Rejected: `open-room`/`join-room` require a `sessionId` and
@@ -192,43 +231,93 @@ Every watcher therefore self-limits, which is what keeps the poll set bounded.
 `PENDING → LIVE` is the whole point. The announcement is useful *before* the
 room exists, which is exactly the coordination gap.
 
-### 5.2 The poll set
+### 5.2 Accepted gaps in the state machine
+
+Both of these are known and accepted for v1. They are recorded so an
+implementer can tell they were considered rather than missed.
+
+- **A session shorter than one poll interval is invisible.** Host opens a room,
+  nobody joins, they close it within `NETPLAY_POLL_INTERVAL`. The watcher never
+  leaves `PENDING` and eventually says "No session started" — a false statement
+  about something that did happen. Accepted: the alternative is a much shorter
+  interval, which costs far more than the case is worth.
+- **`ENDED` does not re-arm.** A host who drops and reopens 40 seconds later
+  has a dead embed. Given §11's point that host upload bandwidth makes rooms
+  fragile, this is expected rather than exotic. **Mitigation:** the `ENDED`
+  embed must carry an explicit "session over — run `/netplay` to announce a new
+  one" line, so the dead state is self-explaining.
+
+### 5.3 The poll set, and the tick
 
 `/api/netplay/list` requires a `game_id`, so there is no cheap "what's live
 right now" query. The poll set is therefore **only the rom ids with a live
 Discord post**, which means every request maps to a message someone is
 watching, and the set drains on its own.
 
-A single `discord.ext.tasks` loop iterates all active watchers per tick rather
-than one task per post.
+A single `discord.ext.tasks` loop iterates all active watchers per tick, not
+one task per post. Three mechanics are mandatory, not optional:
 
-### 5.3 Multiple rooms
+1. **Iterate a snapshot.** The loop awaits an HTTP call per watcher, and a
+   `/netplay` invocation during any of those awaits mutates the registry.
+   Iterate `list(watchers.items())` and remove terminal watchers *after* the
+   pass. Iterating the live dict raises `RuntimeError: dictionary changed size
+   during iteration`, intermittently and under load.
+2. **Edit only when the rendered payload changed.** At a 20s interval and 25
+   watchers, editing every tick is 25 edits per 20s, mostly into one or two
+   channels — straight into Discord's per-channel edit throttling. Render the
+   embed, compare to the last rendered value, and skip the API call when equal.
+   This is the single most likely production failure of the design.
+3. **Set the interval at runtime.** `tasks.loop` fixes its interval at
+   decoration time, so `NETPLAY_POLL_INTERVAL` must be applied via
+   `change_interval` in `before_loop`. Precedent: [bot.py:817](../../../bot.py#L817).
+
+### 5.4 Multiple rooms
 
 The endpoint returns a dict, so a game can have several concurrent rooms. The
 embed renders 0, 1, or N. The `LIVE → ENDED` transition is "the dict became
 empty", not "a particular room vanished".
 
-### 5.4 Restart
+### 5.5 Restart
 
 Watchers live in memory and die with the cog. A netplay room rarely outlives a
 bot restart, and reconciling orphaned embeds would cost a table and a boot-time
 sweep to solve a problem that mostly resolves itself. On restart, existing posts
-simply stop updating; they should be written so a stale one reads as stale
-rather than as a live session.
+simply stop updating; because every non-terminal embed states its own staleness
+rule (§5.2), a stale one reads as stale rather than as a live session.
 
 ---
 
 ## 6. Commands and flow
 
+### 6.1 Resolving a ROM
+
+The command mirrors `/search`'s proven shape rather than inventing one:
+
 ```
-/netplay <game>
-  └─ paginated select of matching library ROMs (existing component)
-       └─ user picks one
-            └─ bot posts PENDING embed, registers a watcher
-                 └─ user clicks Play, opens a room in their browser
-                      └─ next poll flips the embed to LIVE
-                           └─ others click Join, current climbs
-                                └─ everyone leaves → ENDED
+/netplay platform:<autocomplete> game:<text>
+```
+
+`platform` uses the existing `search_for_autocomplete`
+([cogs/requests/repo.py:449](../../../cogs/requests/repo.py#L449)); `game` is
+free text, resolved against RomM's ROM search.
+
+- 0 matches → refuse, with the search term echoed.
+- 1 match → proceed directly, no select.
+- 2-25 matches → a new select (§4.1) of ROM rows; the value is the rom id.
+- \>25 matches → show the first 25 and say so explicitly, asking the user to
+  narrow the term. **This is truncation, not pagination**, and the embed must
+  admit it rather than silently dropping results.
+
+### 6.2 Lifecycle
+
+```
+/netplay platform game
+  └─ resolve to one rom_id
+       └─ bot posts PENDING embed, registers a watcher
+            └─ user clicks Play, opens a room in their browser
+                 └─ next poll flips the embed to LIVE
+                      └─ others click Join, current climbs
+                           └─ everyone leaves → ENDED
 ```
 
 **Embed contents.** Game name, cover art, platform emoji, and the core RomM
@@ -240,19 +329,35 @@ state, the host and seat count.
 parameter, so the link lands the user in the right game's player and they pick
 the room from the netplay menu there. One click, not zero.
 
-**Identity.** `player_name` defaults to the RomM username, so it can usually be
-mapped to a Discord user via `cogs/user_manager.py`. It is **not** trustworthy —
-it is client-supplied and was trivially overridden to an arbitrary string during
-testing. Render it as a display hint; never use it for authorization or to
-attribute an action to a Discord account.
+`DOMAIN` defaults to the literal string `No website configured`
+([bot.py:309](../../../bot.py#L309)). Unset, the embed's primary
+call-to-action would render as `No website configured/rom/50265/ejs`. See §9.
+
+### 6.3 Identity: why the host is a raw string
+
+`player_name` defaults to the RomM username, so it is tempting to map it to a
+Discord user via the `user_links` table and render "hosted by Alice".
+
+**Do not, in v1.** The value is client-supplied and was trivially overridden to
+an arbitrary string during testing. Rendering a Discord identity from it means
+a host can set `player_name` to another member's RomM username and have the bot
+vouch for them in an embed — and if the enrichment renders a mention, it pings
+the impersonated user too.
+
+v1 therefore prints the raw string RomM reports and attributes nothing.
+
+Any future enrichment (§3, v2) must satisfy all three:
+
+1. Display name only — never a `<@id>` mention.
+2. An explicit unverified marker, so the embed never asserts identity.
+3. Treated as a rendering convenience for a self-reported string, never as
+   authentication or authorization.
 
 ---
 
 ## 7. RommClient additions
 
-Two methods, both using the existing `make_authenticated_request` (no caching —
-room state must be fresh, and `fetch_api_endpoint`'s cache would serve stale
-counts):
+Two methods, both using the existing `make_authenticated_request`:
 
 ```python
 async def get_server_config(self) -> Optional[Dict]:
@@ -270,9 +375,47 @@ async def list_netplay_rooms(self, rom_id: int) -> Optional[Dict]:
     """
 ```
 
-`None` means the call failed, `{}` means no rooms. The watcher must distinguish
-them: a failed poll is not an ended session, and must not flip an embed to
-`ENDED`.
+**Why not `fetch_api_endpoint`.** It takes `bypass_cache`
+([romm_client.py:398](../../../romm_client.py#L398)), so "it caches" alone does
+not settle it. The decisive reason is that `_get_json` calls
+`self.cache.set(endpoint, data)` at
+[romm_client.py:468](../../../romm_client.py#L468) **even on the bypass path**.
+Polling through it would write a fresh room-list entry into the shared
+`APICache` every interval per watched game, for a value that is stale within
+seconds. (Secondary: `APICache.get`'s result is consumed via `if cached_data:`,
+so a cached `{}` is falsy and re-fetches anyway — the cache cannot help this
+endpoint's most common response.)
+
+**The cost of that choice:** `make_authenticated_request` has **no retry loop**;
+the exponential backoff lives only in `fetch_api_endpoint`
+([romm_client.py:406-436](../../../romm_client.py#L406-L436)). So the
+"escalate after several consecutive failures" rule in §9 is the *only*
+resilience in this design. That is acceptable for a poller that runs again in
+20 seconds, but it must be a deliberate choice rather than an assumption that a
+retry exists.
+
+**The `None` / `{}` contract.** `None` means the call failed; `{}` means no
+rooms. The watcher must distinguish them: a failed poll is not an ended session
+and must not flip an embed to `ENDED`. One nuance to be aware of —
+`_read_response` ([romm_client.py:371-395](../../../romm_client.py#L371-L395))
+also returns `{}` for HTTP 204 and for any 2xx whose body will not parse, so
+`{}` strictly means "succeeded, no rooms readable". Benign here, but the
+contract is not quite two-valued.
+
+### 7.1 Database helper (v2 only)
+
+Should identity enrichment ever be built, note that **no reverse lookup
+exists**. `database_manager.py` has `get_user_link(discord_id)`
+([:659](../../../database_manager.py#L659), forward only) and
+`get_all_user_links()` ([:728](../../../database_manager.py#L728)).
+`user_manager.py`'s `discord_user_links` dict is built inside a View, not a
+reusable API. A naive implementation becomes an O(all links) scan per room per
+tick, or a cross-cog import of the kind `tests/test_import_boundaries.py`
+discourages.
+
+The fix is a new `database_manager.get_user_link_by_romm_username(name)`, which
+is cheap — `idx_romm_username ... COLLATE NOCASE` already exists at
+[database_manager.py:583](../../../database_manager.py#L583).
 
 ---
 
@@ -282,17 +425,34 @@ Per the project rule that `Config` in `bot.py` owns all environment reading:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `NETPLAY_ENABLED` | `true` | Load the cog at all. |
+| `NETPLAY_ENABLED` | `true` | Enable the command. |
 | `NETPLAY_POLL_INTERVAL` | `20` | Seconds between ticks. |
 | `NETPLAY_PENDING_TIMEOUT` | `900` | Seconds before `PENDING` → `EXPIRED`. |
 | `NETPLAY_MAX_WATCHERS` | `25` | Cap on concurrent live posts. |
 
+**Where `NETPLAY_ENABLED` is enforced.** Not at load time. `core_cogs`
+([bot.py:677-687](../../../bot.py#L677-L687)) is an unconditional list — no core
+cog is env-gated, and the `{STEM}_ENABLED` convention belongs to
+`load_integration_cogs` ([bot.py:743-746](../../../bot.py#L743-L746)), which
+this cog deliberately does not use (§4). The cog therefore always loads and
+self-disables in `setup()` / `cog_load`, the pattern `romm_streaming.py` uses
+via `self.enabled and self.server_enabled`. No change to `load_all_cogs`.
+
+**Worst-case request rate.** At the defaults, 25 watchers × 3 polls/min = **75
+requests/min** against RomM. That is a new load profile for this bot — by
+comparison `recent_roms` runs `@tasks.loop(hours=1)`. Note also that
+`RommClient` has **no working client-side throttle**: `RateLimit` is defined at
+[romm_client.py:70](../../../romm_client.py#L70) and instantiated at
+[:90](../../../romm_client.py#L90), but `acquire()` is never called anywhere in
+the module. Operators lowering `NETPLAY_POLL_INTERVAL` or raising
+`NETPLAY_MAX_WATCHERS` have nothing catching them.
+
 **Token scope.** `/api/netplay/list` requires `assets.read`, which is **not** in
-the scope list the README currently documents for `ROMM_CLIENT_TOKEN`
-(`roms.read platforms.read firmware.read users.read users.write me.write`).
-Existing tokens will get 403. Both the README and the OAuth grant in
-`romm_client.py` need `assets.read` added, and operators must reissue their
-client token.
+the scope list the README documents for `ROMM_CLIENT_TOKEN`
+([README.md:152](../../../README.md#L152)) nor in the OAuth grant
+([romm_client.py:158](../../../romm_client.py#L158)) — both currently read
+`roms.read platforms.read firmware.read users.read users.write me.write`.
+Existing tokens will 403. See §13 before editing that string.
 
 **Server prerequisites**, checked once at startup and reported clearly:
 
@@ -306,13 +466,15 @@ client token.
 
 | Condition | Behaviour |
 |---|---|
-| Server has netplay disabled | Cog loads, `/netplay` refuses with an explanation. Mirrors `romm_streaming.py`'s `server_enabled` gate. |
+| Server has netplay disabled | Cog loads, `/netplay` refuses with an explanation. |
 | ICE servers empty | Warn at startup; commands still work (LAN play is legitimate). |
-| Token lacks `assets.read` | Detected at startup by a probe call; refuse with the scope named, since the 403 is otherwise silent. |
-| Poll returns `None` | Leave the embed alone. Do not flip to `ENDED`. Escalate to `ENDED` only after several consecutive failures. |
+| Token lacks `assets.read` | Detected at startup by a probe call; refuse with the scope named, since the 403 is otherwise silent — `_read_response` returns `None` for every non-2xx alike. |
+| Startup probe itself fails (server restarting) | **Fail open**: log a warning, leave the command enabled. A transient boot-order failure must not silently disable the feature until the next restart. |
+| `DOMAIN` unset (`No website configured`) | `/netplay` refuses at command time with a config error. Never post an embed whose primary link is broken. |
+| Poll returns `None` | Leave the embed alone. Do not flip to `ENDED`. Escalate only after several consecutive failures (§7 — there is no retry beneath this). |
 | Watcher cap reached | Refuse politely; suggest waiting for a session to end. |
 | Message deleted | Drop the watcher on the resulting 404 rather than retrying forever. |
-| Bot restart | Watchers lost; posts stop updating (§5.4). |
+| Bot restart | Watchers lost; posts stop updating (§5.5). |
 
 ---
 
@@ -322,14 +484,24 @@ Following the suite's existing approach — build subjects with
 `object.__new__`, no live Discord, no live RomM:
 
 - **State machine** (`watcher.py`) — every transition, driven by fabricated API
-  payloads: `{}` → room → `{}`; `None` mid-session not ending it; the pending
-  timeout; multiple concurrent rooms.
-- **Embed formatters** (`embeds.py`) — one test per state; a room with a
-  password; a room with no linked Discord user; missing cover art.
+  payloads: `{}` → room → `{}`; `None` mid-session *not* ending it; the pending
+  timeout; multiple concurrent rooms; and the snapshot-iteration guarantee
+  (registering a watcher mid-tick must not raise).
+- **Edit suppression** — an unchanged payload across two ticks issues no edit.
+  This protects §5.3's rate-limit rule, which is otherwise invisible.
+- **Embed formatters** (`embeds.py`) — one test per state; a password-protected
+  room; missing cover art; the `ENDED` re-run hint (§5.2).
+- **ROM resolution** (§6.1) — 0 / 1 / many / >25 matches, including that the
+  \>25 case tells the user it truncated.
 - **Client methods** — `list_netplay_rooms` builds the right URL with
   `game_id`; distinguishes `None` from `{}`.
-- **Extension loading** — adding `cogs.netplay` to `core_cogs` brings it under
-  `tests/test_extension_loading.py` automatically.
+- **Extension loading** — adding `cogs.netplay` to `core_cogs` gets it the
+  baseline import/`setup()` check at
+  [tests/test_extension_loading.py:70](../../../tests/test_extension_loading.py#L70)
+  free. It does **not** get the substantive checks free: the per-cog tests
+  (cog registered, commands registered, option signature pinned) are
+  hand-written, and `fake_bot` will need `NETPLAY_*` attributes on its config
+  `SimpleNamespace`. A netplay analogue must be written.
 - **Cog lookups** — if the cog reaches other cogs by string name,
   `tests/test_cog_lookups.py` covers it.
 
@@ -363,8 +535,36 @@ Following the suite's existing approach — build subjects with
 
 ## 12. Open question
 
-Netplay and the planned streaming queue (`cogs/streaming`, on top of the
-existing `romm_streaming.py`) are adjacent enough to confuse people: both are
-"play a game from Discord", but streaming is one-platform/one-user/server-side
-while netplay is many-users/browser/peer-to-peer. Worth settling the naming and
-the "which one do I want?" story while `cogs/streaming` is still unwritten.
+Netplay and the planned streaming queue are adjacent enough to confuse people:
+both are "play a game from Discord", but streaming is
+one-platform/one-user/server-side while netplay is
+many-users/browser/peer-to-peer. Worth settling the naming and the "which one
+do I want?" story while `cogs/streaming` is still unwritten.
+
+Note that `integrations/romm_streaming.py`, referenced in §8 as a pattern, is
+**untracked and unmerged** at the time of writing — an implementer who clones
+the repo will not find it. It is not a dependency of this design.
+
+---
+
+## 13. Interactions with other in-flight specs
+
+Three specs share the date 2026-09-13 and at least two amend the same line of
+code. This section exists so the second one to land does not silently revert
+the first.
+
+| Spec | Touches | Conflict |
+|---|---|---|
+| This one | `romm_client.py:158`, `README.md:152` | adds `assets.read` |
+| [per-user-romm-auth](2026-09-13-per-user-romm-auth-design.md) | `romm_client.py:158`, `README.md:152` | adds `roms.user.write` |
+| [feed-clients](2026-09-13-feed-clients-design.md) | — | none known |
+
+**Intended union**, whichever lands first:
+
+```
+roms.read platforms.read firmware.read users.read users.write me.write assets.read roms.user.write
+```
+
+Both specs independently require operators to **reissue every existing
+`ROMM_CLIENT_TOKEN`**. That should be asked of them once, in whichever release
+carries the second change — not twice.
