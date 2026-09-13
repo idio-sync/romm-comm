@@ -29,3 +29,7 @@ env/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Claude Code local settings and worktrees
+.claude/settings.local.json
+.claude/worktrees/
