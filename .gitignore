@@ -29,3 +29,6 @@ env/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Isolated worktrees for feature work
+.worktrees/
