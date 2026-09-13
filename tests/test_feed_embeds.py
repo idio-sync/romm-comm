@@ -30,6 +30,11 @@ from cogs.feeds.verdict import DownloadAuth
 DOMAIN = "https://romm.example"
 ALL = frozenset({"switch", "psvita", "psp", "psx", "ps3", "ps4", "ps5", "nds"})
 
+# Unremarkable but long enough that pkgj's five feeds - each carrying the
+# full domain plus username in their URL - can push a client's body past
+# Discord's 1024-character field cap.
+LONG_DOMAIN = "https://roms.mylongishdomain.example.org"
+
 
 def embed_text(embed):
     """Everything a reader would see, flattened."""
@@ -383,10 +388,57 @@ class EmbedTests(unittest.TestCase):
                         self.assertTrue(embed.fields)
 
     def test_no_field_exceeds_discord_s_value_limit(self):
+        # A long domain is the harder case: pkgj's five feeds each repeat the
+        # full domain and username, which is exactly what pushes a field
+        # over the cap in the first place (see PkgjLongDomainTests below).
         for key, device in DEVICES_BY_KEY.items():
-            embed = build_device_embed(
-                device, DOMAIN, "ana", DownloadAuth.ENABLED, hosted=ALL
-            )
-            for field in embed.fields:
-                with self.subTest(device=key, field=field.name):
-                    self.assertLessEqual(len(field.value), 1024)
+            for username in ("ana", None):
+                embed = build_device_embed(
+                    device, LONG_DOMAIN, username, DownloadAuth.ENABLED, hosted=ALL
+                )
+                for field in embed.fields:
+                    with self.subTest(device=key, username=username, field=field.name):
+                        self.assertLessEqual(len(field.value), 1024)
+
+    def test_the_embed_stays_within_discord_s_field_and_size_caps(self):
+        # The Vita is the widest device: two clients, seven feeds between
+        # them, so it is the one most likely to threaten the 25-field /
+        # 6000-character embed limits once continuation fields are added.
+        embed = build_device_embed(
+            DEVICES_BY_KEY["psvita"], LONG_DOMAIN, None, DownloadAuth.ENABLED, hosted=ALL
+        )
+        self.assertLessEqual(len(embed.fields), 25)
+        total = len(embed.title or "") + len(embed.description or "")
+        total += sum(len(f.name) + len(f.value) for f in embed.fields)
+        if embed.footer:
+            total += len(embed.footer.text or "")
+        self.assertLessEqual(total, 6000)
+
+
+class PkgjLongDomainTests(unittest.TestCase):
+    """Reproduces the truncation the review found: a long domain plus an
+    unlinked user used to cut the pkgj field off mid-sentence, dropping the
+    one caveat that makes URL_EMBEDDED usable at all - "Replace
+    `<your-password>` in each line." Splitting into continuation fields
+    instead of truncating is what this class protects.
+    """
+
+    def test_the_password_caveat_survives_a_long_domain_and_no_link(self):
+        embed = build_device_embed(
+            DEVICES_BY_KEY["psvita"], LONG_DOMAIN, None, DownloadAuth.DISABLED, hosted=ALL
+        )
+        pkgj_text = "\n".join(
+            f.value for f in embed.fields if f.name.startswith("pkgj")
+        )
+        self.assertIn(PASSWORD_PLACEHOLDER, pkgj_text)
+        self.assertIn(
+            "Replace `<your-password>` in each line.", pkgj_text
+        )
+
+    def test_a_split_client_gets_a_labelled_continuation_field(self):
+        embed = build_device_embed(
+            DEVICES_BY_KEY["psvita"], LONG_DOMAIN, None, DownloadAuth.DISABLED, hosted=ALL
+        )
+        names = [f.name for f in embed.fields]
+        self.assertIn("pkgj — setup", names)
+        self.assertIn("pkgj — setup (continued)", names)

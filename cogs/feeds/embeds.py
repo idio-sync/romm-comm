@@ -5,7 +5,7 @@ username, the probe verdict, what the server hosts) arrives as an argument,
 so the whole embed can be asserted against with no bot and no network.
 """
 
-from typing import FrozenSet, List, Optional
+from typing import Dict, FrozenSet, List, Optional
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import discord
@@ -118,8 +118,17 @@ def _connection_fields(url: str) -> List[str]:
     ]
 
 
-def _client_field_value(feeds: List[Feed], domain: str, username: Optional[str]) -> str:
-    """Everything the reader needs for one client, as one field body."""
+FIELD_VALUE_LIMIT = 1024
+MAX_EMBED_FIELDS = 25
+MAX_EMBED_CHARS = 6000
+
+
+def _client_lines(feeds: List[Feed], domain: str, username: Optional[str]) -> List[str]:
+    """Everything the reader needs for one client, as individual lines.
+
+    Kept as a list rather than one joined string so the caller can chunk it
+    into multiple fields without ever cutting a line in half.
+    """
     client = feeds[0].client
     base = with_scheme(domain)
     lines: List[str] = []
@@ -147,7 +156,40 @@ def _client_field_value(feeds: List[Feed], domain: str, username: Optional[str])
     for caveat in client.caveats:
         lines.append(f"• {caveat}")
 
-    return "\n".join(lines)[:1024]
+    return lines
+
+
+def _chunk_lines(lines: List[str], limit: int = FIELD_VALUE_LIMIT) -> List[str]:
+    """Pack `lines` into field-sized chunks without cutting any line in half.
+
+    A long domain can push a client's body past Discord's 1024-character
+    field cap - pkgj's URLs repeat the domain and the username on every one
+    of its five lines, so the caveat that makes URL_EMBEDDED usable is the
+    first thing to fall off the end. Splitting into continuation fields
+    keeps every line intact instead of truncating mid-sentence.
+    """
+    chunks: List[str] = []
+    current: List[str] = []
+    for line in lines:
+        if len(line) > limit:
+            # A single line longer than the field itself: truncate visibly
+            # rather than dropping it, since a whole chunk of its own would
+            # still not fit.
+            line = line[: limit - 1] + "…"
+        candidate = current + [line]
+        if current and len("\n".join(candidate)) > limit:
+            chunks.append("\n".join(current))
+            current = [line]
+        else:
+            current = candidate
+    if current:
+        chunks.append("\n".join(current))
+    return chunks or [""]
+
+
+def _client_field_values(feeds: List[Feed], domain: str, username: Optional[str]) -> List[str]:
+    """One client's body, chunked into values that each fit a Discord field."""
+    return _chunk_lines(_client_lines(feeds, domain, username))
 
 
 def build_device_embed(
@@ -170,32 +212,56 @@ def build_device_embed(
         if hosted is None or feed.content in hosted
     ] or list(device.feeds)
 
-    embed = discord.Embed(
-        title=f"{title or device.display_name} — Download Feeds",
-        description=(
-            f"Point your {device.display_name} at this server. "
-            "Everything below is specific to your account."
-        ),
-        color=discord.Color.blue(),
+    title_text = f"{title or device.display_name} — Download Feeds"
+    description_text = (
+        f"Point your {device.display_name} at this server. "
+        "Everything below is specific to your account."
     )
+    embed = discord.Embed(title=title_text, description=description_text, color=discord.Color.blue())
+
+    docs = {feed.client.docs_url for feed in feeds}
+    footer_text = f"RomM feed documentation: {sorted(docs)[0]}"
 
     # dict.fromkeys keeps catalog order while collapsing duplicates, so a
-    # device with seven feeds across two clients still gets two fields.
+    # device with seven feeds across two clients still gets two field groups.
+    # `is_first` marks each client's setup field, as opposed to a
+    # continuation field holding whatever overflowed it - the trimming below
+    # is only ever allowed to drop the latter.
+    specs: List[Dict[str, object]] = []
     for client_key in dict.fromkeys(feed.client.key for feed in feeds):
         for_client = [feed for feed in feeds if feed.client.key == client_key]
-        embed.add_field(
-            name=f"{for_client[0].client.display_name} — setup",
-            value=_client_field_value(for_client, domain, username),
-            inline=False,
-        )
+        display_name = for_client[0].client.display_name
+        for i, value in enumerate(_client_field_values(for_client, domain, username)):
+            name = f"{display_name} — setup" if i == 0 else f"{display_name} — setup (continued)"
+            specs.append({"name": name, "value": value, "is_first": i == 0})
 
     notice = download_auth_notice(verdict, device)
     if notice:
-        embed.add_field(name="Before you start", value=notice, inline=False)
+        specs.append({"name": "Before you start", "value": notice, "is_first": True})
 
     if not username:
-        embed.add_field(name="Not linked yet", value=LINK_NUDGE, inline=False)
+        specs.append({"name": "Not linked yet", "value": LINK_NUDGE, "is_first": True})
 
-    docs = {feed.client.docs_url for feed in feeds}
-    embed.set_footer(text=f"RomM feed documentation: {sorted(docs)[0]}")
+    # Discord caps an embed at 25 fields and 6000 characters total. A
+    # continuation field is pure overflow detail, never the instruction
+    # itself, so it is what gets dropped first - a client's first field and
+    # every non-client field are left alone even if the cap is missed as a
+    # result.
+    fixed_chars = len(title_text) + len(description_text) + len(footer_text)
+
+    def total_chars() -> int:
+        return fixed_chars + sum(len(s["name"]) + len(s["value"]) for s in specs)
+
+    while len(specs) > MAX_EMBED_FIELDS or total_chars() > MAX_EMBED_CHARS:
+        drop_at = next(
+            (i for i in range(len(specs) - 1, -1, -1) if not specs[i]["is_first"]), None
+        )
+        if drop_at is None:
+            break
+        del specs[drop_at]
+
+    for spec in specs:
+        embed.add_field(name=spec["name"], value=spec["value"], inline=False)
+
+    embed.set_footer(text=footer_text)
     return embed

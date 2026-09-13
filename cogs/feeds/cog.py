@@ -35,6 +35,24 @@ class Feeds(commands.Cog):
         # is what keeps that from re-probing on every gateway hiccup.
         await self.ensure_probed()
 
+    async def probe_when_ready(self):
+        """Run the startup probe once the gateway connection is actually up.
+
+        bot.py loads cogs from inside its own on_ready, and py-cord snapshots
+        the on_ready listener list at dispatch time - a listener registered
+        during that same dispatch (ours, above) misses the READY event that
+        triggered it entirely. It would then first fire on a reconnect, or
+        on the first /feeds invocation via ensure_probed(). setup() schedules
+        this coroutine as a bare task instead, the same idiom the deleted
+        Info.check_switch_platform used for the same reason.
+        """
+        await self.bot.wait_until_ready()
+        try:
+            await self.ensure_probed()
+        except Exception as e:
+            # A startup probe failure must never take the bot down with it.
+            logger.error(f"Startup download-auth probe failed: {e}", exc_info=True)
+
     def _probe_is_stale(self) -> bool:
         if self._probed_at is None:
             return True

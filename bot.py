@@ -692,7 +692,7 @@ class RommBot(discord.Bot):
             'cogs.emoji_manager': ['aiohttp'],
             'cogs.igdb_client': [],
             'cogs.info': [],
-            'cogs.feeds': ['aiohttp'],
+            'cogs.feeds': ['aiohttp', 'qrcode'],
             'cogs.search': ['aiohttp','qrcode'],
             'cogs.scan': ['socketio'],
             'cogs.requests': ['aiosqlite'],

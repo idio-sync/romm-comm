@@ -25,4 +25,11 @@ __all__ = [
 
 
 def setup(bot):
-    bot.add_cog(Feeds(bot))
+    cog = Feeds(bot)
+    bot.add_cog(cog)
+    # Scheduled rather than awaited: cogs load from inside bot.py's own
+    # on_ready, before the client is marked ready, so this has to run as
+    # its own task that waits for readiness independently. See
+    # Feeds.probe_when_ready for why the on_ready listener alone is not
+    # enough.
+    bot.loop.create_task(cog.probe_when_ready())

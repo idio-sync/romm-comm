@@ -160,6 +160,53 @@ class AutocompleteTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(len(options), 25)
 
 
+class ProbeSchedulingTests(unittest.IsolatedAsyncioTestCase):
+    """setup() has to schedule the startup probe itself.
+
+    bot.py loads cogs from inside its own on_ready, so a listener registered
+    during that dispatch (Feeds.on_ready) misses the READY event that
+    triggered it - py-cord snapshots the on_ready handler list before
+    invoking it. probe_when_ready is the piece setup() schedules as a bare
+    task to cover that gap, the same idiom the deleted
+    Info.check_switch_platform used.
+    """
+
+    async def test_probe_when_ready_waits_for_the_gateway_before_probing(self):
+        calls = []
+
+        async def wait_until_ready():
+            calls.append("waited")
+
+        cog = make_cog([platform("Nintendo Switch")])
+        cog.bot.wait_until_ready = wait_until_ready
+
+        async def fake_ensure_probed():
+            calls.append("probed")
+
+        cog.ensure_probed = fake_ensure_probed
+
+        await cog.probe_when_ready()
+
+        self.assertEqual(calls, ["waited", "probed"])
+
+    async def test_a_startup_probe_failure_does_not_propagate(self):
+        # This runs as a bare bot.loop task from setup(); an unhandled
+        # exception there would surface as an "Exception in task" log at
+        # best, and must never be allowed to interrupt bot startup.
+        async def wait_until_ready():
+            return None
+
+        cog = make_cog([platform("Nintendo Switch")])
+        cog.bot.wait_until_ready = wait_until_ready
+
+        async def explode():
+            raise RuntimeError("probe blew up")
+
+        cog.ensure_probed = explode
+
+        await cog.probe_when_ready()  # must not raise
+
+
 class UsernameTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_linked_user_gets_their_username(self):
         cog = make_cog([platform("Nintendo Switch")], {"romm_username": "ana"})

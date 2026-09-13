@@ -236,6 +236,8 @@ PS5_CONTENT = ContentPlatform(
 )
 NDS_CONTENT = ContentPlatform(
     # "nds" and "nintendo ds" both miss "Nintendo 3DS", which is what we want.
+    # "Nintendo DSi" does match, and that is also intended: a DSi runs .nds
+    # from a flashcart, so offering the DS device to a DSi library is correct.
     "nds", "Nintendo DS", name_fragments=("nintendo ds", "nds")
 )
 
