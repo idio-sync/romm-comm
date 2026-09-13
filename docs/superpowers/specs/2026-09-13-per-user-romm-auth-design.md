@@ -252,6 +252,8 @@ self.DOMAIN = os.getenv('DOMAIN', 'No website configured').rstrip('/')
 
 The precedence is: `ROMM_PAIR_BASE_URL` if set → `DOMAIN` **only if it parses as an `http`/`https` origin** → `API_BASE_URL`, with a startup warning that the pairing URL may be unreachable from a phone. `validate()` rejects a `ROMM_PAIR_BASE_URL` that is not a parseable http(s) origin.
 
+This is not hypothetical. The probe run on 2026-09-13 reported `DOMAIN unusable, fell back to API_URL` on the development instance — so the naive spelling would have DM'd that instance's users a URL beginning `No website configured`, and the guard is what turns it into a startup warning instead.
+
 **Missing key material disables the feature; it does not kill the bot.** The earlier draft said `validate()` raises, which contradicts the fail-closed paragraph below and would take down a working bot over an optional feature. `Config.validate()` raises only for genuinely fatal values (`TOKEN`, `GUILD`, `API_URL`), and the house pattern for an optional feature is to degrade — `tests/test_igdb_token.py` pins exactly that for IGDB. So: with `ROMM_USER_AUTH_ENABLED` true and no usable key, `Config` logs an error and forces the feature off, `cogs/pair` does not register its commands, and the rest of the bot starts normally.
 
 `ROMM_TOKEN_KEY` is validated at startup, not at first use: a base64 value that does not decode to exactly 32 bytes is an error naming the problem, rather than an `InvalidKey` surfacing inside someone's first `/pair`.
@@ -270,7 +272,7 @@ The precedence is: `ROMM_PAIR_BASE_URL` if set → `DOMAIN` **only if it parses 
    - `requested_scopes` `["me.read", "roms.user.write"]`.
 4. **DM the user**: the URL (`ROMM_PAIR_BASE_URL` + `verification_path_complete`), the `user_code` as a text fallback, a QR of the URL, and the 4-char code. The interaction reply is ephemeral and says to check DMs; a blocked DM falls back to an ephemeral message carrying the same content, reported through an outcome enum in the style of `InviteOutcome`. `init` returns **201**, not 200.
    - **`device_code` never appears in Discord and is never persisted.** It alone bears the grant. It lives in one in-memory dict for the life of the attempt. A second `/pair` or an `/unpair` cancels the in-flight poll task.
-5. **Poll `POST /api/auth/device/token`** at the returned `interval`, giving up at `expires_in`, backing off if the server signals it.
+5. **Poll `POST /api/auth/device/token`** at the returned `interval` (5s observed), giving up at `expires_in` (600s observed — so at most ~120 polls per attempt). Every outcome arrives as **HTTP 400 with an RFC 8628 error in `detail`**, so the loop branches on that string and not on the status: `authorization_pending` continues, `slow_down` continues with a widened interval, `access_denied` and `expired_token` are terminal, and an unrecognised `detail` is treated as terminal and logged. A loop keyed on the status code alone would spin until expiry on a denial.
 6. **Three checks before storing anything.**
    - `GET /api/users/me` on the new token → `romm_user_id`, `romm_username`. Without this the bot holds a credential it cannot attribute.
    - `GET /api/client-tokens` → `token_id`. Matched on `device_id`, but that match is **not** unique: step 3 deliberately reuses one device row across re-pairings, so several client tokens can share a `device_id`, and `ClientTokenSchema.device_id` is itself nullable. The tiebreak is the newest `created_at` among rows whose `name` carries the bot's prefix; a null `device_id` or no matching row leaves `token_id` null, which `/unpair` handles. Recording the wrong `token_id` would mean revoking the wrong credential, so this is stated rather than left to taste.
@@ -370,7 +372,7 @@ A queue that must claim a session minutes after the user typed anything is exact
 New tests, `tests/`, pytest:
 
 - **`test_romm_tokens_crypto.py`** — seal/open round-trip; a wrong key fails; **a row moved between `discord_id`s fails the AAD check**; the fingerprint is recorded and drives re-seal.
-- **`test_device_flow.py`** — `init` payload shape and scope list; a `DOMAIN` left at its `'No website configured'` default does **not** become the pairing origin; the URL is built from `ROMM_PAIR_BASE_URL` when set; the poll honours `interval` and gives up at `expires_in`.
+- **`test_device_flow.py`** — `init` payload shape and scope list; a `DOMAIN` left at its `'No website configured'` default does **not** become the pairing origin; the URL is built from `ROMM_PAIR_BASE_URL` when set; the poll honours `interval` and gives up at `expires_in`. Crucially, the poll is driven by fixtures of the **real** responses: `400 {"detail": "authorization_pending"}` continues, `400 {"detail": "access_denied"}` stops, `400 {"detail": "expired_token"}` stops, `400 {"detail": "slow_down"}` widens the interval, and an unknown `detail` stops rather than spinning. A test that treats 400 as one outcome would pass against a loop that hangs until expiry on every denial.
 - **`test_romm_tokens_store.py`** — a granted-scope shortfall discards the token; a `user_links` row naming a different RomM user makes the pairing refuse; a missing `user_links` row stores and flags; **a failing `user_links` lookup discards rather than storing** (the fail-open case: raise from the strict accessor, assert nothing is written); an invalid row makes `get_grant` return `None`; the audit row has no `sealed` or `key_fingerprint` key.
 - **`test_romm_tokens_lifecycle.py`** — the four ordering hazards, each as a named scenario:
   - a member who leaves mid-pairing has their attempt cancelled, and a completion that arrives anyway writes no row;
@@ -400,6 +402,14 @@ All five are undeclared in the OpenAPI spec, so they cannot be settled by readin
 These are run **before** the implementation plan is written, not during implementation. Items 1 and 2 can each change the plan's shape rather than one of its steps.
 
 1. **What `POST /api/auth/device/token` returns while pending, on denial, and after expiry.** The spec declares only 201/200 and 422. This is the polling loop's entire control flow.
+
+   **Pending: answered** (`tools/verify_romm_device_auth.py --pending-only`, bishop.lan, 2026-09-13). `init` returns **201** with `expires_in: 600` and `interval: 5` — so a full attempt is at most 120 polls. Pending is:
+
+   ```
+   HTTP 400  {"detail": "authorization_pending"}
+   ```
+
+   This is RFC 8628's error vocabulary carried in FastAPI's `detail` field, and it settles the loop's design: **branch on the `detail` string, never on the status code.** A 400 is pending, denied and expired all at once, so a loop keyed on status would either spin forever on a denial or abandon a live attempt. The loop must also honour `slow_down` by widening its interval. Denial and expiry are still to capture, but both are now expected at 400 with `access_denied` / `expired_token`; the probe classifies whatever it sees and prints it verbatim.
 2. **That `GET /api/client-tokens` lists the just-minted token with a matching `device_id`**, so `token_id` can be recorded. Without it, revocation and reconciliation both lose their handle — see the fallback below.
 3. **Whether `GET /api/streaming/sessions` identifies the holding user.** Its response schema is `{}`. The queue needs it to map a session back to a Discord member.
 4. **That RomM's approve screen renders the `name` field as sent.** Load-bearing, not cosmetic: with the confirmation code demoted to hygiene, this is one of only three real anti-phishing controls.

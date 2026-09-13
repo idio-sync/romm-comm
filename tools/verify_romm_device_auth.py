@@ -199,6 +199,7 @@ async def phase_wait_for_approval(session, base_url, init_body, pair_origin, tim
     interval = max(int(init_body.get('interval') or 5), 1)
     deadline = time.monotonic() + timeout
     ticks = 0
+    seen = set()
 
     while time.monotonic() < deadline:
         await asyncio.sleep(interval)
@@ -209,16 +210,33 @@ async def phase_wait_for_approval(session, base_url, init_body, pair_origin, tim
             show('outcome', f'approved after {ticks} poll(s)')
             return body
 
-        # Anything that is not the pending shape is a terminal answer worth
-        # recording verbatim - denial and expiry are what the loop must
-        # distinguish, and neither is in the OpenAPI document.
-        if status not in (400, 401, 428, 403):
-            show(f'tick {ticks}', f'HTTP {status} {repr(body)[:160]}',
-                 'unexpected - record this')
-        elif ticks == 1 or ticks % 6 == 0:
-            show(f'tick {ticks}', f'HTTP {status} {repr(body)[:120]}')
+        # Confirmed empirically: pending is HTTP 400 with
+        # {"detail": "authorization_pending"}. The status alone therefore
+        # cannot tell pending from denied or expired - the detail string is
+        # the discriminator, which is what the real loop must branch on.
+        detail = body.get('detail') if isinstance(body, dict) else None
+        if detail not in seen:
+            seen.add(detail)
+            show(f'tick {ticks}', f'HTTP {status} detail={detail!r}',
+                 'first sighting of this response')
 
-    show('outcome', f'no decision within {timeout}s', 'nothing was minted')
+        if detail == 'authorization_pending':
+            continue
+        if detail == 'slow_down':
+            interval += 5
+            show('slow_down', f'backing off to {interval}s',
+                 'the real loop must honour this too')
+            continue
+
+        # Anything else is terminal: access_denied, expired_token, or a
+        # string this design has not seen. Record it verbatim either way.
+        show('outcome', f'terminal after {ticks} poll(s)')
+        show('status', f'HTTP {status}')
+        show('body', json.dumps(body) if isinstance(body, (dict, list)) else repr(body)[:300])
+        return None
+
+    show('outcome', f'no decision within {timeout}s',
+         'nothing was minted; details seen: ' + repr(sorted(str(d) for d in seen)))
     return None
 
 
