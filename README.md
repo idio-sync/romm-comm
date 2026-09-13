@@ -149,7 +149,7 @@ GGREQUESTZ_API_KEY=ggr_api_key
 - `GUILD` — Discord server (guild) ID.
 - `API_URL` — Base URL for your RomM instance (use `http://ip:port` or a domain).
 - **RomM API auth (choose one):**
-  - `ROMM_CLIENT_TOKEN` — *(preferred, RomM 4.8+)* A Client API Token so the bot connects without storing a user's password. Create one in the RomM web UI under your user profile → **API Tokens** (or `POST /api/client-tokens`), granting the scopes `roms.read platforms.read firmware.read users.read users.write me.write`. It must be created by an admin user, since scopes are capped by the creating user's permissions (user-manager commands need `users.write`). When set, `ROMM_USER`/`ROMM_PASS` are not required.
+  - `ROMM_CLIENT_TOKEN` — *(preferred, RomM 4.8+)* A Client API Token so the bot connects without storing a user's password. Create one in the RomM web UI under your user profile → **API Tokens** (or `POST /api/client-tokens`), granting the scopes `roms.read platforms.read firmware.read users.read users.write me.write assets.read`. It must be created by an admin user, since scopes are capped by the creating user's permissions (user-manager commands need `users.write`). When set, `ROMM_USER`/`ROMM_PASS` are not required. `assets.read` is required by the netplay commands; existing tokens created before it was added must be reissued.
   - `ROMM_USER` / `ROMM_PASS` — Username/password fallback used when no client token is set. Legacy `USER` / `PASS` still work, but `USER` can collide with the operating system username.
 
 **Common optional settings (defaults shown where applicable):**

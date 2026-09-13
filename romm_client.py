@@ -155,7 +155,7 @@ class RommClient:
             data.add_field('grant_type', 'password')
             data.add_field('username', self.config.USER)
             data.add_field('password', self.config.PASS)
-            data.add_field('scope', 'roms.read platforms.read firmware.read users.read users.write me.write')
+            data.add_field('scope', 'roms.read platforms.read firmware.read users.read users.write me.write assets.read')
 
             # Simple headers for OAuth token request
             headers = {
@@ -472,3 +472,74 @@ class RommClient:
             if response.status in (401, 403):
                 raise RommAuthError(f"status {response.status}: {error_text}")
             raise RommApiError(f"status {response.status}: {error_text}")
+
+    # --------------------------------------------------------------- netplay
+
+    async def get_server_config(self) -> Optional[Dict[str, Any]]:
+        """GET /api/config - what this RomM server supports.
+
+        Carries EJS_NETPLAY_ENABLED and EJS_NETPLAY_ICE_SERVERS. Must be
+        authenticated: RomM redacts the ICE server list to [] and the config
+        parse error to None for anonymous callers, because ICE entries can
+        hold TURN credentials. An unauthenticated check reports a correctly
+        configured server as unconfigured.
+        """
+        return await self.make_authenticated_request('GET', 'config')
+
+    async def list_netplay_rooms(self, rom_id: int) -> Optional[Dict[str, Any]]:
+        """GET /api/netplay/list?game_id=<rom_id> - open rooms for one ROM.
+
+        Returns a dict keyed by room session id, or {} when nothing is open.
+        game_id is mandatory - omitting it is a 422 - so there is no way to
+        list every room on the server, which is why callers poll a bounded
+        set of ROMs rather than enumerating.
+
+        Deliberately not routed through fetch_api_endpoint: that helper writes
+        to the shared APICache even when bypass_cache is set, and a room list
+        is stale within seconds. The cost is that there is no retry here;
+        callers must tolerate a None and try again on the next tick.
+        """
+        return await self.make_authenticated_request(
+            'GET', 'netplay/list', params={'game_id': rom_id}
+        )
+
+    async def netplay_scope_ok(self) -> Optional[bool]:
+        """Whether our token carries the assets.read scope netplay needs.
+
+        True authorized, False definitely not (401/403), None undetermined -
+        the server was unreachable, or answered something that says nothing
+        about our scopes. The three-way answer is the whole point: a missing
+        scope should stop the feature, a flaky network should not.
+
+        This cannot go through make_authenticated_request or
+        fetch_api_endpoint, both of which flatten every failure to None
+        (_read_response returns None for all non-2xx alike). Distinguishing
+        the two needs the status code, which is why this reads the response
+        directly - the same reason integrations/romm_streaming.py returns
+        (status, body) rather than a bare body.
+        """
+        try:
+            if not await self.ensure_valid_token():
+                return None
+
+            session = await self.ensure_session()
+            url = f"{self.config.API_BASE_URL}/api/netplay/list"
+            headers = {
+                "Authorization": f"Bearer {self.access_token}",
+                "Accept": "application/json",
+            }
+
+            async with session.get(
+                url, headers=headers, params={'game_id': 0}
+            ) as response:
+                if response.status in (401, 403):
+                    return False
+                if 200 <= response.status < 500:
+                    # Includes 404/422: we were allowed to ask, which is all
+                    # this is checking.
+                    return True
+                return None
+
+        except Exception as e:
+            logger.debug(f"Netplay scope probe could not complete: {e}")
+            return None
