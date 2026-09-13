@@ -19,6 +19,7 @@ from .embeds import (
     build_subscribed_embed,
     format_igdb_details,
 )
+from .ggr_sync import GGR_COG_NAME, fetch_request, sync_request_status
 from .matching import edit_distance_ratio, find_duplicate_request
 from .notifications import (
     cancelled_message,
@@ -106,7 +107,11 @@ class Request(commands.Cog):
                 logger.error(f"Failed to sync platforms: {sync_error}")
         
         # Get GGRequestz integration
-        self.ggr = self.bot.get_cog('GGRequestzIntegration')
+        # Held for the two calls below that are not status syncs. `.enabled`
+        # is re-checked at each use rather than cached here: the integration's
+        # own setup runs as a background task and can turn itself off after
+        # this point.
+        self.ggr = self.bot.get_cog(GGR_COG_NAME)
         if self.ggr and self.ggr.enabled:
             logger.info("✅ Request cog using GGRequestz integration")
         else:
@@ -336,27 +341,18 @@ class Request(commands.Cog):
                     for f in fulfillments
                 ])
                 
-                # Sync status to ggrequestz
-                if self.ggr and self.ggr.enabled:
-                    for fulfillment in fulfillments:
-                        req_id = fulfillment['req_id']
-                        
-                        ggr_request_id = await self.repo.get_ggr_request_id(req_id)
+                # Best effort, per request: a sync that cannot happen must
+                # not cost the DMs below.
+                for fulfillment in fulfillments:
+                    await sync_request_status(
+                        self.bot,
+                        self.repo,
+                        fulfillment['req_id'],
+                        status='fulfilled',
+                        admin_name='Auto-Fulfillment Bot',
+                        notes=f"Automatically fulfilled - Found: {fulfillment['game_name']}",
+                    )
 
-                        if ggr_request_id:
-                            # Update status in ggrequestz
-                            result = await self.ggr.update_request_status(
-                                ggr_request_id=ggr_request_id,
-                                status='fulfilled',
-                                admin_name='Auto-Fulfillment Bot',
-                                notes=f"Automatically fulfilled - Found: {fulfillment['game_name']}"
-                            )
-                                
-                            if result.get('success'):
-                                logger.info(f"✅ Synced fulfillment to ggrequestz for request #{req_id} (GGR ID: {ggr_request_id})")
-                            else:
-                                logger.error(f"❌ Failed to sync fulfillment to ggrequestz: {result.get('error')}")
-                
                 if notifications:
                     logger.info(f"Sending DMs with links for {len(notifications)} user(s).")
                     for user_id, fulfilled_games in notifications.items():
@@ -760,7 +756,7 @@ class Request(commands.Cog):
                 discord_status = discord_req['status']
 
                 # Get current status from ggrequestz
-                ggr_request = await self.ggr.get_request_by_id(ggr_id)
+                ggr_request = await fetch_request(self.ggr, ggr_id)
                     
                 if not ggr_request:
                     continue

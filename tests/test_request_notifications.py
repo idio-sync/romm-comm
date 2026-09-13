@@ -583,3 +583,78 @@ class FailureReportingTests(unittest.IsolatedAsyncioTestCase):
             f"told the admin it failed after it succeeded: {sent}",
         )
         self.assertTrue(any("went through" in s for s in sent), sent)
+
+
+class _EnabledGgrWithoutTheMethod:
+    """The ggrequestz integration exactly as it is today.
+
+    `enabled` is True once a URL and API key are configured, but
+    `update_request_status` was never implemented on it.
+    """
+
+    enabled = True
+
+
+class _GgrBot(FakeBot):
+    """A bot where the ggrequestz integration is loaded and enabled."""
+
+    def get_cog(self, name):
+        return _EnabledGgrWithoutTheMethod()
+
+
+class _GgrRepo(FakeRepo):
+    """A repository whose request really is paired with a ggrequestz one."""
+
+    async def get_ggr_request_id(self, request_id):
+        return 99
+
+
+class GgrSyncDoesNotEatTheRestOfTheActionTests(unittest.IsolatedAsyncioTestCase):
+    """Regression: the ggrequestz sync must not take the action down with it.
+
+    Both admin callbacks sync to ggrequestz after the database write has
+    committed and before they refresh the embed and send any DMs. Calling a
+    method the integration does not have raised AttributeError right there, so
+    the request was fulfilled or rejected but the requester and the wait list
+    were never told and the embed kept offering Fulfill and Reject.
+
+    The default FakeBot returns None from get_cog and the default FakeRepo
+    returns no paired id, so nothing in this file reached that code before.
+    """
+
+    async def test_a_fulfil_still_reaches_the_dms(self):
+        requester = FakeUser(42)
+        subscriber = FakeUser(77)
+        bot = _GgrBot([requester, subscriber])
+        repo = _GgrRepo(subscriber_ids=[77])
+
+        view = RequestAdminView(bot, [request_row(id=7, user_id=42)], admin_id=1, db=None)
+        view.repo = repo
+        view.message = type("M", (), {"id": 1})()
+
+        await view.fulfill_callback(FakeInteraction())
+
+        self.assertEqual(repo.fulfilled, [(7, 1, "an-admin")])
+        self.assertEqual(len(requester.messages), 1)
+        self.assertEqual(len(subscriber.messages), 1)
+        self.assertEqual(view.requests[0]["status"], "fulfilled")
+
+    async def test_a_reject_still_reaches_the_dms(self):
+        requester = FakeUser(42)
+        subscriber = FakeUser(77)
+        bot = _GgrBot([requester, subscriber])
+        repo = _GgrRepo(subscriber_ids=[77])
+
+        view = RequestAdminView(bot, [request_row(id=7, user_id=42)], admin_id=1, db=None)
+        view.repo = repo
+        view.message = type("M", (), {"id": 1})()
+
+        interaction = FakeInteraction()
+        await view.reject_callback(interaction)
+        modal = interaction.response.modal
+        modal.reason.value = "not happening"
+        await modal.callback(FakeInteraction())
+
+        self.assertEqual(repo.rejected, [(7, "not happening")])
+        self.assertEqual(len(requester.messages), 1)
+        self.assertEqual(len(subscriber.messages), 1)

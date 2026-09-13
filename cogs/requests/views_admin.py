@@ -5,6 +5,7 @@ import logging
 import discord
 
 from .embeds import build_request_embed
+from .ggr_sync import sync_request_status
 from .notifications import (
     fulfilled_message,
     notify,
@@ -180,24 +181,17 @@ class RequestAdminView(discord.ui.View):
                 f"{current_request['platform']}"
             )
 
-            # Sync to ggrequestz if enabled
-            ggr = self.bot.get_cog('GGRequestzIntegration')
-            if ggr and ggr.enabled:
-                ggr_request_id = await self.repo.get_ggr_request_id(request_id)
-
-                if ggr_request_id:
-                    # Update status in ggrequestz
-                    sync_result = await ggr.update_request_status(
-                        ggr_request_id=ggr_request_id,
-                        status='fulfilled',
-                        admin_name=str(interaction.user),
-                        notes=f"Manually fulfilled by {interaction.user}"
-                    )
-
-                    if sync_result.get('success'):
-                        logger.info(f"✅ Synced manual fulfillment to ggrequestz for request #{request_id} (GGR ID: {ggr_request_id})")
-                    else:
-                        logger.error(f"❌ Failed to sync manual fulfillment to ggrequestz: {sync_result.get('error')}")
+            # Best effort: the fulfilment is already committed, and the
+            # embed refresh and the DMs below have to happen whether or
+            # not ggrequestz hears about it.
+            await sync_request_status(
+                self.bot,
+                self.repo,
+                request_id,
+                status='fulfilled',
+                admin_name=str(interaction.user),
+                notes=f"Manually fulfilled by {interaction.user}",
+            )
 
             # Prioritize the stored IGDB name, fall back to the user's requested name
             igdb_game_name = current_request['igdb_game_name']
@@ -292,23 +286,15 @@ class RequestAdminView(discord.ui.View):
                         f"Platform: {self.request_data['platform']} | Reason: {reason or 'No reason provided'}"
                     )
 
-                    # Sync to ggrequestz if enabled
-                    ggr = self.view.bot.get_cog('GGRequestzIntegration')
-                    if ggr and ggr.enabled:
-                        ggr_request_id = await self.view.repo.get_ggr_request_id(request_id)
-
-                        if ggr_request_id:
-                            sync_result = await ggr.update_request_status(
-                                ggr_request_id=ggr_request_id,
-                                status='rejected',
-                                admin_name=str(interaction.user),
-                                notes=f"Rejected by {interaction.user}"
-                            )
-
-                            if sync_result.get('success'):
-                                logger.info(f"✅ Synced rejection to ggrequestz for request #{request_id} (GGR ID: {ggr_request_id})")
-                            else:
-                                logger.error(f"❌ Failed to sync rejection to ggrequestz: {sync_result.get('error')}")
+                    # Best effort, as above: the rejection is committed.
+                    await sync_request_status(
+                        self.view.bot,
+                        self.view.repo,
+                        request_id,
+                        status='rejected',
+                        admin_name=str(interaction.user),
+                        notes=f"Rejected by {interaction.user}",
+                    )
 
                     # Prioritize the stored IGDB name, fall back to the user's requested name
                     igdb_game_name = self.request_data['igdb_game_name']
