@@ -25,6 +25,7 @@ A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) A
 - [Emojis](#emojis)
 - [Available Commands](#available-commands)
 - [Requests](#requests)
+- [Netplay](#netplay)
 - [User Manager](#user-manager)
 - [Error Handling](#error-handling)
 - [Security](#security)
@@ -41,6 +42,7 @@ Disclaimer: This was primarily created using Claude Code after my project scope 
 - **Recently Added**: Posts recently added ROM updates to a configured channel (batched when multiple ROMs are added).
 - **Request system**: Submit and manage ROM requests entirely from Discord. Requests are enriched with IGDB metadata when available. Optional [GGRequestz](https://github.com/XTREEMMAK/ggrequestz) integration. 
 - **Search**: Platform-specific searches and a random ROM roll. Results include metadata and download links.
+- **Netplay announcements**: Announce a RomM netplay session from Discord. The embed tracks the session live — waiting for a room, who is hosting, how many seats are filled — and links players straight into the browser player. Requires RomM netplay to be enabled server-side.
 - **Stats**: Near real-time collection statistics shown in voice channel names, the bot "Now Playing" status, and via commands.
 - **Multi-file support**: Searches support multi-file games; users can select one, several, or all files to download.
 - **Firmware search**: Lists firmware files for a platform with names, sizes, hashes, and download links.
@@ -139,6 +141,7 @@ RECENT_ROMS_BULK_THRESHOLD=25
 GGREQUESTZ_ENABLED=false
 GGREQUESTZ_URL=http://ip:port
 GGREQUESTZ_API_KEY=ggr_api_key
+NETPLAY_ENABLED=true
 
 ```
 
@@ -176,6 +179,7 @@ GGREQUESTZ_API_KEY=ggr_api_key
 - `/firmware [platform]` — List firmware files with hash details and download links.
 - `/scan [option]` — Run or check scans (admin only): `full`, `platform`, `stop`, `status`, `unidentified`, `hashes`, `new_platforms`, `partial`, `summary`.
 - `/platforms` — Display all available platforms with their ROM counts.
+- `/netplay [platform] [game]` — Announce a netplay session for a game in your library. The bot posts an embed with a join link and keeps it updated as players join and leave, then marks it ended when the session finishes.
 - `/igdb [option]` — View list of games from IGDB: `upcoming`, `recent`, `popular`, or `exclusive`, generally or by platform with option to request.
 - `/user_manager` — Manage Romm and Discord users (linking, new account prompting, etc.) (admin only).
 - `/refresh_recent_metadata` — Refresh recently added game notifiction metadata/covers (admin only).
@@ -259,6 +263,62 @@ GGREQUESTZ_ENABLED=true
 GGREQUESTZ_URL=http://ip:port
 GGREQUESTZ_API_KEY=ggr_api_key
 ```
+---
+
+## Netplay
+
+`/netplay [platform] [game]` posts an announcement for a game in your library
+and keeps it current: it starts as "waiting for a room", flips to the host and
+seat count once someone opens one, and marks itself ended when the session
+finishes.
+
+**RomM server prerequisites.** Netplay is a RomM feature, and the bot only
+reports it — it cannot turn it on. In RomM's `config.yml`:
+
+```yaml
+emulatorjs:
+  netplay:
+    enabled: true
+    ice_servers:
+      - urls: "stun:stun.l.google.com:19302"
+```
+
+Restart RomM, then confirm with an **authenticated** request — the ICE server
+list is redacted to `[]` for anonymous callers, so an unauthenticated check
+reports a working server as unconfigured:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" https://your-romm/api/config \
+  | jq '{EJS_NETPLAY_ENABLED, EJS_NETPLAY_ICE_SERVERS}'
+```
+
+Two things worth knowing before enabling it:
+
+- Turning netplay on switches in-browser play to the EmulatorJS `nightly`
+  build for **all** users, not just netplay sessions.
+- RomM netplay is host-streams-video, not lockstep. The host renders the game
+  and uploads a video stream to each guest, so a four-player room means three
+  outbound streams. The best host is whoever has the best upload, and STUN
+  alone will not connect two players who are both behind symmetric NAT — that
+  needs a TURN server.
+
+**Bot configuration** (all optional):
+
+```env
+NETPLAY_ENABLED=true
+NETPLAY_POLL_INTERVAL=20
+NETPLAY_PENDING_TIMEOUT=900
+NETPLAY_MAX_WATCHERS=25
+```
+
+- `NETPLAY_ENABLED` — enable the `/netplay` command (default: `true`).
+- `NETPLAY_POLL_INTERVAL` — seconds between room checks (default: `20`).
+- `NETPLAY_PENDING_TIMEOUT` — seconds before an announcement with no room gives up (default: `900`).
+- `NETPLAY_MAX_WATCHERS` — how many sessions to track at once (default: `25`). Each one costs one RomM request per interval.
+
+`DOMAIN` must be set to your public RomM URL, or the bot cannot build a join
+link and `/netplay` will refuse to run.
+
 ---
 
 ## User Manager
