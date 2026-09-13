@@ -47,11 +47,14 @@ def sanitize_name(name: Any) -> str:
     """A client-supplied display name, defanged.
 
     Strips the characters that would let a host's chosen player_name turn into
-    a mention or markdown in our embed. This is presentation hygiene, not
-    authentication: the name still proves nothing about who anyone is.
+    a mention, markdown, or a masked link in our embed. Brackets matter as
+    much as the rest: embed field values render [text](url), so a name alone
+    would otherwise be enough to publish a live hyperlink under the bot's
+    name. This is presentation hygiene, not authentication: the name still
+    proves nothing about who anyone is.
     """
     text = str(name or "Unknown")
-    for char in ("<", ">", "@", "`", "*", "_", "~", "|", "\n", "\r"):
+    for char in ("<", ">", "@", "`", "*", "_", "~", "|", "[", "]", "\n", "\r"):
         text = text.replace(char, "")
     return text.strip()[:64] or "Unknown"
 
@@ -95,17 +98,23 @@ def build_description(watcher: NetplayWatcher, domain: str) -> str:
     """The line under the title, which is what carries the call to action."""
     link = player_link(domain, watcher.rom_id)
 
+    # A stale watcher is one we cannot currently see. "No room is open yet"
+    # and "No session started" are both assertions, and neither is supportable
+    # while RomM is unreachable, so the warning is not scoped to LIVE.
+    # render_key carries `stale`, so a change here is actually delivered.
+    warning = f"{STALE_NOTE}\n" if watcher.stale else ""
+
     if watcher.state is NetplayState.PENDING:
         return (
+            f"{warning}"
             f"**{watcher.requester_name}** wants to play — no room is open yet.\n"
             f"[Open the player]({link}) and start one, or wait for theirs."
         )
     if watcher.state is NetplayState.LIVE:
-        join = f"[Join in your browser]({link})"
-        return f"{STALE_NOTE}\n{join}" if watcher.stale else join
+        return f"{warning}[Join in your browser]({link})"
     if watcher.state is NetplayState.ENDED:
         return ENDED_HINT
-    return f"No session started. {ENDED_HINT}"
+    return f"{warning}No session started. {ENDED_HINT}"
 
 
 def build_netplay_embed(

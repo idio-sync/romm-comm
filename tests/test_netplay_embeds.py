@@ -93,6 +93,22 @@ class EmbedTests(unittest.TestCase):
         body = embed.description + "".join(f.value for f in embed.fields)
         self.assertNotIn("<@1234567890>", body)
 
+    def test_host_is_never_rendered_as_a_masked_link(self):
+        """Brackets survive the other strips and would publish a live link."""
+        spoofed = {"r1": dict(ROOM["r1"],
+                              player_name="[Download the patch](https://evil.example)")}
+        embed = build(make_watcher(state=NetplayState.LIVE, rooms=spoofed))
+        room_field = [f.value for f in embed.fields if f.name.startswith("Room")][0]
+        self.assertNotIn("[", room_field)
+        self.assertNotIn("]", room_field)
+
+    def test_room_name_is_never_rendered_as_a_masked_link(self):
+        spoofed = {"r1": dict(ROOM["r1"],
+                              room_name="[click me](https://evil.example)")}
+        embed = build(make_watcher(state=NetplayState.LIVE, rooms=spoofed))
+        body = "".join(f.value for f in embed.fields)
+        self.assertNotIn("](", body)
+
     def test_newlines_in_player_name_do_not_inject_rooms(self):
         """Newlines in player_name must be stripped to prevent visual line injection."""
         # A spoofed name with newline that would fake another room without sanitization
@@ -117,6 +133,21 @@ class EmbedTests(unittest.TestCase):
     def test_a_healthy_live_session_carries_no_warning(self):
         watcher = make_watcher(state=NetplayState.LIVE, rooms=ROOM)
         self.assertNotIn(STALE_NOTE, build(watcher).description)
+
+    def test_a_stale_pending_session_says_so(self):
+        """Saying "no room is open yet" with RomM unreachable is a claim
+        we have no evidence for."""
+        watcher = make_watcher()
+        watcher.stale = True
+        self.assertIn(STALE_NOTE, build(watcher).description)
+
+    def test_a_stale_expired_session_says_so(self):
+        watcher = make_watcher(state=NetplayState.EXPIRED)
+        watcher.stale = True
+        self.assertIn(STALE_NOTE, build(watcher).description)
+
+    def test_a_healthy_pending_session_carries_no_warning(self):
+        self.assertNotIn(STALE_NOTE, build(make_watcher()).description)
 
     def test_ended_tells_the_reader_how_to_start_another(self):
         embed = build(make_watcher(state=NetplayState.ENDED))

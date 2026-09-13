@@ -123,11 +123,13 @@ def _handle_failure(
     """
     watcher.consecutive_failures += 1
 
+    # Staleness is not scoped to LIVE. A PENDING post that keeps saying "no
+    # room is open yet" through an outage is asserting something we cannot
+    # see either, and it carries that flag into EXPIRED.
+    became_stale = not watcher.stale and watcher.consecutive_failures >= stale_after
+    watcher.stale = watcher.stale or became_stale
+
     if watcher.state is NetplayState.LIVE:
-        became_stale = (
-            not watcher.stale and watcher.consecutive_failures >= stale_after
-        )
-        watcher.stale = watcher.stale or watcher.consecutive_failures >= stale_after
         return became_stale
 
     # PENDING. The timeout has to be checked here too, not only on the empty
@@ -137,7 +139,7 @@ def _handle_failure(
     if now - watcher.created_at >= pending_timeout:
         watcher.state = NetplayState.EXPIRED
         return True
-    return False
+    return became_stale
 
 
 def _handle_empty(watcher: NetplayWatcher, now: float, pending_timeout: float) -> bool:

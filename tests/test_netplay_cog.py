@@ -111,6 +111,16 @@ class FlakyMessage(FakeMessage):
         await super().edit(**kwargs)
 
 
+class ForbiddenMessage(FakeMessage):
+    """Rejects every edit the way a lost permission would."""
+
+    async def edit(self, **kwargs):
+        raise discord.Forbidden(
+            SimpleNamespace(status=403, reason="Forbidden"),
+            "Missing Permissions",
+        )
+
+
 class FakeChannel:
     def __init__(self, message):
         self._message = message
@@ -137,6 +147,38 @@ def make_polling_cog(poll_results, message=None):
 
 ROOM = {"r1": {"room_name": "Bomberman", "current": 2, "max": 4,
                "player_name": "idiosync", "hasPassword": False}}
+
+
+class SanitizedRequesterTests(unittest.TestCase):
+    def test_requester_name_is_defanged_before_it_is_stored(self):
+        """A nickname is member-controlled and renders inside the description."""
+        cog = make_cog()
+        watcher = cog.register_watcher(
+            ROM,
+            requester_id=7,
+            requester_name="[click](https://evil.example)**",
+            channel_id=9,
+            platform_display="SNES",
+        )
+        self.assertNotIn("[", watcher.requester_name)
+        self.assertNotIn("]", watcher.requester_name)
+        self.assertNotIn("*", watcher.requester_name)
+
+
+class BeforePollTests(unittest.IsolatedAsyncioTestCase):
+    async def test_the_configured_interval_replaces_the_decoration_default(self):
+        """tasks.loop fixes 20s at import; only before_loop can change it."""
+        cog = make_cog()
+        cog.bot.config.NETPLAY_POLL_INTERVAL = 45
+
+        async def wait_until_ready():
+            return None
+
+        cog.bot.wait_until_ready = wait_until_ready
+
+        await cog.before_poll()
+
+        self.assertEqual(cog.poll_sessions.seconds, 45)
 
 
 class TickTests(unittest.IsolatedAsyncioTestCase):
@@ -219,6 +261,26 @@ class TickTests(unittest.IsolatedAsyncioTestCase):
         await cog.tick(now=1000.0)
         self.assertIs(watcher.state, NetplayState.ENDED)
         self.assertIn(50265, cog.watchers)
+
+    async def test_a_forbidden_edit_drops_the_watcher(self):
+        """Lost permissions are permanent: retrying holds a slot forever."""
+        cog = make_polling_cog([ROOM], message=ForbiddenMessage())
+        watcher = register(cog)
+        watcher.message_id = 1
+
+        await cog.tick(now=1000.0)
+
+        self.assertEqual(cog.watchers, {})
+
+    async def test_a_forbidden_edit_does_not_drop_a_replacement_watcher(self):
+        cog = make_polling_cog([ROOM], message=ForbiddenMessage())
+        watcher = register(cog)
+        watcher.message_id = 1
+        replacement = register(cog)
+
+        await cog.tick(now=1000.0)
+
+        self.assertIs(cog.watchers.get(50265), replacement)
 
     async def test_cleanup_does_not_delete_a_replacement_watcher(self):
         """A new /netplay for the same ROM can land during the awaits."""

@@ -18,7 +18,7 @@ from urllib.parse import quote
 import discord
 from discord.ext import commands, tasks
 
-from .embeds import build_netplay_embed, render_key
+from .embeds import build_netplay_embed, render_key, sanitize_name
 from .views import MAX_SELECT_OPTIONS, RomSelectView
 from .watcher import NetplayWatcher, advance
 
@@ -221,7 +221,10 @@ class Netplay(commands.Cog):
             rom_id=int(rom["id"]),
             rom_name=str(rom.get("name") or rom.get("fs_name") or "Unknown"),
             requester_id=requester_id,
-            requester_name=requester_name,
+            # A guild nickname is member-controlled and renders straight into
+            # the description, so it is defanged here - the one place in this
+            # cog where it reaches a watcher.
+            requester_name=sanitize_name(requester_name),
             channel_id=channel_id,
             created_at=time.time(),
             platform_display=platform_display,
@@ -495,6 +498,17 @@ class Netplay(commands.Cog):
         except discord.NotFound:
             # The post is gone; stop tracking it rather than retrying forever.
             logger.debug(f"Netplay message for rom {watcher.rom_id} was deleted")
+            if self.watchers.get(watcher.rom_id) is watcher:
+                del self.watchers[watcher.rom_id]
+            return True
+        except discord.Forbidden:
+            # A subclass of HTTPException, and as permanent as NotFound: the
+            # bot lost access to the channel or the thread was archived. No
+            # tick will succeed, so retrying only holds a watcher slot and
+            # spends a RomM request per interval forever.
+            logger.debug(
+                f"Netplay message for rom {watcher.rom_id} can no longer be edited"
+            )
             if self.watchers.get(watcher.rom_id) is watcher:
                 del self.watchers[watcher.rom_id]
             return True

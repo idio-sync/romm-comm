@@ -134,6 +134,27 @@ class FailureTests(unittest.TestCase):
             advance(w, None, now=t, stale_after=3)
         self.assertIs(w.state, NetplayState.PENDING)
 
+    def test_pending_goes_stale_once_polls_keep_failing(self):
+        """Otherwise the post keeps asserting "no room is open yet" while we
+        have no idea whether one opened."""
+        w = make_watcher()
+        for now in (1010.0, 1020.0):
+            self.assertFalse(
+                advance(w, None, now=now, pending_timeout=900.0, stale_after=3)
+            )
+            self.assertFalse(w.stale)
+        changed = advance(w, None, now=1030.0, pending_timeout=900.0, stale_after=3)
+        self.assertTrue(w.stale)
+        self.assertTrue(changed)
+        self.assertIs(w.state, NetplayState.PENDING)
+
+    def test_a_stale_pending_watcher_recovers_on_a_good_poll(self):
+        w = make_watcher()
+        for now in (1010.0, 1020.0, 1030.0):
+            advance(w, None, now=now, pending_timeout=900.0, stale_after=3)
+        self.assertTrue(advance(w, {}, now=1040.0, pending_timeout=900.0))
+        self.assertFalse(w.stale)
+
     def test_pending_still_expires_while_polls_keep_failing(self):
         """Otherwise an unreachable RomM fills the watcher cap permanently."""
         w = make_watcher()
