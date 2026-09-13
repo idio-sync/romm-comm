@@ -1,11 +1,9 @@
 import asyncio
 import logging
-import os
 import time
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from typing import Dict, List, Optional, Set, Tuple
-from urllib.parse import quote
 
 import aiohttp
 import discord
@@ -16,6 +14,15 @@ from PIL import Image
 from admin_checks import is_admin
 
 from .batch_embed import add_batch_footer, build_batch_embed, build_bulk_embed
+from .recent_rom_embed import (
+    SPACER_FIELD,
+    build_access_links,
+    build_footer_text,
+    format_developer,
+    format_release_date,
+    truncate_summary,
+)
+from .rom_embed import ROMM_LOGO
 
 logger = logging.getLogger(__name__)
 
@@ -794,149 +801,55 @@ class RecentRomsMonitor(commands.Cog):
             size_bytes /= 1024.0
         return f"{size_bytes:.1f} PB"
     
-    async def create_single_rom_embed(self, rom: Dict) -> Tuple[discord.Embed, Optional[discord.File]]:  # noqa: C901 - one optional embed field per ROM attribute
-        """Create a detailed embed for a single ROM with RomM metadata"""
-        platform_name = rom.get('platform_name', 'Unknown')
-        
-        # Fetch detailed ROM data from RomM to get complete metadata
-        detailed_rom = None
+    async def create_single_rom_embed(self, rom: Dict) -> Tuple[discord.Embed, Optional[discord.File]]:
+        """A detailed embed for one ROM, with its cover art as an attachment.
+
+        Fetches the full ROM record from RomM first: the payload that arrives
+        on a scan event carries less metadata than the detail endpoint. A
+        failure there is not fatal, it just means fewer fields. The formatting
+        lives in cogs/recent_rom_embed.py.
+        """
         try:
             detailed_rom = await self.bot.fetch_api_endpoint(f'roms/{rom["id"]}', bypass_cache=True)
             if detailed_rom:
                 rom.update(detailed_rom)
         except Exception as e:
             logger.warning(f"Could not fetch detailed ROM data: {e}")
-        
-        # Download cover image if available from RomM
+
         cover_file = None
         if rom.get('url_cover'):
             cover_file = await self.download_cover_image_with_retry(rom)
-        
-        # Create embed
-        embed = discord.Embed(
-            title=f"{rom['name']}",
-            color=discord.Color.green()
-        )
-        
-        # Add summary from RomM if available
+
+        embed = discord.Embed(title=f"{rom['name']}", color=discord.Color.green())
         if rom.get('summary'):
-            summary = rom['summary']
-            # Truncate if too long
-            if len(summary) > 150:
-                summary = summary[:150]
-                last_period = summary.rfind('.')
-                if last_period > 100:
-                    summary = summary[:last_period + 1]
-                else:
-                    summary = summary[:147] + "..."
-            embed.description = summary
-        
-        # Handle cover image
-        if cover_file:
-            embed.set_thumbnail(url="attachment://cover.png")
-        else:
-            # Use RomM logo as fallback
-            embed.set_thumbnail(url="https://raw.githubusercontent.com/idio-sync/romm-comm/refs/heads/main/.backend/isotipo-small.png")
-        
-        # Platform with emoji
-        platform_text = self.get_platform_with_emoji(platform_name)
-        
-        embed.add_field(
-            name="Platform",
-            value=platform_text,
-            inline=True
-        )
-        
-        # Release Date from RomM metadata
-        release_text = "Unknown"
-        if metadatum := rom.get('metadatum'):
-            if release_date := metadatum.get('first_release_date'):
-                try:
-                    # Check if timestamp is in milliseconds
-                    if release_date > 2_000_000_000:
-                        release_date = release_date / 1000
-                    
-                    release_datetime = datetime.fromtimestamp(int(release_date))
-                    release_text = release_datetime.strftime("%B %d, %Y")
-                except (ValueError, TypeError) as e:
-                    logger.debug(f"Error formatting release date: {e}")
-        
-        embed.add_field(
-            name="Release Date",
-            value=release_text,
-            inline=True
-        )
-        
-        # Add invisible field to force new row
-        embed.add_field(name="\u200b", value="\u200b", inline=True)
-        
-        # Developer/Companies from RomM metadata
-        developer_text = "Unknown"
-        if metadatum := rom.get('metadatum'):
-            if companies := metadatum.get('companies'):
-                if isinstance(companies, list):
-                    company_list = companies[:1]  # Take first company
-                    if company_list:
-                        developer_text = company_list[0]
-                        if len(developer_text) > 30:
-                            developer_text = developer_text[:27] + "..."
-                elif isinstance(companies, str):
-                    developer_text = companies
-                    if len(developer_text) > 30:
-                        developer_text = developer_text[:27] + "..."
-        
-        embed.add_field(
-            name="Developer",
-            value=developer_text,
-            inline=True
-        )
-        
-        # Access Links with properly formatted emoji
-        romm_url = f"{self.bot.config.DOMAIN}/rom/{rom['id']}"
-        filename = rom.get('file_name') or rom.get('fs_name')
-        
-        # Get formatted RomM emoji
-        romm_emoji = self.bot.get_formatted_emoji('romm')
-        access_links = [f"[**{romm_emoji} RomM**]({romm_url})"]
-        
-        if filename:
-            safe_filename = quote(filename)
-            rom_download_url = f"{self.bot.config.DOMAIN}/api/roms/{rom['id']}/content/{safe_filename}"
-            access_links.append(f"[**⬇️ Download**]({rom_download_url})")
-        
-        embed.add_field(
-            name="Access",
-            value=" ".join(access_links),
-            inline=True
-        )
-        
-        embed.add_field(name="\u200b", value="\u200b", inline=True)
-        
-        # Footer with file info
-        footer_parts = []
-        
-        if filename:
-            if len(filename) > 50:
-                name, ext = os.path.splitext(filename)
-                if len(ext) <= 10:
-                    truncated = name[:46 - len(ext)] + "..." + ext
-                else:
-                    truncated = filename[:47] + "..."
-                footer_parts.append(truncated)
-            else:
-                footer_parts.append(filename)
-        
-        if rom.get("fs_size_bytes"):
-            size_text = self.format_file_size(rom["fs_size_bytes"])
-            footer_parts.append(size_text)
-        
-        footer_parts.append("Added to collection")
-        
-        embed.set_footer(text=" • ".join(footer_parts))
+            embed.description = truncate_summary(rom['summary'])
+        embed.set_thumbnail(url="attachment://cover.png" if cover_file else ROMM_LOGO)
+
+        metadatum = rom.get('metadatum')
+        # Order matters: this is the order the fields appear in the embed. The
+        # zero-width pairs are spacers that force the next field onto a new row.
+        for name, value in (
+            ("Platform", self.get_platform_with_emoji(rom.get('platform_name', 'Unknown'))),
+            ("Release Date", format_release_date(metadatum)),
+            (SPACER_FIELD, SPACER_FIELD),
+            ("Developer", format_developer(metadatum)),
+            (
+                "Access",
+                build_access_links(
+                    rom,
+                    domain=self.bot.config.DOMAIN,
+                    romm_emoji=self.bot.get_formatted_emoji('romm'),
+                ),
+            ),
+            (SPACER_FIELD, SPACER_FIELD),
+        ):
+            embed.add_field(name=name, value=value, inline=True)
+
+        embed.set_footer(text=build_footer_text(rom, format_size=self.format_file_size))
         embed.set_author(name="🆕 New Game Available")
-        
+
         return embed, cover_file
-    
+
     def calculate_grid_dimensions(self, num_images: int) -> Tuple[int, int, int, int]:
         """
         Calculate optimal grid dimensions and thumbnail size based on number of images.
