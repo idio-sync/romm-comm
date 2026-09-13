@@ -175,7 +175,7 @@ concealed the command's entire input surface.
 | Component | Reusable? |
 |---|---|
 | [cogs/platform_emoji.py](../../../cogs/platform_emoji.py) — slug normalisation, emoji | Yes |
-| `platforms_repo.search_for_autocomplete` ([cogs/requests/repo.py:449](../../../cogs/requests/repo.py#L449)) | Yes — for the `platform` option |
+| `platforms_repo.search_for_autocomplete` ([cogs/requests/repo.py:449](../../../cogs/requests/repo.py#L449)) | **No** — returns three-column `aiosqlite.Row`s, offers platforms RomM does not have, and would couple this cog to `cogs.requests`. Use `bot.fetch_api_endpoint('platforms')` as [cogs/search.py:1341](../../../cogs/search.py#L1341) does. |
 | [cogs/requests/views_game.py](../../../cogs/requests/views_game.py) `GameSelect` / `GameSelectView` | **No** |
 
 `GameSelect` is not reusable and not paginated:
@@ -389,7 +389,7 @@ endpoint's most common response.)
 **The cost of that choice:** `make_authenticated_request` has **no retry loop**;
 the exponential backoff lives only in `fetch_api_endpoint`
 ([romm_client.py:406-436](../../../romm_client.py#L406-L436)). So the
-"escalate after several consecutive failures" rule in §9 is the *only*
+"mark it stale after several consecutive failures" rule in §9 is the *only*
 resilience in this design. That is acceptable for a poller that runs again in
 20 seconds, but it must be a deliberate choice rather than an assumption that a
 retry exists.
@@ -435,8 +435,17 @@ Per the project rule that `Config` in `bot.py` owns all environment reading:
 cog is env-gated, and the `{STEM}_ENABLED` convention belongs to
 `load_integration_cogs` ([bot.py:743-746](../../../bot.py#L743-L746)), which
 this cog deliberately does not use (§4). The cog therefore always loads and
-self-disables in `setup()` / `cog_load`, the pattern `romm_streaming.py` uses
-via `self.enabled and self.server_enabled`. No change to `load_all_cogs`.
+self-disables from a task started in `__init__`, guarding commands on
+`self.enabled and self.server_enabled` the way `romm_streaming.py` does. No
+change to `load_all_cogs`.
+
+Two py-cord constraints force that placement, both verified against 2.6.1:
+`cog_load` **is not a py-cord hook** (only `cog_unload` exists — `cog_load` is
+discord.py, and `cogs/user_manager.py:1199` has a dead one today, which is why
+its `invite_reconcile_loop` never starts); and an `on_ready` listener on this
+cog would never fire, because `bot.py:779` calls `load_all_cogs()` from inside
+`on_ready` and `Client.dispatch` snapshots its listener list before running
+it.
 
 **Worst-case request rate.** At the defaults, 25 watchers × 3 polls/min = **75
 requests/min** against RomM. That is a new load profile for this bot — by
@@ -468,10 +477,10 @@ Existing tokens will 403. See §13 before editing that string.
 |---|---|
 | Server has netplay disabled | Cog loads, `/netplay` refuses with an explanation. |
 | ICE servers empty | Warn at startup; commands still work (LAN play is legitimate). |
-| Token lacks `assets.read` | Detected at startup by a probe call; refuse with the scope named, since the 403 is otherwise silent — `_read_response` returns `None` for every non-2xx alike. |
+| Token lacks `assets.read` | Detected at startup by a **status-aware** probe (`RommClient.netplay_scope_ok`), because `_read_response` returns `None` for every non-2xx alike and cannot tell a 403 from a timeout. A confirmed 401/403 makes `/netplay` refuse, naming the scope: posting an announcement that can never update is worse than not offering the command. An undetermined probe leaves the feature enabled. |
 | Startup probe itself fails (server restarting) | **Fail open**: log a warning, leave the command enabled. A transient boot-order failure must not silently disable the feature until the next restart. |
 | `DOMAIN` unset (`No website configured`) | `/netplay` refuses at command time with a config error. Never post an embed whose primary link is broken. |
-| Poll returns `None` | Leave the embed alone. Do not flip to `ENDED`. Escalate only after several consecutive failures (§7 — there is no retry beneath this). |
+| Poll returns `None` | Leave the state alone — **never** flip to `ENDED`, however long it persists. After several consecutive failures mark the watcher **stale**, say so in the embed, and keep polling; a successful poll clears it. RomM being unreachable is not evidence a session ended, and there is no retry beneath this (§7). |
 | Watcher cap reached | Refuse politely; suggest waiting for a session to end. |
 | Message deleted | Drop the watcher on the resulting 404 rather than retrying forever. |
 | Bot restart | Watchers lost; posts stop updating (§5.5). |

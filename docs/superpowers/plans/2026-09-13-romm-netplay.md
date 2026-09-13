@@ -20,13 +20,12 @@
 - **Tests:** `unittest` (`TestCase` for pure logic, `IsolatedAsyncioTestCase` for async), subjects built with `object.__new__` where construction needs a live bot. Run with `python -m pytest`.
 - **Poll defaults:** interval `20`s, pending timeout `900`s, max watchers `25`, stale threshold `3`.
 
-> **Deviation from the spec, deliberate.** Spec §9 says a poll returning
-> `None` should "escalate to `ENDED` only after several consecutive
-> failures". That is wrong and this plan does not implement it: RomM being
-> unreachable for a minute tells us nothing about whether a session is still
-> running, so ending it asserts a fact we do not have. Instead the watcher is
-> marked stale, the embed says so, and polling continues until RomM answers
-> again. **The spec should be amended to match.**
+> **Why stale rather than ended.** An earlier draft of spec §9 had a poll
+> returning `None` "escalate to `ENDED` after several consecutive failures".
+> That was wrong: RomM being unreachable for a minute tells us nothing about
+> whether a session is still running, so ending it asserts a fact we do not
+> have. The watcher is marked stale instead, the embed says so, and polling
+> continues until RomM answers again. The spec has been amended to match.
 
 ---
 
@@ -62,6 +61,7 @@
 - Produces:
   - `async RommClient.get_server_config() -> Optional[Dict[str, Any]]`
   - `async RommClient.list_netplay_rooms(rom_id: int) -> Optional[Dict[str, Any]]`
+  - `async RommClient.netplay_scope_ok() -> Optional[bool]` — `True` authorized, `False` confirmed 401/403, `None` undetermined
 
 **Context:** `/api/netplay/list` requires scope `assets.read`, which is currently in neither the OAuth grant nor the README. Without it every call 403s, and `_read_response` returns `None` for all non-2xx alike, so the failure is indistinguishable from a network error.
 
@@ -83,6 +83,7 @@ refactor cannot quietly switch helpers.
 
 import pathlib
 import unittest
+from types import SimpleNamespace
 from typing import Any, Dict, Optional
 
 from romm_client import RommClient
@@ -100,6 +101,46 @@ class RecordingClient(RommClient):
                                          require_csrf=False):
         self.calls.append((method, endpoint, params))
         return self._result
+
+
+class FakeResponse:
+    def __init__(self, status):
+        self.status = status
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class FakeSession:
+    """Answers every GET with one status, or raises to mimic a dead network."""
+
+    def __init__(self, status):
+        self._status = status
+
+    def get(self, url, **kwargs):
+        if self._status is None:
+            raise OSError("connection refused")
+        return FakeResponse(self._status)
+
+
+async def probe_returning(status):
+    """Run netplay_scope_ok against a session that always answers `status`."""
+    client = object.__new__(RommClient)
+    client.config = SimpleNamespace(API_BASE_URL="http://romm")
+    client.access_token = "t"
+
+    async def ensure_valid_token():
+        return True
+
+    async def ensure_session():
+        return FakeSession(status)
+
+    client.ensure_valid_token = ensure_valid_token
+    client.ensure_session = ensure_session
+    return await client.netplay_scope_ok()
 
 
 class ListNetplayRoomsTests(unittest.IsolatedAsyncioTestCase):
@@ -129,6 +170,28 @@ class ListNetplayRoomsTests(unittest.IsolatedAsyncioTestCase):
         }
         client = RecordingClient(rooms)
         self.assertEqual(await client.list_netplay_rooms(50265), rooms)
+
+
+class ScopeProbeTests(unittest.IsolatedAsyncioTestCase):
+    """A missing scope must be distinguishable from a flaky network."""
+
+    async def test_403_is_a_definite_no(self):
+        self.assertIs(await probe_returning(403), False)
+
+    async def test_401_is_a_definite_no(self):
+        self.assertIs(await probe_returning(401), False)
+
+    async def test_200_is_a_yes(self):
+        self.assertIs(await probe_returning(200), True)
+
+    async def test_422_is_a_yes_because_we_were_allowed_to_ask(self):
+        self.assertIs(await probe_returning(422), True)
+
+    async def test_500_is_undetermined(self):
+        self.assertIsNone(await probe_returning(500))
+
+    async def test_transport_failure_is_undetermined(self):
+        self.assertIsNone(await probe_returning(None))
 
 
 class GetServerConfigTests(unittest.IsolatedAsyncioTestCase):
@@ -203,6 +266,47 @@ Append to the `RommClient` class in `romm_client.py`, after `_get_json`:
         return await self.make_authenticated_request(
             'GET', 'netplay/list', params={'game_id': rom_id}
         )
+
+    async def netplay_scope_ok(self) -> Optional[bool]:
+        """Whether our token carries the assets.read scope netplay needs.
+
+        True authorized, False definitely not (401/403), None undetermined -
+        the server was unreachable, or answered something that says nothing
+        about our scopes. The three-way answer is the whole point: a missing
+        scope should stop the feature, a flaky network should not.
+
+        This cannot go through make_authenticated_request or
+        fetch_api_endpoint, both of which flatten every failure to None
+        (_read_response returns None for all non-2xx alike). Distinguishing
+        the two needs the status code, which is why this reads the response
+        directly - the same reason integrations/romm_streaming.py returns
+        (status, body) rather than a bare body.
+        """
+        try:
+            if not await self.ensure_valid_token():
+                return None
+
+            session = await self.ensure_session()
+            url = f"{self.config.API_BASE_URL}/api/netplay/list"
+            headers = {
+                "Authorization": f"Bearer {self.access_token}",
+                "Accept": "application/json",
+            }
+
+            async with session.get(
+                url, headers=headers, params={'game_id': 0}
+            ) as response:
+                if response.status in (401, 403):
+                    return False
+                if 200 <= response.status < 500:
+                    # Includes 404/422: we were allowed to ask, which is all
+                    # this is checking.
+                    return True
+                return None
+
+        except Exception as e:
+            logger.debug(f"Netplay scope probe could not complete: {e}")
+            return None
 ```
 
 - [ ] **Step 4: Add `assets.read` to the OAuth grant**
@@ -227,7 +331,7 @@ In `README.md:152`, update the documented scope list in the `ROMM_CLIENT_TOKEN` 
 - [ ] **Step 6: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_netplay_client.py -v`
-Expected: PASS (8 tests)
+Expected: PASS (14 tests)
 
 - [ ] **Step 7: Lint**
 
@@ -1190,7 +1294,7 @@ generalising the other one would mean changing the request flow."
 **Interfaces:**
 - Consumes: `RommClient.get_server_config` (Task 1), `RomSelectView` (Task 4)
 - Produces:
-  - `Netplay(commands.Cog)` with `bot`, `enabled: bool`, `server_enabled: bool`, `watchers: Dict[int, NetplayWatcher]`
+  - `Netplay(commands.Cog)` with `bot`, `enabled: bool`, `server_enabled: bool`, `scope_ok: bool`, `watchers: Dict[int, NetplayWatcher]`
   - `async Netplay.check_server() -> None` — sets `server_enabled`
   - `async Netplay.resolve_roms(platform, game) -> Tuple[Optional[List[Dict]], bool, str]` — `(roms, truncated, platform_display)`
   - `Netplay.domain_configured() -> bool`
@@ -1402,9 +1506,11 @@ class Netplay(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.enabled = bot.config.NETPLAY_ENABLED
-        # Starts True so a probe that cannot reach RomM fails open. Flipped to
-        # False only when RomM positively reports netplay off.
+        # Both start True so a probe that cannot reach RomM fails open. Each
+        # is flipped to False only on a positive answer: RomM reporting
+        # netplay off, or a 401/403 on the room endpoint.
         self.server_enabled = True
+        self.scope_ok = True
         self.watchers: Dict[int, NetplayWatcher] = {}
 
         if not self.enabled:
@@ -1463,20 +1569,31 @@ class Netplay(commands.Cog):
         logger.info("✅ RomM netplay available")
 
     async def check_scope(self) -> None:
-        """Name the missing scope now rather than leaving a silent dead poll.
+        """Refuse the feature outright when the token definitely cannot poll.
 
         /api/config needs no special scope, so it cannot detect this: a token
         without assets.read passes that check and then returns None from every
-        single room poll. Every announcement would expire with "No session
-        started" and nothing would say why. One throwaway call finds it.
+        room poll. Announcements would post and then silently never update -
+        worse than not offering the command, because the post looks live.
+
+        Only a confirmed 401/403 disables anything. An undetermined probe
+        (server down, network flaky) leaves the feature on, consistent with
+        the fail-open rule above.
         """
-        probe = await self.bot.romm.list_netplay_rooms(0)
-        if probe is None:
+        authorized = await self.bot.romm.netplay_scope_ok()
+
+        if authorized is False:
+            self.scope_ok = False
+            logger.error(
+                "The RomM token is missing the 'assets.read' scope, which "
+                "/api/netplay/list requires. /netplay is disabled until the "
+                "token is reissued with that scope."
+            )
+        elif authorized is None:
             logger.warning(
-                "Netplay room lookup failed on startup. The most likely cause "
-                "is that the RomM token is missing the 'assets.read' scope, "
-                "which /api/netplay/list requires - reissue the token with it. "
-                "Announcements will post but never find a room."
+                "Could not confirm the RomM token has 'assets.read'; leaving "
+                "netplay enabled. If announcements never find a room, that "
+                "scope is the first thing to check."
             )
 
     @commands.Cog.listener()
@@ -1634,7 +1751,10 @@ pointed at the right ROM.
 import unittest
 from types import SimpleNamespace
 
+import discord
+
 from cogs.netplay.cog import Netplay
+from cogs.netplay.embeds import render_key
 from cogs.netplay.watcher import NetplayState
 
 
@@ -1818,6 +1938,15 @@ Append to the `Netplay` class in `cogs/netplay/cog.py`:
             await ctx.respond(
                 "This RomM server has netplay turned off. An admin needs to set "
                 "`emulatorjs.netplay.enabled: true` in RomM's config.yml."
+            )
+            return
+
+        if not self.scope_ok:
+            # Refusing beats posting an announcement that can never update.
+            await ctx.respond(
+                "My RomM token is missing the `assets.read` scope, so I cannot "
+                "see netplay rooms. An admin needs to reissue it with that "
+                "scope added."
             )
             return
 
@@ -2013,18 +2142,16 @@ class NetplayExtensionTests(unittest.IsolatedAsyncioTestCase):
             [("platform", True, True), ("game", True, False)],
             [(o.name, o.required, bool(o.autocomplete)) for o in command.options],
         )
-
-    async def test_disabled_netplay_starts_no_poll_loop(self):
-        """NETPLAY_ENABLED=false must not leave a task running."""
-        bot = await self.load()
-
-        self.assertFalse(bot.get_cog("Netplay").poll_sessions.is_running())
 ```
+
+> The `poll_sessions` loop does not exist yet — it arrives in Task 7, which
+> adds the test that asserts `NETPLAY_ENABLED=false` leaves it stopped. Adding
+> that assertion here would make this task un-runnable on its own.
 
 - [ ] **Step 7: Run it**
 
 Run: `python -m pytest tests/test_extension_loading.py -v`
-Expected: PASS — including the four new netplay cases.
+Expected: PASS — including the three new netplay cases.
 
 - [ ] **Step 8: Lint**
 
@@ -2080,6 +2207,23 @@ class FakeMessage:
 
     async def edit(self, **kwargs):
         self.edits += 1
+
+
+class FlakyMessage(FakeMessage):
+    """Rejects the first `fail_times` edits the way Discord would."""
+
+    def __init__(self, fail_times):
+        super().__init__()
+        self.remaining_failures = fail_times
+
+    async def edit(self, **kwargs):
+        if self.remaining_failures:
+            self.remaining_failures -= 1
+            raise discord.HTTPException(
+                SimpleNamespace(status=500, reason="Internal Server Error"),
+                "rate limited",
+            )
+        await super().edit(**kwargs)
 
 
 class FakeChannel:
@@ -2158,9 +2302,70 @@ class TickTests(unittest.IsolatedAsyncioTestCase):
         watcher.state = NetplayState.LIVE
         watcher.rooms = ROOM
         watcher.message_id = 1
+        # Already up to date, as it would be straight out of announce().
+        watcher.last_render_key = render_key(watcher)
         await cog.tick(now=1000.0)
         self.assertIs(watcher.state, NetplayState.LIVE)
         self.assertEqual(cog._message.edits, 0)
+
+    async def test_a_failed_edit_is_retried_on_the_next_tick(self):
+        """The poll may report nothing new; the post is still wrong."""
+        message = FlakyMessage(fail_times=1)
+        cog = make_polling_cog([ROOM, ROOM], message=message)
+        watcher = register(cog)
+        watcher.message_id = 1
+
+        await cog.tick(now=1000.0)
+        self.assertEqual(message.edits, 0)
+        self.assertIsNone(watcher.last_render_key)
+
+        await cog.tick(now=1020.0)
+        self.assertEqual(message.edits, 1)
+
+    async def test_a_terminal_watcher_survives_a_failed_final_edit(self):
+        """Dropping it would leave the post reading live for a dead session."""
+        message = FlakyMessage(fail_times=99)
+        cog = make_polling_cog([{}], message=message)
+        watcher = register(cog)
+        watcher.state = NetplayState.LIVE
+        watcher.rooms = ROOM
+        watcher.message_id = 1
+
+        await cog.tick(now=1000.0)
+        self.assertIs(watcher.state, NetplayState.ENDED)
+        self.assertIn(50265, cog.watchers)
+
+    async def test_cleanup_does_not_delete_a_replacement_watcher(self):
+        """A new /netplay for the same ROM can land during the awaits."""
+        cog = make_polling_cog([{}])
+        old = register(cog)
+        old.state = NetplayState.LIVE
+        old.rooms = ROOM
+        old.message_id = 1
+
+        original = cog.bot.romm.list_netplay_rooms
+
+        async def replace_then_poll(rom_id):
+            result = await original(rom_id)
+            cog.watchers[50265] = register(cog)
+            return result
+
+        cog.bot.romm.list_netplay_rooms = replace_then_poll
+        await cog.tick(now=1000.0)
+
+        self.assertIn(50265, cog.watchers)
+        self.assertIsNot(cog.watchers[50265], old)
+
+    async def test_a_watcher_still_publishing_is_skipped(self):
+        """message_id is None until announce() finishes sending."""
+        cog = make_polling_cog([ROOM])
+        watcher = register(cog)
+        self.assertIsNone(watcher.message_id)
+
+        await cog.tick(now=1000.0)
+
+        self.assertEqual(cog._message.edits, 0)
+        self.assertIsNone(watcher.last_render_key)
 ```
 
 Add `NetplayState` to the existing import at the top of the file if it is not already there.
@@ -2301,22 +2506,38 @@ from .watcher import NetplayWatcher, advance
 - [ ] **Step 6: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_netplay_cog.py -v`
-Expected: PASS (10 tests)
+Expected: PASS (15 tests)
 
-- [ ] **Step 7: Run the whole suite**
+- [ ] **Step 7: Add the loop-lifecycle test deferred from Task 6**
+
+Now that `poll_sessions` exists, append to `NetplayExtensionTests` in
+`tests/test_extension_loading.py`:
+
+```python
+    async def test_disabled_netplay_starts_no_poll_loop(self):
+        """NETPLAY_ENABLED=false must not leave a task running."""
+        bot = await self.load()
+
+        self.assertFalse(bot.get_cog("Netplay").poll_sessions.is_running())
+```
+
+Run: `python -m pytest tests/test_extension_loading.py -v`
+Expected: PASS (4 netplay cases)
+
+- [ ] **Step 8: Run the whole suite**
 
 Run: `python -m pytest -q`
 Expected: PASS, no regressions
 
-- [ ] **Step 8: Lint**
+- [ ] **Step 9: Lint**
 
 Run: `python -m ruff check .`
 Expected: clean
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
-git add cogs/netplay/cog.py tests/test_netplay_cog.py
+git add cogs/netplay/cog.py tests/test_netplay_cog.py tests/test_extension_loading.py
 git commit -m "feat(netplay): poll tracked sessions and update their posts
 
 Three things here are load-bearing rather than stylistic. The tick iterates
