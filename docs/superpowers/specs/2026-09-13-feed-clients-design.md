@@ -144,7 +144,7 @@ Verified: those names appear nowhere else in the repo and in no test.
 
 ## Wiring
 
-`cogs.feeds` joins the `core_cogs` list ([bot.py:676](../../../bot.py#L676)) and gets an `['aiohttp']` entry in the separate `cog_dependencies` dict ([bot.py:688-697](../../../bot.py#L688-L697)) for the probe.
+`cogs.feeds` joins the `core_cogs` list ([bot.py:677](../../../bot.py#L677)) and gets an `['aiohttp']` entry in the separate `cog_dependencies` dict ([bot.py:690-700](../../../bot.py#L690-L700)) for the probe.
 
 **Only the first of those is currently tested.** `declared_cogs()` ([tests/test_extension_loading.py:29-42](../../../tests/test_extension_loading.py#L29-L42)) AST-parses `core_cogs`; `cog_dependencies` is read by no test, so a missing or typo'd entry fails silently at startup with a `logger.error` and a skipped cog ([bot.py:710-713](../../../bot.py#L710-L713)). Close that gap as part of this work: a four-line test, built on the existing `declared_cogs()` helper, asserting every `core_cogs` entry has a `cog_dependencies` key.
 
