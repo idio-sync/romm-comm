@@ -125,3 +125,24 @@ class FetchRequestTests(IsolatedAsyncioTestCase):
         self.assertEqual(await fetch_request(cog, 99), {'status': 'fulfilled'})
         # The method does not exist yet, so its parameter name is not ours to guess.
         self.assertEqual(cog.args, ((99,), {}))
+
+
+class TheMissingMethodsAreStillMissingTests(unittest.TestCase):
+    """A ratchet on the two methods the guards above exist for.
+
+    When either is implemented on GGRequestzIntegration this fails, which is
+    the prompt to drop the getattr() indirection in ggr_sync._call and let the
+    call be a plain call again. tests/test_cog_lookups.py cannot see these,
+    because reaching them through getattr() is not an attribute access.
+    """
+
+    def test_update_request_status_and_get_request_by_id_are_not_implemented(self):
+        from integrations.ggrequestz import GGRequestzIntegration
+
+        for name in ("update_request_status", "get_request_by_id"):
+            with self.subTest(method=name):
+                self.assertFalse(
+                    hasattr(GGRequestzIntegration, name),
+                    f"GGRequestzIntegration.{name} exists now - remove the "
+                    "getattr() guard in cogs/requests/ggr_sync.py and this test.",
+                )
