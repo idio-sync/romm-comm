@@ -15,10 +15,18 @@
 - **Nothing in `integrations/`.** That folder is only for external services with their own credentials (ggrequestz). Netplay is RomM's own API — client methods go on `romm_client.py`.
 - **`Config` in `bot.py` owns all environment reading.** No scattered `os.getenv` in cogs.
 - **The host is rendered as the raw `player_name` string.** No Discord identity enrichment in v1 — `player_name` is client-supplied and spoofable. Never render a `<@id>` mention from it.
-- **`None` means the call failed; `{}` means no rooms.** A failed poll must never flip an embed to `ENDED`.
+- **`None` means the call failed; `{}` means no rooms.** A failed poll must never flip an embed to `ENDED` — not one, and not a hundred. Repeated failures mark the watcher **stale** and polling continues.
 - **ruff:** line-length target 110, hard max 180, `max-complexity = 15`. First-party imports are `cogs`, `integrations`, `admin_checks`, `bot`, `database_manager`.
 - **Tests:** `unittest` (`TestCase` for pure logic, `IsolatedAsyncioTestCase` for async), subjects built with `object.__new__` where construction needs a live bot. Run with `python -m pytest`.
-- **Poll defaults:** interval `20`s, pending timeout `900`s, max watchers `25`, failure threshold `3`.
+- **Poll defaults:** interval `20`s, pending timeout `900`s, max watchers `25`, stale threshold `3`.
+
+> **Deviation from the spec, deliberate.** Spec §9 says a poll returning
+> `None` should "escalate to `ENDED` only after several consecutive
+> failures". That is wrong and this plan does not implement it: RomM being
+> unreachable for a minute tells us nothing about whether a session is still
+> running, so ending it asserts a fact we do not have. Instead the watcher is
+> marked stale, the embed says so, and polling continues until RomM answers
+> again. **The spec should be amended to match.**
 
 ---
 
@@ -265,9 +273,9 @@ poll."
 > emoji lookup out of the poll loop, and means the watcher carries everything
 > the embed needs. `requester_name` is likewise captured at announce time: the
 > poll loop cannot rely on `bot.get_user()` still having the user cached.
-  - `advance(watcher, rooms, now, pending_timeout=900.0, failure_threshold=3) -> bool` — mutates the watcher, returns whether anything a reader would see changed
+  - `advance(watcher, rooms, now, pending_timeout=900.0, stale_after=3) -> bool` — mutates the watcher, returns whether anything a reader would see changed
 
-**Context:** This is the whole behavioural core, and it is pure so it can be tested exhaustively without a bot. Two rules matter most: a `None` poll is a failure and must not end a session, and terminal states never change again.
+**Context:** This is the whole behavioural core, and it is pure so it can be tested exhaustively without a bot. Two rules matter most: **a `None` poll never ends a session, however often it repeats** — it marks the watcher stale and polling continues — and terminal states never change again.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -369,37 +377,53 @@ class FailureTests(unittest.TestCase):
         changed = advance(w, None, now=1010.0)
         self.assertIs(w.state, NetplayState.LIVE)
         self.assertFalse(changed)
+        self.assertFalse(w.stale)
 
-    def test_repeated_failures_eventually_end_it(self):
+    def test_repeated_failures_mark_it_stale_but_never_end_it(self):
+        """RomM being unreachable says nothing about whether people are playing."""
         w = make_watcher(state=NetplayState.LIVE, rooms=ROOM)
-        advance(w, None, now=1010.0, failure_threshold=3)
-        advance(w, None, now=1020.0, failure_threshold=3)
+        advance(w, None, now=1010.0, stale_after=3)
+        advance(w, None, now=1020.0, stale_after=3)
+        self.assertFalse(w.stale)
+        changed = advance(w, None, now=1030.0, stale_after=3)
         self.assertIs(w.state, NetplayState.LIVE)
-        changed = advance(w, None, now=1030.0, failure_threshold=3)
-        self.assertIs(w.state, NetplayState.ENDED)
+        self.assertTrue(w.stale)
         self.assertTrue(changed)
 
-    def test_a_success_resets_the_failure_count(self):
+    def test_going_stale_is_reported_once_not_every_tick(self):
         w = make_watcher(state=NetplayState.LIVE, rooms=ROOM)
-        advance(w, None, now=1010.0, failure_threshold=3)
-        advance(w, None, now=1020.0, failure_threshold=3)
-        advance(w, ROOM, now=1030.0, failure_threshold=3)
-        self.assertEqual(w.consecutive_failures, 0)
-        advance(w, None, now=1040.0, failure_threshold=3)
+        for t in (1010.0, 1020.0, 1030.0):
+            advance(w, None, now=t, stale_after=3)
+        self.assertFalse(advance(w, None, now=1040.0, stale_after=3))
+
+    def test_a_hundred_failures_still_do_not_end_it(self):
+        w = make_watcher(state=NetplayState.LIVE, rooms=ROOM)
+        for i in range(100):
+            advance(w, None, now=1010.0 + i, stale_after=3)
         self.assertIs(w.state, NetplayState.LIVE)
+
+    def test_recovery_clears_stale_and_is_a_visible_change(self):
+        w = make_watcher(state=NetplayState.LIVE, rooms=ROOM)
+        for t in (1010.0, 1020.0, 1030.0):
+            advance(w, None, now=t, stale_after=3)
+        self.assertTrue(w.stale)
+        changed = advance(w, ROOM, now=1040.0, stale_after=3)
+        self.assertFalse(w.stale)
+        self.assertEqual(w.consecutive_failures, 0)
+        self.assertTrue(changed)
 
     def test_failures_while_pending_do_not_expire_early(self):
         w = make_watcher()
         for t in (1010.0, 1020.0, 1030.0, 1040.0):
-            advance(w, None, now=t, failure_threshold=3)
+            advance(w, None, now=t, stale_after=3)
         self.assertIs(w.state, NetplayState.PENDING)
 
     def test_pending_still_expires_while_polls_keep_failing(self):
         """Otherwise an unreachable RomM fills the watcher cap permanently."""
         w = make_watcher()
-        advance(w, None, now=1010.0, pending_timeout=900.0, failure_threshold=3)
+        advance(w, None, now=1010.0, pending_timeout=900.0, stale_after=3)
         self.assertIs(w.state, NetplayState.PENDING)
-        changed = advance(w, None, now=1900.0, pending_timeout=900.0, failure_threshold=3)
+        changed = advance(w, None, now=1900.0, pending_timeout=900.0, stale_after=3)
         self.assertIs(w.state, NetplayState.EXPIRED)
         self.assertTrue(changed)
 
@@ -481,7 +505,7 @@ from enum import Enum
 from typing import Any, Dict, Optional
 
 DEFAULT_PENDING_TIMEOUT = 900.0
-DEFAULT_FAILURE_THRESHOLD = 3
+DEFAULT_STALE_AFTER = 3
 
 
 class NetplayState(str, Enum):
@@ -520,6 +544,11 @@ class NetplayWatcher:
     state: NetplayState = NetplayState.PENDING
     rooms: Dict[str, Any] = field(default_factory=dict)
     consecutive_failures: int = 0
+    # Set once polls have failed enough times that what we are showing can no
+    # longer be trusted. Not a state: the session is probably still running,
+    # we just cannot see it, and saying "ended" would be a claim we cannot
+    # support. Cleared by the first successful poll.
+    stale: bool = False
     last_render_key: Optional[str] = None
 
     @property
@@ -533,7 +562,7 @@ def advance(
     rooms: Optional[Dict[str, Any]],
     now: float,
     pending_timeout: float = DEFAULT_PENDING_TIMEOUT,
-    failure_threshold: int = DEFAULT_FAILURE_THRESHOLD,
+    stale_after: int = DEFAULT_STALE_AFTER,
 ) -> bool:
     """Apply one poll result. Returns whether a reader would see a difference.
 
@@ -545,38 +574,45 @@ def advance(
         return False
 
     if rooms is None:
-        return _handle_failure(watcher, now, pending_timeout, failure_threshold)
+        return _handle_failure(watcher, now, pending_timeout, stale_after)
 
+    # A successful poll always clears staleness, and un-staling is itself a
+    # visible change even when the rooms are identical.
+    recovered = watcher.stale
+    watcher.stale = False
     watcher.consecutive_failures = 0
 
     if rooms:
         changed = watcher.state is not NetplayState.LIVE or watcher.rooms != rooms
         watcher.state = NetplayState.LIVE
         watcher.rooms = rooms
-        return changed
+        return changed or recovered
 
-    return _handle_empty(watcher, now, pending_timeout)
+    return _handle_empty(watcher, now, pending_timeout) or recovered
 
 
 def _handle_failure(
     watcher: NetplayWatcher,
     now: float,
     pending_timeout: float,
-    failure_threshold: int,
+    stale_after: int,
 ) -> bool:
-    """A failed poll is not an ended session - until it keeps failing.
+    """A failed poll is never an ended session, however long it goes on.
 
     There is no retry underneath this: list_netplay_rooms goes through
-    make_authenticated_request, which has none. This count is the only
-    resilience the design has, so it is deliberately forgiving.
+    make_authenticated_request, which has none. So failures are expected to
+    arrive in clusters, and the only honest response is to say the display
+    cannot be trusted right now - not to invent an ending. A stale watcher
+    keeps being polled and recovers on its own when RomM answers again.
     """
     watcher.consecutive_failures += 1
 
     if watcher.state is NetplayState.LIVE:
-        if watcher.consecutive_failures >= failure_threshold:
-            watcher.state = NetplayState.ENDED
-            return True
-        return False
+        became_stale = (
+            not watcher.stale and watcher.consecutive_failures >= stale_after
+        )
+        watcher.stale = watcher.stale or watcher.consecutive_failures >= stale_after
+        return became_stale
 
     # PENDING. The timeout has to be checked here too, not only on the empty
     # -success path: with RomM unreachable, every announcement would otherwise
@@ -604,7 +640,7 @@ def _handle_empty(watcher: NetplayWatcher, now: float, pending_timeout: float) -
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_netplay_watcher.py -v`
-Expected: PASS (19 tests)
+Expected: PASS (22 tests)
 
 - [ ] **Step 6: Lint**
 
@@ -647,7 +683,7 @@ consecutive-failure count is the only resilience in the design."
 > keeps the poll loop from re-deriving them (and from depending on
 > `bot.get_user()` still having the requester cached).
   - `STATE_COLORS`, `STATE_TITLES` dicts
-  - `ENDED_HINT` constant
+  - `ENDED_HINT`, `STALE_NOTE` constants
 
 **Context:** `render_key` lives beside the renderer deliberately: if the key misses a field the embed shows, the embed silently stops updating. Keeping them adjacent makes that drift visible.
 
@@ -669,6 +705,7 @@ import unittest
 
 from cogs.netplay.embeds import (
     ENDED_HINT,
+    STALE_NOTE,
     build_netplay_embed,
     render_key,
 )
@@ -713,6 +750,13 @@ class RenderKeyTests(unittest.TestCase):
         b = render_key(make_watcher(state=NetplayState.LIVE, rooms=dict(ROOM)))
         self.assertEqual(a, b)
 
+    def test_going_stale_changes_the_key(self):
+        """Otherwise the warning is computed but never actually delivered."""
+        fresh = render_key(make_watcher(state=NetplayState.LIVE, rooms=ROOM))
+        stale = make_watcher(state=NetplayState.LIVE, rooms=ROOM)
+        stale.stale = True
+        self.assertNotEqual(fresh, render_key(stale))
+
     def test_room_name_change_changes_the_key(self):
         before = render_key(make_watcher(state=NetplayState.LIVE, rooms=ROOM))
         renamed = {"r1": dict(ROOM["r1"], room_name="Different")}
@@ -751,6 +795,15 @@ class EmbedTests(unittest.TestCase):
         body = "".join(f.value for f in embed.fields)
         self.assertIn("Bomberman", body)
         self.assertIn("Second", body)
+
+    def test_a_stale_live_session_says_so(self):
+        watcher = make_watcher(state=NetplayState.LIVE, rooms=ROOM)
+        watcher.stale = True
+        self.assertIn(STALE_NOTE, build(watcher).description)
+
+    def test_a_healthy_live_session_carries_no_warning(self):
+        watcher = make_watcher(state=NetplayState.LIVE, rooms=ROOM)
+        self.assertNotIn(STALE_NOTE, build(watcher).description)
 
     def test_ended_tells_the_reader_how_to_start_another(self):
         embed = build(make_watcher(state=NetplayState.ENDED))
@@ -811,6 +864,7 @@ import discord
 from .watcher import NetplayState, NetplayWatcher
 
 ENDED_HINT = "Session over — run `/netplay` to announce a new one."
+STALE_NOTE = "⚠️ Cannot reach RomM — this may be out of date."
 
 STATE_COLORS = {
     NetplayState.PENDING: discord.Color.blurple,
@@ -865,7 +919,7 @@ def render_key(watcher: NetplayWatcher) -> str:
     The poll loop compares this against the last one to decide whether to
     spend a Discord edit. Anything the embed renders must appear here.
     """
-    parts = [watcher.state.value, str(watcher.rom_id)]
+    parts = [watcher.state.value, str(watcher.rom_id), str(watcher.stale)]
     for room_id in sorted(watcher.rooms):
         room = watcher.rooms[room_id]
         parts.append(
@@ -894,7 +948,8 @@ def build_description(watcher: NetplayWatcher, domain: str) -> str:
             f"[Open the player]({link}) and start one, or wait for theirs."
         )
     if watcher.state is NetplayState.LIVE:
-        return f"[Join in your browser]({link})"
+        join = f"[Join in your browser]({link})"
+        return f"{STALE_NOTE}\n{join}" if watcher.stale else join
     if watcher.state is NetplayState.ENDED:
         return ENDED_HINT
     return f"No session started. {ENDED_HINT}"
@@ -958,7 +1013,7 @@ __all__ = [
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_netplay_embeds.py -v`
-Expected: PASS (15 tests)
+Expected: PASS (18 tests)
 
 - [ ] **Step 6: Lint**
 
@@ -994,7 +1049,7 @@ vouch for them."
 - Produces:
   - `MAX_SELECT_OPTIONS = 25`
   - `RomSelect(discord.ui.Select)` — options built from RomM ROM rows, `value` is `str(rom['id'])`
-  - `RomSelectView(discord.ui.View)` with `selected_rom: Optional[Dict]`, `timeout=120`
+  - `RomSelectView(discord.ui.View)` with `selected_rom: Optional[Dict]`, `requester_id: int`, `timeout=120`, and an `interaction_check` restricting use to the requester
 
 **Context:** The request flow's `GameSelect` is **not** reusable here. It truncates with `matches[:25]` and has no page state; `GameSelectView` hard-wires "Submit Request" and "Not Listed" buttons; and its options come from IGDB fields (`match['release_date']`, `match['platforms']`) while netplay needs a RomM rom id. There is also no ROM-name autocomplete anywhere in the repo. This is a new, deliberately small component — do not try to generalise `GameSelect`, which would be a change to the request flow and is out of scope.
 
@@ -1054,13 +1109,29 @@ class RomSelect(discord.ui.Select):
 
 
 class RomSelectView(discord.ui.View):
-    """Holds the select and the answer. Nothing else."""
+    """Holds the select and the answer. Nothing else.
 
-    def __init__(self, roms: List[Dict[str, Any]]):
+    Scoped to the person who ran the command: the announcement it produces is
+    attributed to them, so letting a passer-by choose the ROM would put their
+    name on a session they did not pick.
+    """
+
+    def __init__(self, roms: List[Dict[str, Any]], requester_id: int):
         super().__init__(timeout=120)
+        self.requester_id = requester_id
         self.selected_rom: Optional[Dict[str, Any]] = None
         self.message: Optional[discord.Message] = None
         self.add_item(RomSelect(roms))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.requester_id:
+            return True
+        await interaction.response.send_message(
+            "This picker belongs to whoever ran the command. "
+            "Run `/netplay` yourself to announce a session.",
+            ephemeral=True,
+        )
+        return False
 
     async def on_timeout(self):
         """Leave nothing clickable behind."""
@@ -1073,10 +1144,21 @@ class RomSelectView(discord.ui.View):
                 logger.debug("Could not disable a timed-out netplay ROM select")
 ```
 
-- [ ] **Step 2: Verify it imports**
+- [ ] **Step 2: Verify it imports and is owner-scoped**
 
-Run: `python -c "from cogs.netplay.views import RomSelectView, MAX_SELECT_OPTIONS; print(MAX_SELECT_OPTIONS)"`
-Expected: `25`
+Run:
+
+```bash
+python -c "
+import asyncio, types
+from cogs.netplay.views import RomSelectView, MAX_SELECT_OPTIONS
+v = RomSelectView([{'id': 1, 'name': 'X'}], requester_id=7)
+mine = types.SimpleNamespace(user=types.SimpleNamespace(id=7))
+print('cap', MAX_SELECT_OPTIONS, 'owner ok', asyncio.run(v.interaction_check(mine)))
+"
+```
+
+Expected: `cap 25 owner ok True`
 
 - [ ] **Step 3: Lint**
 
@@ -1746,8 +1828,9 @@ Append to the `Netplay` class in `cogs/netplay/cog.py`:
             )
             return
 
-        # Checked again in announce() against the resolved rom id, which is
-        # what lets an already-watched ROM through without needing a new slot.
+        # Checked here to fail fast, and again in announce() - everything
+        # between the two is awaited (a ROM search, possibly a human picking
+        # from a select), and other invocations register watchers during it.
         if self.at_capacity():
             await ctx.respond(
                 "I am already tracking as many netplay sessions as I can. "
@@ -1776,7 +1859,7 @@ Append to the `Netplay` class in `cogs/netplay/cog.py`:
                 "narrow your search if the one you want is missing."
             )
 
-        view = RomSelectView(roms)
+        view = RomSelectView(roms, requester_id=ctx.author.id)
         view.message = await ctx.respond(f"Which one?{note}", view=view)
         await view.wait()
 
@@ -1800,6 +1883,16 @@ Append to the `Netplay` class in `cogs/netplay/cog.py`:
             )
             return
 
+        # Re-checked here rather than trusting the check in netplay(): a ROM
+        # search and possibly a human picking from a select happened in
+        # between, and other invocations were free to take the last slot.
+        if self.at_capacity():
+            await ctx.respond(
+                "I am already tracking as many netplay sessions as I can. "
+                "Wait for one to finish and try again."
+            )
+            return
+
         watcher = self.register_watcher(
             rom,
             requester_id=ctx.author.id,
@@ -1808,14 +1901,32 @@ Append to the `Netplay` class in `cogs/netplay/cog.py`:
             platform_display=platform_display,
         )
 
+        # Captured before the await, not after. The watcher is already in the
+        # registry, so a poll can advance it to LIVE while this message is in
+        # flight; recording render_key(watcher) afterwards would claim we had
+        # delivered a LIVE embed when what actually went out said PENDING, and
+        # the post would never be corrected. refresh_message skips a watcher
+        # whose message_id is still None, so the tick in between is a no-op.
+        embed = self.render(watcher)
+        sent_key = render_key(watcher)
+
         # ctx.respond, not ctx.send: after a defer only a response or followup
         # clears Discord's "thinking..." placeholder, and ApplicationContext
         # .send is the plain Messageable send. It returns a WebhookMessage
         # here, so .id is available.
-        message = await ctx.respond(embed=self.render(watcher))
+        try:
+            message = await ctx.respond(embed=embed)
+        except discord.HTTPException as e:
+            # Release the slot. Leaving a watcher with no message behind would
+            # hold a capacity slot and block this ROM forever, polling to
+            # update a post that does not exist.
+            logger.warning(f"Could not post netplay announcement: {e}")
+            if self.watchers.get(watcher.rom_id) is watcher:
+                del self.watchers[watcher.rom_id]
+            return
 
         watcher.message_id = message.id
-        watcher.last_render_key = render_key(watcher)
+        watcher.last_render_key = sent_key
 
     def render(self, watcher: NetplayWatcher) -> discord.Embed:
         """Build the embed for a watcher's current state.
@@ -2079,49 +2190,74 @@ Append to the `Netplay` class in `cogs/netplay/cog.py`:
         for rom_id, watcher in list(self.watchers.items()):
             rooms = await self.bot.romm.list_netplay_rooms(rom_id)
 
-            if not advance(
+            advance(
                 watcher,
                 rooms,
                 now=now,
                 pending_timeout=self.bot.config.NETPLAY_PENDING_TIMEOUT,
-            ):
-                if watcher.is_terminal:
-                    finished.append(rom_id)
-                continue
+            )
 
-            await self.refresh_message(watcher)
+            # Called every tick, not only when advance() reported a change.
+            # refresh_message compares the desired render against the last one
+            # actually delivered, so an edit that failed last tick is retried
+            # this tick even though nothing new happened. Gating this on
+            # advance() would strand a message on its previous contents
+            # forever.
+            delivered = await self.refresh_message(watcher)
 
-            if watcher.is_terminal:
-                finished.append(rom_id)
+            # A terminal watcher stops being polled only once its final embed
+            # is on Discord. Dropping it on a failed edit would leave the post
+            # reading "live" for a session that ended.
+            if watcher.is_terminal and delivered:
+                finished.append((rom_id, watcher))
 
-        for rom_id in finished:
-            self.watchers.pop(rom_id, None)
+        for rom_id, watcher in finished:
+            # Identity, not just the key: a fresh /netplay for this same ROM
+            # can have registered during any of the awaits above, and popping
+            # by id alone would delete that new watcher instead.
+            if self.watchers.get(rom_id) is watcher:
+                del self.watchers[rom_id]
 
-    async def refresh_message(self, watcher: NetplayWatcher) -> None:
-        """Re-render one announcement, but only if it would look different.
+    async def refresh_message(self, watcher: NetplayWatcher) -> bool:
+        """Bring the post in line with the watcher. Returns whether it now is.
 
-        render_key is the guard. Without it, 25 watchers on a 20s interval
-        issue 25 edits every 20s into a handful of channels, which is the
-        fastest way to hit Discord's per-channel edit throttle.
+        `last_render_key` records the last render Discord actually *accepted*,
+        not the last one attempted - so this is idempotent and self-retrying:
+        call it every tick, and it does nothing when the post is current and
+        retries when it is not. That is what keeps a single failed edit from
+        stranding a message permanently.
+
+        The comparison is also what protects the rate limit. Without it, 25
+        watchers on a 20s interval issue 25 edits every 20s into a handful of
+        channels, which is the fastest way into Discord's per-channel throttle.
         """
         key = render_key(watcher)
         if key == watcher.last_render_key:
-            return
+            return True
+
+        # Still being published (see announce): the message id is not known
+        # yet, and last_render_key will be set to whatever was actually sent.
+        if watcher.message_id is None:
+            return False
 
         channel = self.bot.get_channel(watcher.channel_id)
-        if channel is None or watcher.message_id is None:
-            return
+        if channel is None:
+            return False
 
         try:
             message = await channel.fetch_message(watcher.message_id)
             await message.edit(embed=self.render(watcher))
             watcher.last_render_key = key
+            return True
         except discord.NotFound:
             # The post is gone; stop tracking it rather than retrying forever.
             logger.debug(f"Netplay message for rom {watcher.rom_id} was deleted")
-            self.watchers.pop(watcher.rom_id, None)
+            if self.watchers.get(watcher.rom_id) is watcher:
+                del self.watchers[watcher.rom_id]
+            return True
         except discord.HTTPException as e:
             logger.warning(f"Could not update netplay embed for {watcher.rom_id}: {e}")
+            return False
 
     @tasks.loop(seconds=20)
     async def poll_sessions(self):

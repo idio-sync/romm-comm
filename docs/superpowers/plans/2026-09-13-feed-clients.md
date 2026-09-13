@@ -33,6 +33,7 @@ Both were verified against the code; the plan below implements the corrected beh
 |---|---|
 | `cogs/feeds/catalog.py` | **Create.** Pure data: `AuthStyle`, `FeedClient`, `Feed`, `Device`, the five clients, the eight devices. No I/O, no `discord` import. |
 | `cogs/feeds/availability.py` | **Create.** Pure: sanitized platforms payload → set of available device keys. |
+| `cogs/feeds/urls.py` | **Create.** `with_scheme(domain)` alone. Shared by `probe.py` and `embeds.py` so the URL the embed shows and the URL the probe requests cannot drift apart. |
 | `cogs/feeds/verdict.py` | **Create.** The `DownloadAuth` enum alone. A leaf module so `embeds.py` can name a verdict without importing `probe.py`, which pulls in `aiohttp` and `cogs.search` (and through it `qrcode` and `PIL`). |
 | `cogs/feeds/probe.py` | **Create.** Download-auth detection. Pure classifiers plus one injectable async entry point. |
 | `cogs/feeds/embeds.py` | **Create.** Pure: `(device, title, username, verdict, domain)` → `discord.Embed`. |
@@ -77,16 +78,25 @@ Create `tests/test_feed_catalog.py`:
 
 The catalog is a hand-maintained table of URLs. A typo in a path does not
 fail anywhere in the bot - it reaches the user as a 404 from their console,
-which is the worst possible place to discover it. These tests are the only
-thing standing between an edit and that outcome, so they check shape rather
-than behavior: every path well-formed, every device reachable, every client
-referenced by a feed actually declared.
+which is the worst possible place to discover it. These tests check shape
+rather than behavior: every path well-formed, every device reachable, every
+client referenced by a feed actually declared.
+
+Two facts here are load-bearing and easy to get wrong from memory. Only
+Tinfoil is unable to authenticate its downloads, and pkgj will not read a
+config line that has no key in front of the URL.
 """
 
 import unittest
 from dataclasses import FrozenInstanceError
 
-from cogs.feeds.catalog import DEVICES, DEVICES_BY_KEY, AuthStyle, Device
+from cogs.feeds.catalog import (
+    CONTENT_PLATFORMS,
+    DEVICES,
+    DEVICES_BY_KEY,
+    AuthStyle,
+    Device,
+)
 
 
 class CatalogShapeTests(unittest.TestCase):
@@ -111,34 +121,91 @@ class CatalogShapeTests(unittest.TestCase):
         for key, device in DEVICES_BY_KEY.items():
             self.assertEqual(device.key, key)
 
-    def test_every_device_can_be_matched_by_something(self):
-        # A device with neither exact names nor fragments could never be
-        # resolved from a platform list, so it would be invisible forever.
+    def test_every_feed_names_a_content_platform_that_exists(self):
+        known = {platform.key for platform in CONTENT_PLATFORMS}
         for device in DEVICES:
-            with self.subTest(device=device.key):
-                self.assertTrue(device.exact_names or device.name_fragments)
+            for feed in device.feeds:
+                with self.subTest(device=device.key, content=feed.content):
+                    self.assertIn(feed.content, known)
+
+    def test_every_content_platform_can_be_matched_by_something(self):
+        # One with neither exact names nor fragments could never be resolved
+        # from a platform list, so it would be invisible forever.
+        for platform in CONTENT_PLATFORMS:
+            with self.subTest(platform=platform.key):
+                self.assertTrue(platform.exact_names or platform.name_fragments)
 
     def test_all_five_clients_are_represented(self):
         clients = {feed.client.key for device in DEVICES for feed in device.feeds}
         self.assertEqual(clients, {"tinfoil", "pkgj", "pkgi", "fpkgi", "kekatsu"})
 
-    def test_only_pkgj_embeds_credentials_in_its_url(self):
-        # The rule the whole credential design rests on. If a second client
-        # ever acquires URL_EMBEDDED, that is a decision someone must make
-        # deliberately, not a default that drifted.
+    def test_only_url_reading_clients_embed_credentials(self):
+        # pkgj and pkgi read URLs out of a config file and have no password
+        # box. Anything else acquiring URL_EMBEDDED is a decision someone
+        # must make deliberately, not a default that drifted.
         embedding = {
             feed.client.key
             for device in DEVICES
             for feed in device.feeds
             if feed.client.auth_style is AuthStyle.URL_EMBEDDED
         }
-        self.assertEqual(embedding, {"pkgj"})
+        self.assertEqual(embedding, {"pkgj", "pkgi"})
 
     def test_devices_are_frozen(self):
         # Named explicitly rather than as a blind `Exception`: ruff's B017
         # rejects that, and the repo has B selected.
         with self.assertRaises(FrozenInstanceError):
             DEVICES[0].key = "mutated"
+
+
+class DownloadAuthTests(unittest.TestCase):
+    """Which clients actually need DISABLE_DOWNLOAD_ENDPOINT_AUTH."""
+
+    def test_tinfoil_is_the_only_client_that_needs_the_flag(self):
+        """RomM documents the rest as authenticating both requests.
+
+        Warning a pkgj or fpkgi user that they need the server's download
+        auth turned off would be telling them to get a server weakened to
+        fix a problem they do not have.
+        """
+        needing = {
+            feed.client.key
+            for device in DEVICES
+            for feed in device.feeds
+            if feed.client.needs_download_auth_disabled
+        }
+        self.assertEqual(needing, {"tinfoil"})
+
+
+class ConfigKeyTests(unittest.TestCase):
+    """pkgj's config.txt is key-value lines; a bare URL in it does nothing."""
+
+    def test_every_pkgj_feed_carries_its_config_key(self):
+        for device in DEVICES:
+            for feed in device.feeds:
+                if feed.client.key == "pkgj":
+                    with self.subTest(path=feed.path):
+                        self.assertTrue(feed.config_key)
+
+    def test_the_documented_pkgj_keys_are_all_present(self):
+        keys = {
+            feed.config_key
+            for feed in DEVICES_BY_KEY["psvita"].feeds
+            if feed.client.key == "pkgj"
+        }
+        self.assertEqual(
+            keys,
+            {"url_games", "url_dlcs", "url_psp_games", "url_psp_dlcs", "url_psx_games"},
+        )
+
+    def test_pkgi_carries_no_config_key(self):
+        # Every pkgi fork names its keys differently, so the catalog does not
+        # guess - the client's caveat sends the user to their fork's README.
+        for device in DEVICES:
+            for feed in device.feeds:
+                if feed.client.key == "pkgi":
+                    with self.subTest(path=feed.path):
+                        self.assertIsNone(feed.config_key)
 
 
 class ContentTypeTests(unittest.TestCase):
@@ -160,34 +227,71 @@ class ContentTypeTests(unittest.TestCase):
 
     def test_ps3_pkgi_offers_fewer_extra_types_than_vita(self):
         # PS3 and PSP accept five content types; Vita accepts eleven.
-        ps3 = DEVICES_BY_KEY["ps3"]
-        vita = DEVICES_BY_KEY["psvita"]
-        ps3_extra = {t for feed in ps3.feeds for t in feed.extra_content_types}
-        vita_extra = {t for feed in vita.feeds for t in feed.extra_content_types}
+        ps3_extra = {t for feed in DEVICES_BY_KEY["ps3"].feeds
+                     for t in feed.extra_content_types}
+        vita_extra = {t for feed in DEVICES_BY_KEY["psvita"].feeds
+                      for t in feed.extra_content_types}
         self.assertTrue(ps3_extra < vita_extra)
 
 
-class DeviceCoverageTests(unittest.TestCase):
-    def test_the_eight_expected_devices_are_present(self):
+class HardwareVersusContentTests(unittest.TestCase):
+    """The distinction the catalog exists to keep straight."""
+
+    def test_the_seven_expected_devices_are_present(self):
         self.assertEqual(
             set(DEVICES_BY_KEY),
-            {"switch", "psvita", "psp", "psx", "ps3", "ps4", "ps5", "nds"},
+            {"switch", "psvita", "psp", "ps3", "ps4", "ps5", "nds"},
         )
 
-    def test_vita_and_psp_each_offer_both_pkgj_and_pkgi(self):
-        for key in ("psvita", "psp"):
-            with self.subTest(device=key):
-                clients = {feed.client.key for feed in DEVICES_BY_KEY[key].feeds}
-                self.assertEqual(clients, {"pkgj", "pkgi"})
+    def test_psx_is_content_but_never_a_device(self):
+        """No homebrew installer runs on an original PlayStation.
 
-    def test_psx_offers_pkgj_games_only(self):
-        # RomM exposes no DLC feed for PSX.
-        psx = DEVICES_BY_KEY["psx"]
-        self.assertEqual(len(psx.feeds), 1)
-        self.assertEqual(psx.feeds[0].path, "/api/feeds/pkgj/psx/games")
+        PSX games are something a Vita pulls down through pkgj, so offering
+        a "PlayStation" device would invite a user to set up hardware that
+        cannot run any of this.
+        """
+        self.assertNotIn("psx", DEVICES_BY_KEY)
+        self.assertIn("psx", {platform.key for platform in CONTENT_PLATFORMS})
+
+    def test_the_vita_carries_psp_and_psx_content(self):
+        # pkgj runs only on a Vita, and this is where its PSP and PSX feeds
+        # belong as a result.
+        self.assertEqual(
+            set(DEVICES_BY_KEY["psvita"].content_keys),
+            {"psvita", "psp", "psx"},
+        )
+
+    def test_pkgj_appears_on_no_device_but_the_vita(self):
+        for key, device in DEVICES_BY_KEY.items():
+            if key == "psvita":
+                continue
+            with self.subTest(device=key):
+                self.assertNotIn("pkgj", {feed.client.key for feed in device.feeds})
+
+    def test_the_psp_device_runs_pkgi_not_pkgj(self):
+        # pkgi does run on a PSP; pkgj does not.
+        clients = {feed.client.key for feed in DEVICES_BY_KEY["psp"].feeds}
+        self.assertEqual(clients, {"pkgi"})
+
+    def test_content_keys_are_deduplicated_in_order(self):
+        self.assertEqual(DEVICES_BY_KEY["ps3"].content_keys, ("ps3",))
 
     def test_a_device_is_a_dataclass_instance(self):
         self.assertIsInstance(DEVICES_BY_KEY["switch"], Device)
+
+
+class DocsUrlTests(unittest.TestCase):
+    def test_every_client_links_a_distinct_anchor_on_one_page(self):
+        # The base already contains the page path; appending it again gave
+        # four clients a duplicated, 404-ing URL.
+        urls = {
+            feed.client.key: feed.client.docs_url
+            for device in DEVICES for feed in device.feeds
+        }
+        for key, url in urls.items():
+            with self.subTest(client=key):
+                self.assertEqual(url.count("/ecosystem/feed-clients/"), 1)
+                self.assertTrue(url.endswith(f"#{key}"))
 ```
 
 - [ ] **Step 3: Run the test to verify it fails**
@@ -200,20 +304,27 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'cogs.feeds.catalog'`
 ```python
 """The feed clients RomM exposes, as data.
 
-RomM serves five homebrew installers from /api/feeds/. The URL shape is
-uniform across them; what differs is where each client will accept
-credentials and what it does with a file it cannot install. Both facts live
-here as data so embeds.py can render any device without knowing which client
-it is looking at.
+RomM serves five homebrew installers from /api/feeds/. Three things vary
+between them, and all three live here as data so embeds.py can render any
+device without knowing which client it is looking at:
 
-Devices are matched to RomM platforms by name, not slug: the platforms
-payload the bot caches is sanitized down to id/name/custom_name/display_name/
-rom_count, and slug is not among them.
+- where the client will accept credentials,
+- whether it can authenticate its *downloads* or only its feed fetch,
+- what hardware it runs on, which is not the same as what content it serves.
+
+That last distinction earns its keep with pkgj: it runs only on a Vita, but
+its feeds carry Vita, PSP and PSX content. A PSX game is something you pull
+onto a Vita, not a console anyone points at this server - so PSX is a
+ContentPlatform here and never a Device.
+
+Devices are matched to RomM platforms by the content their feeds carry, and
+by name rather than slug: the platforms payload the bot caches is sanitized
+down to id/name/custom_name/display_name/rom_count, and slug is not among it.
 """
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 
 class AuthStyle(Enum):
@@ -222,9 +333,28 @@ class AuthStyle(Enum):
     # The client has username and password fields of its own, so the URL we
     # show stays bare and no secret appears in the Discord message.
     FIELDS = "fields"
-    # The client takes a URL and nothing else (pkgj's config.txt), so the
+    # The client takes URLs in a config file and nothing else, so the
     # credentials have to ride in the URL's userinfo component.
     URL_EMBEDDED = "url_embedded"
+
+
+@dataclass(frozen=True)
+class ContentPlatform:
+    """A platform whose ROMs a feed can carry.
+
+    Deliberately not a Device: this is what the *server* hosts, while a
+    Device is what the *user* owns and runs a client on. They coincide for
+    Switch and PS3; they do not for PSP and PSX, which a Vita fetches.
+
+    `exact_names` is for names that would over-match as substrings -
+    "PlayStation" is a prefix of "PlayStation 3" - while `name_fragments`
+    are safe to look for anywhere in a platform's name.
+    """
+
+    key: str
+    display_name: str
+    exact_names: Tuple[str, ...] = ()
+    name_fragments: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -236,18 +366,31 @@ class FeedClient:
     auth_style: AuthStyle
     file_formats: str
     docs_url: str
+    # Tinfoil signs in to the feed, then hands the console download URLs it
+    # never attaches credentials to - so its downloads work only where the
+    # server has DISABLE_DOWNLOAD_ENDPOINT_AUTH=true. Every other client
+    # sends basic auth on both requests and needs no such thing. Warning
+    # their users about it would be telling them to get a server weakened
+    # for no reason, so this is a per-client fact, never a global one.
+    needs_download_auth_disabled: bool = False
     setup_steps: Tuple[str, ...] = ()
     caveats: Tuple[str, ...] = ()
-    # Tinfoil's "new file server" dialog has no URL field at all - it asks for
-    # protocol, host, port and path separately. Showing it only a URL would be
-    # a regression against the switch_shop_info command this replaces, which
-    # rendered exactly that table.
+    # Tinfoil's "new file server" dialog has no URL field at all - it asks
+    # for protocol, host, port and path separately.
     split_url_into_fields: bool = False
 
 
 @dataclass(frozen=True)
 class Feed:
     """One URL a client can be pointed at.
+
+    `content` names the ContentPlatform whose ROMs this feed carries, which
+    is what decides whether the feed is worth showing on a given server.
+
+    `config_key` is the setting name the client's config file expects, where
+    the client has one. pkgj will not read a bare URL: its config.txt is
+    key-value lines, so a URL without `url_psp_games` in front of it is
+    inert.
 
     `extra_content_types` exists so pkgi's long tail (Vita accepts eleven
     content types) can be summarized as a template line instead of being
@@ -257,27 +400,27 @@ class Feed:
     client: FeedClient
     path: str
     label: str
+    content: str
+    config_key: Optional[str] = None
     extra_content_types: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class Device:
-    """A piece of hardware a user owns, and the feeds that serve it.
-
-    `exact_names` is for names that would over-match as substrings -
-    "PlayStation" is a prefix of "PlayStation 3" - while `name_fragments`
-    are safe to look for anywhere in a platform's name.
-    """
+    """Hardware a user owns and runs a feed client on."""
 
     key: str
     display_name: str
-    exact_names: Tuple[str, ...]
-    name_fragments: Tuple[str, ...]
     feeds: Tuple[Feed, ...] = field(default_factory=tuple)
 
+    @property
+    def content_keys(self) -> Tuple[str, ...]:
+        """Every ContentPlatform this device's feeds can carry, in order."""
+        return tuple(dict.fromkeys(feed.content for feed in self.feeds))
 
-# One page with per-client anchors. The old /Integrations/Tinfoil-integration/
-# path still resolves but 302s here, so link the destination directly.
+
+# One documentation page with a per-client anchor. The older
+# /Integrations/Tinfoil-integration/ path still resolves but 302s here.
 DOCS = "https://docs.romm.app/latest/ecosystem/feed-clients/"
 
 TINFOIL = FeedClient(
@@ -286,6 +429,7 @@ TINFOIL = FeedClient(
     auth_style=AuthStyle.FIELDS,
     file_formats="`.nsp` and `.xci`",
     docs_url=f"{DOCS}#tinfoil",
+    needs_download_auth_disabled=True,
     setup_steps=(
         "Open Tinfoil and go to **File Browser**.",
         "Scroll to the empty slot and press `-` to add a new file-server.",
@@ -295,9 +439,6 @@ TINFOIL = FeedClient(
     caveats=(
         "Filenames must carry the Switch title ID in brackets, e.g. "
         "`Game Title [0100000000010000].nsp`.",
-        "Tinfoil signs in to the feed but does not pass those credentials on "
-        "to the download links the feed hands back, which is why this server "
-        "must have download-endpoint auth disabled.",
     ),
     split_url_into_fields=True,
 )
@@ -307,29 +448,33 @@ PKGJ = FeedClient(
     display_name="pkgj",
     auth_style=AuthStyle.URL_EMBEDDED,
     file_formats="`.pkg`, plus compressed archives (`.zip`, `.7z`)",
-    docs_url=f"{DOCS}/ecosystem/feed-clients/",
+    docs_url=f"{DOCS}#pkgj",
     setup_steps=(
         "Open `ux0:/pkgj/config.txt` in VitaShell.",
-        "Append the URL above as a new line.",
+        "Add the lines above, one per feed you want.",
         "Save, then refresh inside pkgj.",
     ),
     caveats=(
-        "pkgj takes a URL and nothing else, so your password has to go in "
-        "the URL itself. Replace `<your-password>` in it.",
+        "pkgj reads URLs from a config file and has no password box, so "
+        "your password goes in the URL. Replace `<your-password>` in each "
+        "line.",
     ),
 )
 
 PKGI = FeedClient(
     key="pkgi",
     display_name="pkgi",
-    auth_style=AuthStyle.FIELDS,
+    auth_style=AuthStyle.URL_EMBEDDED,
     file_formats="`.pkg` only",
-    docs_url=f"{DOCS}/ecosystem/feed-clients/",
+    docs_url=f"{DOCS}#pkgi",
     setup_steps=(
-        "Add the URL above as a feed in pkgi's configuration.",
-        "Enter your username and password in pkgi's own auth fields.",
+        "Add the URLs above to pkgi's `config.txt`.",
+        "Refresh the list inside pkgi.",
     ),
     caveats=(
+        "Every pkgi fork keeps its config.txt somewhere different and names "
+        "its URL keys differently, so check your fork's README for the key "
+        "that goes in front of each URL.",
         "PS3 and PSP only: those installs also want the matching `.rap` "
         "license file stored alongside the `.pkg`.",
     ),
@@ -340,7 +485,7 @@ FPKGI = FeedClient(
     display_name="fpkgi",
     auth_style=AuthStyle.FIELDS,
     file_formats="`.pkg` only",
-    docs_url=f"{DOCS}/ecosystem/feed-clients/",
+    docs_url=f"{DOCS}#fpkgi",
     setup_steps=(
         "Add the URL above to fpkgi's config.",
         "Enter your username and password in fpkgi's auth fields.",
@@ -356,7 +501,7 @@ KEKATSU = FeedClient(
     display_name="Kekatsu DS",
     auth_style=AuthStyle.FIELDS,
     file_formats="`.nds` only",
-    docs_url=f"{DOCS}/ecosystem/feed-clients/",
+    docs_url=f"{DOCS}#kekatsu",
     setup_steps=(
         "Add the URL above as a source in Kekatsu.",
         "Enter your username and password in Kekatsu's auth fields.",
@@ -369,6 +514,40 @@ KEKATSU = FeedClient(
     ),
 )
 
+SWITCH_CONTENT = ContentPlatform(
+    "switch", "Nintendo Switch", name_fragments=("switch",)
+)
+PSVITA_CONTENT = ContentPlatform(
+    "psvita", "PlayStation Vita", name_fragments=("vita",)
+)
+PSP_CONTENT = ContentPlatform(
+    "psp", "PlayStation Portable",
+    name_fragments=("psp", "playstation portable"),
+)
+PSX_CONTENT = ContentPlatform(
+    "psx", "PlayStation",
+    exact_names=("playstation", "sony playstation"),
+    name_fragments=("psx", "ps1", "psone"),
+)
+PS3_CONTENT = ContentPlatform(
+    "ps3", "PlayStation 3", name_fragments=("ps3", "playstation 3")
+)
+PS4_CONTENT = ContentPlatform(
+    "ps4", "PlayStation 4", name_fragments=("ps4", "playstation 4")
+)
+PS5_CONTENT = ContentPlatform(
+    "ps5", "PlayStation 5", name_fragments=("ps5", "playstation 5")
+)
+NDS_CONTENT = ContentPlatform(
+    # "nds" and "nintendo ds" both miss "Nintendo 3DS", which is what we want.
+    "nds", "Nintendo DS", name_fragments=("nintendo ds", "nds")
+)
+
+CONTENT_PLATFORMS: Tuple[ContentPlatform, ...] = (
+    SWITCH_CONTENT, PSVITA_CONTENT, PSP_CONTENT, PSX_CONTENT,
+    PS3_CONTENT, PS4_CONTENT, PS5_CONTENT, NDS_CONTENT,
+)
+
 # PS3 and PSP accept five pkgi content types; Vita accepts eleven. `game` and
 # `dlc` get their own Feed; the rest ride along as a summarized template line.
 _PKGI_EXTRA_BASE = ("demo", "update", "patch")
@@ -379,85 +558,65 @@ _PKGI_EXTRA_VITA = _PKGI_EXTRA_BASE + (
 SWITCH = Device(
     key="switch",
     display_name="Nintendo Switch",
-    exact_names=(),
-    name_fragments=("switch",),
-    feeds=(Feed(TINFOIL, "/api/feeds/tinfoil", "Feed"),),
+    feeds=(Feed(TINFOIL, "/api/feeds/tinfoil", "Feed", "switch"),),
 )
 
+# pkgj runs here and nowhere else, which is why PSP and PSX content hangs
+# off the Vita rather than off devices of their own.
 PSVITA = Device(
     key="psvita",
     display_name="PlayStation Vita",
-    exact_names=(),
-    name_fragments=("vita",),
     feeds=(
-        Feed(PKGJ, "/api/feeds/pkgj/psvita/games", "Games"),
-        Feed(PKGJ, "/api/feeds/pkgj/psvita/dlc", "DLC"),
-        Feed(PKGI, "/api/feeds/pkgi/psvita/game", "Games", _PKGI_EXTRA_VITA),
-        Feed(PKGI, "/api/feeds/pkgi/psvita/dlc", "DLC"),
+        Feed(PKGJ, "/api/feeds/pkgj/psvita/games", "Vita games", "psvita", "url_games"),
+        Feed(PKGJ, "/api/feeds/pkgj/psvita/dlc", "Vita DLC", "psvita", "url_dlcs"),
+        Feed(PKGJ, "/api/feeds/pkgj/psp/games", "PSP games", "psp", "url_psp_games"),
+        Feed(PKGJ, "/api/feeds/pkgj/psp/dlc", "PSP DLC", "psp", "url_psp_dlcs"),
+        Feed(PKGJ, "/api/feeds/pkgj/psx/games", "PSX games", "psx", "url_psx_games"),
+        Feed(PKGI, "/api/feeds/pkgi/psvita/game", "Games", "psvita",
+             extra_content_types=_PKGI_EXTRA_VITA),
+        Feed(PKGI, "/api/feeds/pkgi/psvita/dlc", "DLC", "psvita"),
     ),
 )
 
 PSP = Device(
     key="psp",
     display_name="PlayStation Portable",
-    exact_names=(),
-    name_fragments=("psp", "playstation portable"),
     feeds=(
-        Feed(PKGJ, "/api/feeds/pkgj/psp/games", "Games"),
-        Feed(PKGJ, "/api/feeds/pkgj/psp/dlc", "DLC"),
-        Feed(PKGI, "/api/feeds/pkgi/psp/game", "Games", _PKGI_EXTRA_BASE),
-        Feed(PKGI, "/api/feeds/pkgi/psp/dlc", "DLC"),
+        Feed(PKGI, "/api/feeds/pkgi/psp/game", "Games", "psp",
+             extra_content_types=_PKGI_EXTRA_BASE),
+        Feed(PKGI, "/api/feeds/pkgi/psp/dlc", "DLC", "psp"),
     ),
-)
-
-PSX = Device(
-    key="psx",
-    display_name="PlayStation",
-    # "playstation" as a fragment would match every other Sony platform, so
-    # the bare name is matched exactly and only the unambiguous short forms
-    # are treated as fragments.
-    exact_names=("playstation", "sony playstation"),
-    name_fragments=("psx", "ps1", "psone"),
-    feeds=(Feed(PKGJ, "/api/feeds/pkgj/psx/games", "Games"),),
 )
 
 PS3 = Device(
     key="ps3",
     display_name="PlayStation 3",
-    exact_names=(),
-    name_fragments=("ps3", "playstation 3"),
     feeds=(
-        Feed(PKGI, "/api/feeds/pkgi/ps3/game", "Games", _PKGI_EXTRA_BASE),
-        Feed(PKGI, "/api/feeds/pkgi/ps3/dlc", "DLC"),
+        Feed(PKGI, "/api/feeds/pkgi/ps3/game", "Games", "ps3",
+             extra_content_types=_PKGI_EXTRA_BASE),
+        Feed(PKGI, "/api/feeds/pkgi/ps3/dlc", "DLC", "ps3"),
     ),
 )
 
 PS4 = Device(
     key="ps4",
     display_name="PlayStation 4",
-    exact_names=(),
-    name_fragments=("ps4", "playstation 4"),
-    feeds=(Feed(FPKGI, "/api/feeds/fpkgi/ps4", "Feed"),),
+    feeds=(Feed(FPKGI, "/api/feeds/fpkgi/ps4", "Feed", "ps4"),),
 )
 
 PS5 = Device(
     key="ps5",
     display_name="PlayStation 5",
-    exact_names=(),
-    name_fragments=("ps5", "playstation 5"),
-    feeds=(Feed(FPKGI, "/api/feeds/fpkgi/ps5", "Feed"),),
+    feeds=(Feed(FPKGI, "/api/feeds/fpkgi/ps5", "Feed", "ps5"),),
 )
 
 NDS = Device(
     key="nds",
     display_name="Nintendo DS",
-    exact_names=(),
-    # "nds" and "nintendo ds" both miss "Nintendo 3DS", which is what we want.
-    name_fragments=("nintendo ds", "nds"),
-    feeds=(Feed(KEKATSU, "/api/feeds/kekatsu/nds", "Feed"),),
+    feeds=(Feed(KEKATSU, "/api/feeds/kekatsu/nds", "Feed", "nds"),),
 )
 
-DEVICES: Tuple[Device, ...] = (SWITCH, PSVITA, PSP, PSX, PS3, PS4, PS5, NDS)
+DEVICES: Tuple[Device, ...] = (SWITCH, PSVITA, PSP, PS3, PS4, PS5, NDS)
 
 DEVICES_BY_KEY: Dict[str, Device] = {device.key: device for device in DEVICES}
 ```
@@ -496,18 +655,26 @@ git commit -m "feat(feeds): the five RomM feed clients and eight devices, as dat
 Create `tests/test_feed_availability.py`:
 
 ```python
-"""Resolving RomM's platform list into devices the /feeds command can offer.
+"""Resolving RomM's platform list into hosted content and offerable devices.
 
-The payload these read is the sanitized one bot.py caches, which keeps
-name and custom_name and drops slug - so matching is by name, exactly as
-the Switch check this replaces did. The custom_name case is the one most
-likely to regress invisibly: a server whose admin renamed "Nintendo Switch"
-to "Switch (Modded)" must still be offered Tinfoil.
+The payload these read is the sanitized one bot.py caches, which keeps name
+and custom_name and drops slug - so matching is by name, exactly as the
+Switch check this replaces did. The custom_name case is the one most likely
+to regress invisibly: a server whose admin renamed "Nintendo Switch" to
+"Switch (Modded)" must still be offered Tinfoil.
+
+The other thing pinned here is that hosting content and owning hardware are
+different questions. A Vita is worth offering to someone whose server holds
+only PSP games, because a Vita running pkgj is how those get installed.
 """
 
 import unittest
 
-from cogs.feeds.availability import available_device_keys, available_devices
+from cogs.feeds.availability import (
+    available_device_keys,
+    available_devices,
+    hosted_content_keys,
+)
 
 
 def platform(name, custom_name=None):
@@ -521,29 +688,29 @@ def platform(name, custom_name=None):
     }
 
 
-class MatchingTests(unittest.TestCase):
-    def test_a_platform_named_for_the_device_matches_it(self):
+class ContentMatchingTests(unittest.TestCase):
+    def test_a_platform_named_for_the_content_matches_it(self):
         self.assertEqual(
-            available_device_keys([platform("Nintendo Switch")]),
+            hosted_content_keys([platform("Nintendo Switch")]),
             frozenset({"switch"}),
         )
 
     def test_a_custom_name_matches_when_the_real_name_does_not(self):
-        keys = available_device_keys([platform("Some Internal Slug", "Switch (Modded)")])
+        keys = hosted_content_keys([platform("Some Internal Slug", "Switch (Modded)")])
         self.assertEqual(keys, frozenset({"switch"}))
 
     def test_matching_ignores_case_and_surrounding_whitespace(self):
         self.assertEqual(
-            available_device_keys([platform("  nintendo SWITCH  ")]),
+            hosted_content_keys([platform("  nintendo SWITCH  ")]),
             frozenset({"switch"}),
         )
 
     def test_unrelated_platforms_match_nothing(self):
-        keys = available_device_keys([platform("Nintendo 64"), platform("Sega Genesis")])
+        keys = hosted_content_keys([platform("Nintendo 64"), platform("Sega Genesis")])
         self.assertEqual(keys, frozenset())
 
-    def test_several_platforms_resolve_to_several_devices(self):
-        keys = available_device_keys([
+    def test_several_platforms_resolve_to_several_content_keys(self):
+        keys = hosted_content_keys([
             platform("Nintendo Switch"),
             platform("PlayStation Vita"),
             platform("Nintendo DS"),
@@ -555,42 +722,73 @@ class OverMatchingTests(unittest.TestCase):
     """The Sony family and the DS family are where substring matching bites."""
 
     def test_playstation_3_is_not_also_the_original_playstation(self):
-        self.assertEqual(available_device_keys([platform("PlayStation 3")]), frozenset({"ps3"}))
+        self.assertEqual(hosted_content_keys([platform("PlayStation 3")]),
+                         frozenset({"ps3"}))
 
     def test_the_original_playstation_matches_only_psx(self):
-        self.assertEqual(available_device_keys([platform("PlayStation")]), frozenset({"psx"}))
+        self.assertEqual(hosted_content_keys([platform("PlayStation")]),
+                         frozenset({"psx"}))
 
     def test_playstation_portable_is_psp_and_not_psx(self):
-        self.assertEqual(
-            available_device_keys([platform("PlayStation Portable")]),
-            frozenset({"psp"}),
-        )
+        self.assertEqual(hosted_content_keys([platform("PlayStation Portable")]),
+                         frozenset({"psp"}))
 
     def test_nintendo_3ds_is_not_the_ds(self):
-        self.assertEqual(available_device_keys([platform("Nintendo 3DS")]), frozenset())
+        self.assertEqual(hosted_content_keys([platform("Nintendo 3DS")]), frozenset())
 
     def test_ps5_and_ps4_stay_distinct(self):
-        keys = available_device_keys([platform("PlayStation 4"), platform("PlayStation 5")])
+        keys = hosted_content_keys([platform("PlayStation 4"), platform("PlayStation 5")])
         self.assertEqual(keys, frozenset({"ps4", "ps5"}))
 
 
-class FallbackTests(unittest.TestCase):
-    def test_a_missing_cache_offers_everything(self):
-        # A stale-but-permissive picker beats a command that silently vanishes.
-        self.assertEqual(len(available_device_keys(None)), 8)
+class HardwareFromContentTests(unittest.TestCase):
+    """What the server holds decides what hardware is worth setting up."""
 
-    def test_an_empty_list_offers_everything(self):
-        self.assertEqual(len(available_device_keys([])), 8)
+    def test_a_library_of_only_psp_games_still_offers_the_vita(self):
+        """The case that motivated splitting content from hardware.
+
+        pkgj runs on a Vita and serves PSP content. Requiring a name match
+        on "PlayStation Vita" itself would have hidden the one device that
+        can install these games.
+        """
+        devices = available_devices([platform("PlayStation Portable")])
+        keys = [device.key for device in devices]
+        self.assertIn("psvita", keys)
+        self.assertIn("psp", keys)
+
+    def test_a_library_of_only_psx_games_offers_the_vita_alone(self):
+        # Nothing else can install them, and no client runs on a PS1.
+        devices = available_devices([platform("PlayStation")])
+        self.assertEqual([device.key for device in devices], ["psvita"])
+
+    def test_switch_content_offers_only_the_switch(self):
+        self.assertEqual(available_device_keys([platform("Nintendo Switch")]),
+                         frozenset({"switch"}))
+
+    def test_content_nothing_can_install_offers_nothing(self):
+        self.assertEqual(available_device_keys([platform("Nintendo 64")]), frozenset())
+
+    def test_vita_content_offers_the_vita(self):
+        self.assertIn("psvita", available_device_keys([platform("PlayStation Vita")]))
+
+
+class FallbackTests(unittest.TestCase):
+    def test_a_missing_cache_offers_every_device(self):
+        # A stale-but-permissive picker beats a command that silently vanishes.
+        self.assertEqual(len(available_device_keys(None)), 7)
+
+    def test_an_empty_list_offers_every_device(self):
+        self.assertEqual(len(available_device_keys([])), 7)
 
     def test_a_malformed_entry_is_skipped_rather_than_raising(self):
-        keys = available_device_keys([{"nonsense": True}, platform("Nintendo Switch")])
+        keys = hosted_content_keys([{"nonsense": True}, platform("Nintendo Switch")])
         self.assertEqual(keys, frozenset({"switch"}))
 
     def test_a_null_name_is_survivable(self):
         # sanitize_data defaults name, but custom_name is passed through as
         # None, and the Switch check this replaces guarded for exactly this.
-        keys = available_device_keys([{"name": None, "custom_name": None}])
-        self.assertEqual(keys, frozenset())
+        self.assertEqual(hosted_content_keys([{"name": None, "custom_name": None}]),
+                         frozenset())
 
 
 class OrderingTests(unittest.TestCase):
@@ -611,7 +809,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'cogs.feeds.availabilit
 - [ ] **Step 3: Write `cogs/feeds/availability.py`**
 
 ```python
-"""Which devices this RomM server actually hosts.
+"""Which content this RomM server hosts, and which devices that makes useful.
 
 Reads the platforms payload bot.py already caches every SYNC_RATE rather
 than fetching or scheduling anything of its own: bot.cache is the API
@@ -620,12 +818,17 @@ same loop. That payload is sanitized down to id/name/custom_name/
 display_name/rom_count, so matching is by name - there is no slug to match
 on - and platforms holding no ROMs have already been filtered out upstream,
 which is the behavior we want for gating anyway.
+
+The two questions are kept apart on purpose. What the server hosts is
+content; what the user can point at it is hardware. A Vita is worth offering
+to someone whose server holds only PSP games, because pkgj running on that
+Vita is how those games get installed.
 """
 
 import logging
 from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
-from .catalog import DEVICES, Device
+from .catalog import CONTENT_PLATFORMS, DEVICES, ContentPlatform, Device
 
 logger = logging.getLogger(__name__)
 
@@ -636,38 +839,51 @@ def _labels(entry: Dict[str, Any]) -> List[str]:
     return [str(value).strip().lower() for value in raw if value]
 
 
-def _matches(device: Device, label: str) -> bool:
-    if label in device.exact_names:
+def _matches(platform: ContentPlatform, label: str) -> bool:
+    if label in platform.exact_names:
         return True
-    return any(fragment in label for fragment in device.name_fragments)
+    return any(fragment in label for fragment in platform.name_fragments)
 
 
-def available_device_keys(platforms: Optional[List[Dict[str, Any]]]) -> FrozenSet[str]:
-    """Device keys this server can serve feeds for.
+def hosted_content_keys(platforms: Optional[List[Dict[str, Any]]]) -> FrozenSet[str]:
+    """ContentPlatform keys this server holds ROMs for.
 
     An absent or empty payload means we could not find out, which resolves
-    to every device: a picker that offers too much is recoverable, one that
+    to everything: a picker that offers too much is recoverable, one that
     offers nothing looks like the command is broken.
     """
     if not platforms:
-        logger.debug("No cached platforms; offering every feed device")
-        return frozenset(device.key for device in DEVICES)
+        logger.debug("No cached platforms; treating every content platform as hosted")
+        return frozenset(platform.key for platform in CONTENT_PLATFORMS)
 
     found = set()
     for entry in platforms:
         if not isinstance(entry, dict):
             continue
         for label in _labels(entry):
-            for device in DEVICES:
-                if _matches(device, label):
-                    found.add(device.key)
+            for platform in CONTENT_PLATFORMS:
+                if _matches(platform, label):
+                    found.add(platform.key)
     return frozenset(found)
 
 
 def available_devices(platforms: Optional[List[Dict[str, Any]]]) -> Tuple[Device, ...]:
-    """As above, but the Device objects, in catalog order."""
-    keys = available_device_keys(platforms)
-    return tuple(device for device in DEVICES if device.key in keys)
+    """Devices worth offering, in catalog order.
+
+    A device qualifies when the server hosts content for *any* feed it can
+    use. Requiring a name match on the hardware itself would hide the Vita
+    from someone whose library is all PSP - the exact case pkgj exists for.
+    """
+    hosted = hosted_content_keys(platforms)
+    return tuple(
+        device for device in DEVICES
+        if any(key in hosted for key in device.content_keys)
+    )
+
+
+def available_device_keys(platforms: Optional[List[Dict[str, Any]]]) -> FrozenSet[str]:
+    """As above, but just the keys."""
+    return frozenset(device.key for device in available_devices(platforms))
 ```
 
 - [ ] **Step 4: Run the test to verify it passes**
@@ -677,12 +893,35 @@ Expected: PASS, 16 tests.
 
 If `test_the_original_playstation_matches_only_psx` fails, the cause is a fragment on another Sony device matching the bare name — check that `PS3`/`PS4`/`PS5` fragments all include the digit.
 
-- [ ] **Step 5: Lint and commit**
+- [ ] **Step 5: Write `cogs/feeds/urls.py`**
+
+Both `probe.py` and `embeds.py` need a base URL with a scheme on it, and they must agree: a `DOMAIN` the embed renders one way and the probe requests another way produces a verdict about a URL no user will ever visit.
+
+```python
+"""Normalizing the configured DOMAIN into something urlsplit can parse.
+
+The switch_shop_info command this replaces rendered DOMAIN as a bare
+**Host:** field, so deployments configured it without a scheme. Left alone,
+urlsplit puts a scheme-less string entirely in `path`: the embed would drop
+the host from its URLs and the probe would request an address that does not
+exist, reporting UNKNOWN forever.
+"""
+
+
+def with_scheme(domain: str) -> str:
+    """A base URL with a scheme, whatever DOMAIN was configured as."""
+    base = (domain or "").strip().rstrip("/")
+    if base and "://" not in base:
+        base = f"https://{base}"
+    return base
+```
+
+- [ ] **Step 6: Lint and commit**
 
 ```bash
 python -m ruff check cogs/feeds/ tests/test_feed_availability.py
-git add cogs/feeds/availability.py tests/test_feed_availability.py
-git commit -m "feat(feeds): resolve hosted platforms into offerable devices"
+git add cogs/feeds/availability.py cogs/feeds/urls.py tests/test_feed_availability.py
+git commit -m "feat(feeds): resolve hosted content into offerable devices"
 ```
 
 ---
@@ -843,6 +1082,23 @@ class DetectTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(verdict, DownloadAuth.UNKNOWN)
         self.assertEqual(self.requested, [])
 
+    async def test_a_scheme_less_domain_still_produces_a_valid_request(self):
+        """DOMAIN is frequently configured as a bare host.
+
+        build_rom_download_url does no normalizing of its own, so passing
+        the raw DOMAIN would request something unresolvable and leave the
+        verdict stuck on UNKNOWN forever - and it has to match what the
+        embed shows, or the probe answers a question about a URL no user
+        will ever visit.
+        """
+        await detect_download_auth(
+            "romm.example.com", self.fetch_one_rom, self.recorder(206)
+        )
+        self.assertEqual(
+            self.requested,
+            ["https://romm.example.com/api/roms/42/content/Some+Game.nsp"],
+        )
+
     async def test_a_placeholder_domain_is_unknown_and_issues_no_request(self):
         verdict = await detect_download_auth(
             "No website configured", self.fetch_one_rom, self.recorder(200)
@@ -999,6 +1255,7 @@ import aiohttp
 
 from cogs.search import build_rom_download_url
 
+from .urls import with_scheme
 from .verdict import DownloadAuth
 
 logger = logging.getLogger(__name__)
@@ -1100,7 +1357,11 @@ async def detect_download_auth(
         logger.debug("No ROMs available to probe with")
         return DownloadAuth.UNKNOWN
 
-    url = build_rom_download_url(domain, rom["id"], rom.get("fs_name", "unknown_file"))
+    # with_scheme, not the raw DOMAIN: build_rom_download_url does no
+    # normalizing, so a scheme-less domain would produce a request that can
+    # never succeed and a verdict stuck on UNKNOWN. The embed builder
+    # normalizes the same way, so both talk about the same URL.
+    url = build_rom_download_url(with_scheme(domain), rom["id"], rom.get("fs_name", "unknown_file"))
 
     try:
         status = await get(url)
@@ -1122,7 +1383,7 @@ Expected: PASS.
 
 ```bash
 python -m ruff check cogs/feeds/ tests/test_feed_probe.py
-git add cogs/feeds/probe.py tests/test_feed_probe.py
+git add cogs/feeds/verdict.py cogs/feeds/probe.py tests/test_feed_probe.py
 git commit -m "feat(feeds): probe whether the download endpoint requires auth"
 ```
 
@@ -1146,11 +1407,18 @@ Create `tests/test_feed_embeds.py`:
 ```python
 """The /feeds embed, as a pure function.
 
-The rule worth protecting here is the credential split: pkgj's config.txt
-takes a URL and nothing else, so its URL carries user:<password>@, while
-every other client has auth fields of its own and gets a bare URL. Nothing
-about that is enforced by the type system, and getting it backwards would
-either break pkgj or print credentials where they did not need to be.
+Three rules worth protecting here.
+
+The credential split: pkgj and pkgi read URLs out of a config file and have
+no password box, so their URLs carry user:<password>@, while Tinfoil, fpkgi
+and Kekatsu have auth fields of their own and get a bare URL.
+
+The download-auth warning: only Tinfoil cannot authenticate its downloads.
+Showing that warning to a pkgj user would be telling them to get their
+server weakened to fix a problem they do not have.
+
+The config keys: pkgj's config.txt is key-value lines, so a URL rendered
+without `url_psp_games` in front of it is inert when pasted.
 """
 
 import unittest
@@ -1161,11 +1429,13 @@ from cogs.feeds.embeds import (
     USERNAME_PLACEHOLDER,
     build_device_embed,
     download_auth_notice,
+    feed_config_line,
     feed_url,
 )
 from cogs.feeds.verdict import DownloadAuth
 
 DOMAIN = "https://romm.example"
+ALL = frozenset({"switch", "psvita", "psp", "psx", "ps3", "ps4", "ps5", "nds"})
 
 
 def embed_text(embed):
@@ -1179,31 +1449,50 @@ def embed_text(embed):
     return "\n".join(parts)
 
 
+def feed_for(device_key, client_key, path_end):
+    return next(
+        feed for feed in DEVICES_BY_KEY[device_key].feeds
+        if feed.client.key == client_key and feed.path.endswith(path_end)
+    )
+
+
 class UrlTests(unittest.TestCase):
     def test_a_fields_client_gets_a_bare_url(self):
         tinfoil = DEVICES_BY_KEY["switch"].feeds[0]
         self.assertEqual(feed_url(DOMAIN, tinfoil, "ana"), f"{DOMAIN}/api/feeds/tinfoil")
 
     def test_pkgj_carries_the_username_and_a_password_placeholder(self):
-        pkgj = DEVICES_BY_KEY["psvita"].feeds[0]
-        url = feed_url(DOMAIN, pkgj, "ana")
+        pkgj = feed_for("psvita", "pkgj", "/psvita/games")
         self.assertEqual(
-            url,
+            feed_url(DOMAIN, pkgj, "ana"),
             f"https://ana:{PASSWORD_PLACEHOLDER}@romm.example/api/feeds/pkgj/psvita/games",
         )
+
+    def test_pkgi_also_embeds_credentials(self):
+        # pkgi has no username or password setting either; RomM's docs put
+        # its credentials in the config URL, same as pkgj.
+        pkgi = feed_for("ps3", "pkgi", "/ps3/game")
+        self.assertIn(f"ana:{PASSWORD_PLACEHOLDER}@", feed_url(DOMAIN, pkgi, "ana"))
 
     def test_pkgj_without_a_link_still_produces_a_usable_template(self):
         """The placeholder stays legible rather than percent-encoded.
 
         Encoding it turns "<your-romm-username>" into
-        "%3Cyour-romm-username%3E", which is exactly the wrong thing to
-        hand the one user who has to fill it in by hand.
+        "%3Cyour-romm-username%3E", which is exactly the wrong thing to hand
+        the one user who has to fill it in by hand.
         """
-        pkgj = DEVICES_BY_KEY["psvita"].feeds[0]
+        pkgj = feed_for("psvita", "pkgj", "/psvita/games")
         url = feed_url(DOMAIN, pkgj, None)
         self.assertIn(USERNAME_PLACEHOLDER, url)
         self.assertIn(PASSWORD_PLACEHOLDER, url)
         self.assertNotIn("%3C", url)
+
+    def test_a_trailing_slash_on_the_domain_does_not_double_up(self):
+        tinfoil = DEVICES_BY_KEY["switch"].feeds[0]
+        self.assertEqual(
+            feed_url("https://romm.example/", tinfoil, "ana"),
+            f"{DOMAIN}/api/feeds/tinfoil",
+        )
 
     def test_a_domain_with_no_scheme_still_keeps_its_host(self):
         """DOMAIN is often configured bare.
@@ -1212,10 +1501,9 @@ class UrlTests(unittest.TestCase):
         deployments have it without a scheme. urlsplit puts a scheme-less
         string entirely in `path`, which would drop the host from the URL.
         """
-        pkgj = DEVICES_BY_KEY["psvita"].feeds[0]
-        url = feed_url("romm.example.com", pkgj, "ana")
+        pkgj = feed_for("psvita", "pkgj", "/psvita/games")
         self.assertEqual(
-            url,
+            feed_url("romm.example.com", pkgj, "ana"),
             f"https://ana:{PASSWORD_PLACEHOLDER}@romm.example.com"
             "/api/feeds/pkgj/psvita/games",
         )
@@ -1227,9 +1515,32 @@ class UrlTests(unittest.TestCase):
             "https://romm.example.com/api/feeds/tinfoil",
         )
 
+    def test_a_username_with_an_at_sign_cannot_repoint_the_host(self):
+        """The one place user-controlled text lands in a URL's userinfo.
+
+        Unencoded, "ana@evil.test" would make the host evil.test and send
+        the user's password somewhere else entirely.
+        """
+        pkgj = feed_for("psvita", "pkgj", "/psvita/games")
+        url = feed_url(DOMAIN, pkgj, "ana@evil.test")
+        self.assertNotIn("@evil.test/", url)
+        self.assertIn("ana%40evil.test", url)
+        self.assertIn("@romm.example/", url)
+
+    def test_other_reserved_characters_in_a_username_are_encoded(self):
+        pkgj = feed_for("psvita", "pkgj", "/psvita/games")
+        self.assertIn("a%2Fb%3Ac%3Fd%23e", feed_url(DOMAIN, pkgj, "a/b:c?d#e"))
+
+    def test_an_http_domain_is_left_as_http(self):
+        # Some self-hosters run plain HTTP on a LAN; rewriting it would
+        # silently produce a URL that does not resolve.
+        pkgj = feed_for("psvita", "pkgj", "/psvita/games")
+        url = feed_url("http://192.168.1.5:8080", pkgj, "ana")
+        self.assertTrue(url.startswith("http://ana:"))
+
     def test_a_password_placeholder_never_appears_in_a_fields_client_url(self):
-        # The mirror of the pkgj rule, and the direction a credential could
-        # leak into a message that did not need one.
+        # The mirror of the URL-embedded rule, and the direction a credential
+        # could leak into a message that did not need one.
         for device in DEVICES_BY_KEY.values():
             for feed in device.feeds:
                 if feed.client.auth_style is not AuthStyle.URL_EMBEDDED:
@@ -1238,65 +1549,133 @@ class UrlTests(unittest.TestCase):
                         self.assertNotIn(PASSWORD_PLACEHOLDER, url)
                         self.assertNotIn("ana", url)
 
-    def test_a_trailing_slash_on_the_domain_does_not_double_up(self):
-        tinfoil = DEVICES_BY_KEY["switch"].feeds[0]
+
+class ConfigLineTests(unittest.TestCase):
+    """pkgj will not read a URL that has no key in front of it."""
+
+    def test_a_pkgj_line_leads_with_its_config_key(self):
+        psp = feed_for("psvita", "pkgj", "/psp/games")
+        line = feed_config_line(DOMAIN, psp, "ana")
+        self.assertTrue(line.startswith("url_psp_games https://ana:"))
+
+    def test_each_pkgj_feed_gets_its_own_key(self):
+        vita = DEVICES_BY_KEY["psvita"]
+        lines = [
+            feed_config_line(DOMAIN, feed, "ana")
+            for feed in vita.feeds if feed.client.key == "pkgj"
+        ]
+        leading = [line.split(" ", 1)[0] for line in lines]
         self.assertEqual(
-            feed_url("https://romm.example/", tinfoil, "ana"),
-            f"{DOMAIN}/api/feeds/tinfoil",
+            leading,
+            ["url_games", "url_dlcs", "url_psp_games", "url_psp_dlcs", "url_psx_games"],
         )
 
-    def test_a_username_with_an_at_sign_cannot_repoint_the_host(self):
-        """The one place user-controlled text lands in a URL's userinfo.
-
-        Unencoded, "ana@evil.test" would make the host evil.test and send
-        the user's password somewhere else entirely.
-        """
-        pkgj = DEVICES_BY_KEY["psvita"].feeds[0]
-        url = feed_url(DOMAIN, pkgj, "ana@evil.test")
-        self.assertNotIn("@evil.test/", url)
-        self.assertIn("ana%40evil.test", url)
-        self.assertIn("@romm.example/", url)
-
-    def test_other_reserved_characters_in_a_username_are_encoded(self):
-        pkgj = DEVICES_BY_KEY["psvita"].feeds[0]
-        url = feed_url(DOMAIN, pkgj, "a/b:c?d#e")
-        self.assertIn("a%2Fb%3Ac%3Fd%23e", url)
-
-    def test_an_http_domain_is_left_as_http(self):
-        # Some self-hosters run plain HTTP on a LAN; rewriting it would
-        # silently produce a URL that does not resolve.
-        pkgj = DEVICES_BY_KEY["psvita"].feeds[0]
-        url = feed_url("http://192.168.1.5:8080", pkgj, "ana")
-        self.assertTrue(url.startswith("http://ana:"))
+    def test_a_feed_with_no_config_key_renders_the_bare_url(self):
+        pkgi = feed_for("ps3", "pkgi", "/ps3/game")
+        self.assertEqual(
+            feed_config_line(DOMAIN, pkgi, "ana"),
+            feed_url(DOMAIN, pkgi, "ana"),
+        )
 
 
 class NoticeTests(unittest.TestCase):
-    def test_auth_enabled_produces_a_warning(self):
-        notice = download_auth_notice(DownloadAuth.ENABLED)
+    """Only Tinfoil needs DISABLE_DOWNLOAD_ENDPOINT_AUTH."""
+
+    def test_a_switch_with_auth_enabled_gets_a_warning(self):
+        notice = download_auth_notice(DownloadAuth.ENABLED, DEVICES_BY_KEY["switch"])
         self.assertIn("DISABLE_DOWNLOAD_ENDPOINT_AUTH", notice)
+        self.assertIn("Tinfoil", notice)
         self.assertIn("⚠️", notice)
 
-    def test_auth_disabled_produces_no_notice_at_all(self):
-        self.assertIsNone(download_auth_notice(DownloadAuth.DISABLED))
+    def test_a_switch_with_auth_disabled_gets_no_notice(self):
+        self.assertIsNone(
+            download_auth_notice(DownloadAuth.DISABLED, DEVICES_BY_KEY["switch"])
+        )
 
-    def test_unknown_falls_back_to_a_generic_advisory(self):
-        notice = download_auth_notice(DownloadAuth.UNKNOWN)
+    def test_a_switch_with_an_unknown_verdict_gets_a_plain_advisory(self):
+        notice = download_auth_notice(DownloadAuth.UNKNOWN, DEVICES_BY_KEY["switch"])
         self.assertIsNotNone(notice)
         self.assertIn("DISABLE_DOWNLOAD_ENDPOINT_AUTH", notice)
         self.assertNotIn("⚠️", notice)
+
+    def test_a_vita_is_never_warned_whatever_the_verdict(self):
+        """pkgj and pkgi authenticate their downloads.
+
+        Warning here would tell a Vita owner to have their admin open up
+        the download endpoint for no reason at all.
+        """
+        for verdict in DownloadAuth:
+            with self.subTest(verdict=verdict):
+                self.assertIsNone(
+                    download_auth_notice(verdict, DEVICES_BY_KEY["psvita"])
+                )
+
+    def test_no_non_switch_device_is_ever_warned(self):
+        for key, device in DEVICES_BY_KEY.items():
+            if key == "switch":
+                continue
+            for verdict in DownloadAuth:
+                with self.subTest(device=key, verdict=verdict):
+                    self.assertIsNone(download_auth_notice(verdict, device))
+
+
+class HostedFilteringTests(unittest.TestCase):
+    """Feeds for content the server lacks are dead links, so they are cut."""
+
+    def test_a_vita_on_a_psp_only_server_shows_only_psp_feeds(self):
+        embed = build_device_embed(
+            DEVICES_BY_KEY["psvita"], DOMAIN, "ana", DownloadAuth.DISABLED,
+            hosted=frozenset({"psp"}),
+        )
+        text = embed_text(embed)
+        self.assertIn("/api/feeds/pkgj/psp/games", text)
+        self.assertNotIn("/api/feeds/pkgj/psvita/games", text)
+        self.assertNotIn("/api/feeds/pkgj/psx/games", text)
+
+    def test_a_vita_on_a_full_server_shows_everything(self):
+        embed = build_device_embed(
+            DEVICES_BY_KEY["psvita"], DOMAIN, "ana", DownloadAuth.DISABLED, hosted=ALL,
+        )
+        text = embed_text(embed)
+        for path in ("pkgj/psvita/games", "pkgj/psp/games", "pkgj/psx/games"):
+            with self.subTest(path=path):
+                self.assertIn(path, text)
+
+    def test_filtering_can_drop_a_whole_client(self):
+        # A PSX-only server leaves the Vita with pkgj and no pkgi at all.
+        embed = build_device_embed(
+            DEVICES_BY_KEY["psvita"], DOMAIN, "ana", DownloadAuth.DISABLED,
+            hosted=frozenset({"psx"}),
+        )
+        names = " ".join(f.name for f in embed.fields)
+        self.assertIn("pkgj", names)
+        self.assertNotIn("pkgi", names)
+
+    def test_an_unknown_hosted_set_keeps_every_feed(self):
+        embed = build_device_embed(
+            DEVICES_BY_KEY["psvita"], DOMAIN, "ana", DownloadAuth.DISABLED, hosted=None,
+        )
+        self.assertIn("pkgj/psx/games", embed_text(embed))
+
+    def test_an_empty_hosted_set_falls_back_rather_than_rendering_nothing(self):
+        embed = build_device_embed(
+            DEVICES_BY_KEY["psvita"], DOMAIN, "ana", DownloadAuth.DISABLED,
+            hosted=frozenset(),
+        )
+        self.assertTrue(embed.fields)
 
 
 class EmbedTests(unittest.TestCase):
     def test_a_single_client_device_gets_one_client_field(self):
         embed = build_device_embed(
-            DEVICES_BY_KEY["switch"], DOMAIN, "ana", DownloadAuth.DISABLED
+            DEVICES_BY_KEY["switch"], DOMAIN, "ana", DownloadAuth.DISABLED, hosted=ALL
         )
         names = [f.name for f in embed.fields]
         self.assertEqual(sum("Tinfoil" in n for n in names), 1)
 
     def test_vita_shows_both_pkgj_and_pkgi(self):
         embed = build_device_embed(
-            DEVICES_BY_KEY["psvita"], DOMAIN, "ana", DownloadAuth.DISABLED
+            DEVICES_BY_KEY["psvita"], DOMAIN, "ana", DownloadAuth.DISABLED, hosted=ALL
         )
         text = embed_text(embed)
         self.assertIn("pkgj", text)
@@ -1304,7 +1683,7 @@ class EmbedTests(unittest.TestCase):
 
     def test_a_fields_client_shows_the_username_as_a_separate_line(self):
         embed = build_device_embed(
-            DEVICES_BY_KEY["switch"], DOMAIN, "ana", DownloadAuth.DISABLED
+            DEVICES_BY_KEY["switch"], DOMAIN, "ana", DownloadAuth.DISABLED, hosted=ALL
         )
         text = embed_text(embed)
         self.assertIn("ana", text)
@@ -1312,49 +1691,61 @@ class EmbedTests(unittest.TestCase):
 
     def test_a_fields_client_never_prints_a_credentialed_url(self):
         embed = build_device_embed(
-            DEVICES_BY_KEY["switch"], DOMAIN, "ana", DownloadAuth.DISABLED
+            DEVICES_BY_KEY["switch"], DOMAIN, "ana", DownloadAuth.DISABLED, hosted=ALL
         )
         self.assertNotIn("ana:", embed_text(embed))
 
     def test_an_unlinked_user_gets_a_placeholder_and_a_nudge(self):
         embed = build_device_embed(
-            DEVICES_BY_KEY["switch"], DOMAIN, None, DownloadAuth.DISABLED
+            DEVICES_BY_KEY["switch"], DOMAIN, None, DownloadAuth.DISABLED, hosted=ALL
         )
-        text = embed_text(embed)
-        self.assertIn(USERNAME_PLACEHOLDER, text)
+        self.assertIn(USERNAME_PLACEHOLDER, embed_text(embed))
 
-    def test_the_warning_appears_when_download_auth_is_on(self):
+    def test_the_warning_appears_for_a_switch_when_download_auth_is_on(self):
         embed = build_device_embed(
-            DEVICES_BY_KEY["switch"], DOMAIN, "ana", DownloadAuth.ENABLED
+            DEVICES_BY_KEY["switch"], DOMAIN, "ana", DownloadAuth.ENABLED, hosted=ALL
         )
         self.assertIn("DISABLE_DOWNLOAD_ENDPOINT_AUTH", embed_text(embed))
 
     def test_no_warning_clutter_when_download_auth_is_off(self):
         embed = build_device_embed(
-            DEVICES_BY_KEY["switch"], DOMAIN, "ana", DownloadAuth.DISABLED
+            DEVICES_BY_KEY["switch"], DOMAIN, "ana", DownloadAuth.DISABLED, hosted=ALL
+        )
+        self.assertNotIn("DISABLE_DOWNLOAD_ENDPOINT_AUTH", embed_text(embed))
+
+    def test_a_vita_embed_never_mentions_the_flag(self):
+        embed = build_device_embed(
+            DEVICES_BY_KEY["psvita"], DOMAIN, "ana", DownloadAuth.ENABLED, hosted=ALL
         )
         self.assertNotIn("DISABLE_DOWNLOAD_ENDPOINT_AUTH", embed_text(embed))
 
     def test_file_format_limits_are_stated(self):
         embed = build_device_embed(
-            DEVICES_BY_KEY["nds"], DOMAIN, "ana", DownloadAuth.DISABLED
+            DEVICES_BY_KEY["nds"], DOMAIN, "ana", DownloadAuth.DISABLED, hosted=ALL
         )
         self.assertIn(".nds", embed_text(embed))
 
     def test_client_caveats_reach_the_reader(self):
         embed = build_device_embed(
-            DEVICES_BY_KEY["nds"], DOMAIN, "ana", DownloadAuth.DISABLED
+            DEVICES_BY_KEY["nds"], DOMAIN, "ana", DownloadAuth.DISABLED, hosted=ALL
         )
         self.assertIn("WEP", embed_text(embed))
 
     def test_pkgi_extra_content_types_are_summarized_not_enumerated(self):
         embed = build_device_embed(
-            DEVICES_BY_KEY["psvita"], DOMAIN, "ana", DownloadAuth.DISABLED
+            DEVICES_BY_KEY["ps3"], DOMAIN, "ana", DownloadAuth.DISABLED, hosted=ALL
         )
         text = embed_text(embed)
-        self.assertIn("translation", text)
-        # Summarized as a template line, not eleven separate URLs.
-        self.assertLessEqual(text.count("/api/feeds/pkgi/psvita/"), 3)
+        self.assertIn("patch", text)
+        self.assertLessEqual(text.count("/api/feeds/pkgi/ps3/"), 3)
+
+    def test_the_extra_content_type_line_is_copy_pasteable(self):
+        # A bare "/api/feeds/pkgi/ps3/<type>" is not something a user can
+        # paste anywhere, so the template carries the domain too.
+        embed = build_device_embed(
+            DEVICES_BY_KEY["ps3"], DOMAIN, "ana", DownloadAuth.DISABLED, hosted=ALL
+        )
+        self.assertIn(f"{DOMAIN}/api/feeds/pkgi/ps3/<type>", embed_text(embed))
 
     def test_tinfoil_gets_its_connection_fields_not_just_a_url(self):
         """Tinfoil's dialog has no URL box.
@@ -1364,7 +1755,7 @@ class EmbedTests(unittest.TestCase):
         URL would make the replacement worse than the thing replaced.
         """
         embed = build_device_embed(
-            DEVICES_BY_KEY["switch"], DOMAIN, "ana", DownloadAuth.DISABLED
+            DEVICES_BY_KEY["switch"], DOMAIN, "ana", DownloadAuth.DISABLED, hosted=ALL
         )
         text = embed_text(embed)
         self.assertIn("**Protocol:** `https`", text)
@@ -1375,24 +1766,16 @@ class EmbedTests(unittest.TestCase):
     def test_a_non_default_port_survives_into_the_fields(self):
         embed = build_device_embed(
             DEVICES_BY_KEY["switch"], "http://192.168.1.5:8080", "ana",
-            DownloadAuth.DISABLED,
+            DownloadAuth.DISABLED, hosted=ALL,
         )
         text = embed_text(embed)
         self.assertIn("**Port:** `8080`", text)
         self.assertIn("**Protocol:** `http`", text)
 
-    def test_the_extra_content_type_line_is_copy_pasteable(self):
-        # A bare "/api/feeds/pkgi/psvita/<type>" is not something a user can
-        # paste anywhere, so the template carries the domain too.
-        embed = build_device_embed(
-            DEVICES_BY_KEY["psvita"], DOMAIN, "ana", DownloadAuth.DISABLED
-        )
-        self.assertIn(f"{DOMAIN}/api/feeds/pkgi/psvita/<type>", embed_text(embed))
-
     def test_a_supplied_title_overrides_the_device_name(self):
         embed = build_device_embed(
             DEVICES_BY_KEY["switch"], DOMAIN, "ana", DownloadAuth.DISABLED,
-            title="Nintendo Switch <:switch:1>",
+            hosted=ALL, title="Nintendo Switch <:switch:1>",
         )
         self.assertIn("<:switch:1>", embed.title)
 
@@ -1401,12 +1784,16 @@ class EmbedTests(unittest.TestCase):
             for verdict in DownloadAuth:
                 for username in ("ana", None):
                     with self.subTest(device=key, verdict=verdict, user=username):
-                        embed = build_device_embed(device, DOMAIN, username, verdict)
+                        embed = build_device_embed(
+                            device, DOMAIN, username, verdict, hosted=ALL
+                        )
                         self.assertTrue(embed.fields)
 
     def test_no_field_exceeds_discord_s_value_limit(self):
         for key, device in DEVICES_BY_KEY.items():
-            embed = build_device_embed(device, DOMAIN, "ana", DownloadAuth.ENABLED)
+            embed = build_device_embed(
+                device, DOMAIN, "ana", DownloadAuth.ENABLED, hosted=ALL
+            )
             for field in embed.fields:
                 with self.subTest(device=key, field=field.name):
                     self.assertLessEqual(len(field.value), 1024)
@@ -1423,30 +1810,34 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'cogs.feeds.embeds'`
 """Rendering one device's feeds as a Discord embed.
 
 Pure: everything bot-dependent (the emoji-decorated title, the user's RomM
-username, the probe verdict) arrives as an argument, so the whole embed can
-be asserted against in a test with no bot and no network.
+username, the probe verdict, what the server hosts) arrives as an argument,
+so the whole embed can be asserted against with no bot and no network.
 """
 
-from typing import List, Optional
+from typing import FrozenSet, List, Optional
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import discord
 
 from .catalog import AuthStyle, Device, Feed
+from .urls import with_scheme
 from .verdict import DownloadAuth
 
 USERNAME_PLACEHOLDER = "<your-romm-username>"
 PASSWORD_PLACEHOLDER = "<your-password>"
 
 AUTH_WARNING = (
-    "⚠️ This server currently requires authentication to download files, so "
-    "feed clients will list games and then fail to install them. An admin "
-    "needs to set `DISABLE_DOWNLOAD_ENDPOINT_AUTH=true` on the RomM instance."
+    "⚠️ {clients} cannot authenticate downloads - it signs in to the feed, "
+    "then hands your console download links with no credentials on them. "
+    "This server currently requires authentication to download, so games "
+    "will list and then fail to install. An admin needs to set "
+    "`DISABLE_DOWNLOAD_ENDPOINT_AUTH=true` on the RomM instance."
 )
 
 AUTH_ADVISORY = (
-    "If downloads fail after the feed itself loads, the RomM instance needs "
-    "`DISABLE_DOWNLOAD_ENDPOINT_AUTH=true` set by an admin."
+    "{clients} cannot authenticate downloads. If games list but fail to "
+    "install, the RomM instance needs `DISABLE_DOWNLOAD_ENDPOINT_AUTH=true` "
+    "set by an admin."
 )
 
 LINK_NUDGE = (
@@ -1455,31 +1846,17 @@ LINK_NUDGE = (
 )
 
 
-def _with_scheme(domain: str) -> str:
-    """A base URL with a scheme, whatever DOMAIN was configured as.
-
-    The switch_shop_info command this replaces rendered DOMAIN as a bare
-    **Host:** field, so deployments configured it without a scheme. Left
-    alone, urlsplit puts a scheme-less domain entirely in `path` and the
-    host vanishes from the URL we build.
-    """
-    base = (domain or "").strip().rstrip("/")
-    if base and "://" not in base:
-        base = f"https://{base}"
-    return base
-
-
 def feed_url(domain: str, feed: Feed, username: Optional[str]) -> str:
     """The URL to show for one feed.
 
     Credentials go in the URL only for clients that have nowhere else to put
-    them - pkgj, whose config.txt is a list of bare URLs. A real username is
-    percent-encoded because it is free text out of the database, and an
-    unencoded "@" in it would silently repoint the URL at another host. The
-    placeholder is left legible on purpose: encoding it would hand an
-    unlinked user "%3Cyour-romm-username%3E" to puzzle over.
+    them - pkgj and pkgi, which read URLs out of a config file and have no
+    password box. A real username is percent-encoded because it is free text
+    out of the database, and an unencoded "@" in it would silently repoint
+    the URL at another host. The placeholder is left legible on purpose:
+    encoding it would hand an unlinked user "%3Cyour-romm-username%3E".
     """
-    base = _with_scheme(domain)
+    base = with_scheme(domain)
     if feed.client.auth_style is not AuthStyle.URL_EMBEDDED:
         return f"{base}{feed.path}"
 
@@ -1489,12 +1866,37 @@ def feed_url(domain: str, feed: Feed, username: Optional[str]) -> str:
     return urlunsplit((scheme, f"{userinfo}@{netloc}", path + feed.path, query, fragment))
 
 
-def download_auth_notice(verdict: DownloadAuth) -> Optional[str]:
-    """What to tell the reader about the download endpoint, if anything."""
+def feed_config_line(domain: str, feed: Feed, username: Optional[str]) -> str:
+    """One line of the client's config file, ready to paste.
+
+    pkgj's config.txt is key-value lines, so a bare URL in it is inert - the
+    key in front of it is what tells pkgj which list the URL feeds.
+    """
+    url = feed_url(domain, feed, username)
+    return f"{feed.config_key} {url}" if feed.config_key else url
+
+
+def download_auth_notice(verdict: DownloadAuth, device: Device) -> Optional[str]:
+    """What to tell the reader about the download endpoint, if anything.
+
+    Only for clients that genuinely need the flag. pkgj, pkgi, fpkgi and
+    Kekatsu all send basic auth on the download request as well as the feed
+    fetch, so telling their users to get the server's download auth turned
+    off would be asking for a weakened server to fix a problem they do not
+    have. Tinfoil is the one that cannot.
+    """
+    affected = [
+        feed.client for feed in device.feeds
+        if feed.client.needs_download_auth_disabled
+    ]
+    if not affected:
+        return None
+
+    names = " and ".join(dict.fromkeys(client.display_name for client in affected))
     if verdict is DownloadAuth.ENABLED:
-        return AUTH_WARNING
+        return AUTH_WARNING.format(clients=names)
     if verdict is DownloadAuth.UNKNOWN:
-        return AUTH_ADVISORY
+        return AUTH_ADVISORY.format(clients=names)
     return None
 
 
@@ -1525,11 +1927,10 @@ def _connection_fields(url: str) -> List[str]:
     ]
 
 
-def _client_field_value(device: Device, client_key: str, domain: str, username: Optional[str]) -> str:
+def _client_field_value(feeds: List[Feed], domain: str, username: Optional[str]) -> str:
     """Everything the reader needs for one client, as one field body."""
-    feeds = [feed for feed in device.feeds if feed.client.key == client_key]
     client = feeds[0].client
-    base = _with_scheme(domain)
+    base = with_scheme(domain)
     lines: List[str] = []
 
     for feed in feeds:
@@ -1538,7 +1939,7 @@ def _client_field_value(device: Device, client_key: str, domain: str, username: 
         if client.split_url_into_fields:
             lines.extend(_connection_fields(url))
         else:
-            lines.append(f"`{url}`")
+            lines.append(f"`{feed_config_line(domain, feed, username)}`")
         if feed.extra_content_types:
             types = ", ".join(f"`{t}`" for t in feed.extra_content_types)
             stem = f"{base}{feed.path.rsplit('/', 1)[0]}"
@@ -1563,9 +1964,21 @@ def build_device_embed(
     domain: str,
     username: Optional[str],
     verdict: DownloadAuth,
+    hosted: Optional[FrozenSet[str]] = None,
     title: Optional[str] = None,
 ) -> discord.Embed:
-    """One embed covering every feed client that serves `device`."""
+    """One embed covering every feed client that serves `device`.
+
+    `hosted` is the set of ContentPlatform keys this server holds. Feeds for
+    content the server does not have are dropped: a Vita owner whose library
+    is all PSP should not be handed three dead Vita URLs. Passing None keeps
+    every feed, which is the right fallback when availability is unknown.
+    """
+    feeds = [
+        feed for feed in device.feeds
+        if hosted is None or feed.content in hosted
+    ] or list(device.feeds)
+
     embed = discord.Embed(
         title=f"{title or device.display_name} — Download Feeds",
         description=(
@@ -1576,23 +1989,23 @@ def build_device_embed(
     )
 
     # dict.fromkeys keeps catalog order while collapsing duplicates, so a
-    # device with four feeds across two clients still gets two fields.
-    for client_key in dict.fromkeys(feed.client.key for feed in device.feeds):
-        client = next(f.client for f in device.feeds if f.client.key == client_key)
+    # device with seven feeds across two clients still gets two fields.
+    for client_key in dict.fromkeys(feed.client.key for feed in feeds):
+        for_client = [feed for feed in feeds if feed.client.key == client_key]
         embed.add_field(
-            name=f"{client.display_name} — setup",
-            value=_client_field_value(device, client_key, domain, username),
+            name=f"{for_client[0].client.display_name} — setup",
+            value=_client_field_value(for_client, domain, username),
             inline=False,
         )
 
-    notice = download_auth_notice(verdict)
+    notice = download_auth_notice(verdict, device)
     if notice:
         embed.add_field(name="Before you start", value=notice, inline=False)
 
     if not username:
         embed.add_field(name="Not linked yet", value=LINK_NUDGE, inline=False)
 
-    docs = {feed.client.docs_url for feed in device.feeds}
+    docs = {feed.client.docs_url for feed in feeds}
     embed.set_footer(text=f"RomM feed documentation: {sorted(docs)[0]}")
     return embed
 ```
@@ -1643,7 +2056,7 @@ from typing import Optional
 import discord
 from discord.ext import commands
 
-from .availability import available_devices
+from .availability import available_devices, hosted_content_keys
 from .catalog import DEVICES_BY_KEY
 from .embeds import build_device_embed
 from .probe import DownloadAuth, detect_download_auth
@@ -1694,9 +2107,13 @@ class Feeds(commands.Cog):
             logger.error(f"Download-auth probe failed: {e}", exc_info=True)
             self.download_auth = DownloadAuth.UNKNOWN
 
+    def cached_platforms(self):
+        """The platforms payload bot.py refreshes every SYNC_RATE."""
+        return self.bot.cache.get("platforms")
+
     def offered_devices(self):
-        """Devices this server hosts, from the platforms cache bot.py fills."""
-        return available_devices(self.bot.cache.get("platforms"))
+        """Hardware worth offering, given what this server holds ROMs for."""
+        return available_devices(self.cached_platforms())
 
     async def romm_username(self, discord_id: int) -> Optional[str]:
         try:
@@ -1787,6 +2204,7 @@ class Feeds(commands.Cog):
                 self.bot.config.DOMAIN,
                 await self.romm_username(ctx.author.id),
                 self.download_auth,
+                hosted=hosted_content_keys(self.cached_platforms()),
                 title=self.device_title(match),
             )
             await ctx.respond(embed=embed, ephemeral=True)
@@ -1986,8 +2404,14 @@ class AutocompleteTests(unittest.IsolatedAsyncioTestCase):
         options = await cog.device_autocomplete(SimpleNamespace(value="5"))
         self.assertEqual(options, ["PlayStation 5"])
 
+    async def test_a_psp_only_library_still_offers_the_vita(self):
+        # The hardware-versus-content split, reaching the user-visible end.
+        cog = make_cog([platform("PlayStation Portable")])
+        options = await cog.device_autocomplete(SimpleNamespace(value=""))
+        self.assertIn("PlayStation Vita", options)
+
     async def test_discord_s_twenty_five_option_cap_is_respected(self):
-        cog = make_cog(None)  # None means "could not tell" - offers all eight
+        cog = make_cog(None)  # None means "could not tell" - offers everything
         options = await cog.device_autocomplete(SimpleNamespace(value=""))
         self.assertLessEqual(len(options), 25)
 

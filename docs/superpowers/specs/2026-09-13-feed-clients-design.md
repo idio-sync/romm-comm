@@ -28,8 +28,10 @@ The existing command is also **factually wrong today**: it advertises the path `
 
 The bot stores `romm_username` but deliberately **no password** ([database_manager.py:569](../../../database_manager.py#L569)), so it can never mint a fully-credentialed URL. The rule adopted is: *credentials go in the URL only when the client has nowhere else to put them.*
 
-- **`AuthStyle.FIELDS`** — Tinfoil, pkgi, fpkgi, Kekatsu. These have discrete username/password fields in their own config UI. Emit a **bare URL** plus separate `Username:` (pre-filled from the user's link) and `Password: your RomM password` lines. No secret appears in the message.
-- **`AuthStyle.URL_EMBEDDED`** — pkgj only. `/pkgj/config.txt` accepts a bare URL line and nothing else, so the URL must read `https://{username}:<your-password>@{domain}/api/feeds/pkgj/psvita/games`, with the password left as a literal placeholder the user substitutes.
+- **`AuthStyle.FIELDS`** — Tinfoil, fpkgi, Kekatsu. These have discrete username/password fields in their own config UI. Emit a **bare URL** plus separate `Username:` (pre-filled from the user's link) and `Password: your RomM password` lines. No secret appears in the message.
+- **`AuthStyle.URL_EMBEDDED`** — pkgj **and pkgi**. Both read URLs out of a config file and have no password box at all, so the URL must read `https://{username}:<your-password>@{domain}/api/feeds/pkgj/psvita/games`, with the password left as a literal placeholder the user substitutes.
+
+**Config-file clients need a key, not just a URL.** pkgj's `config.txt` is key-value lines — a URL with nothing in front of it is inert. Each pkgj `Feed` therefore carries its documented `config_key`: `url_games`, `url_dlcs`, `url_psp_games`, `url_psp_dlcs`, `url_psx_games`. pkgi is the awkward case: every fork keeps its config somewhere different and names its keys differently, so pkgi feeds carry **no** key and the client's caveat sends the user to their fork's README instead of guessing.
 
 **The username must be percent-encoded.** `romm_username` is a free-text `TEXT NOT NULL` column, and this is the one place in the design where user-controlled text lands in a security-relevant URL position: a username containing `@` silently repoints the URL at a different host, and `:`, `/`, `#`, `?` break it in other ways. Encode with `urllib.parse.quote(username, safe='')` — the repo has the idiom next door at [`encode_rom_download_filename`](../../../cogs/search.py#L33) — and test a username containing `@`.
 
@@ -38,6 +40,8 @@ This is encoded as a field on `FeedClient` so `embeds.py` branches in one place,
 ## RomM feed surface (from RomM's feed-clients documentation)
 
 All feeds require basic auth. `DISABLE_DOWNLOAD_ENDPOINT_AUTH=true` opens **only** the per-file download endpoint (`GET /api/roms/{id}/content/…`) — it does **not** make the feed routes unauthenticated. Both facts matter and are frequently conflated.
+
+**And the flag is a Tinfoil-only requirement.** Tinfoil authenticates the feed fetch but hands the console download URLs it never attaches credentials to. pkgj, pkgi, fpkgi and Kekatsu all send basic auth on *both* requests, so they need no such flag. A blanket warning would be telling four-fifths of users to have their admin open up a server to fix a problem they do not have, so `needs_download_auth_disabled` is a per-client field and the probe's verdict is rendered only for devices with a client that has it set.
 
 | Client | Hardware | Path | Files |
 |---|---|---|---|
@@ -51,18 +55,25 @@ pkgi content types: PS3 and PSP accept `game, dlc, demo, update, patch`; Vita ad
 
 pkgj is not uniform across its three platforms: Vita and PSP expose both `games` and `dlc`, PSX exposes `games` only. The catalog encodes this per device rather than by templating a shared pair of paths.
 
-**Device → client fan-out** (eight devices):
+### Hardware is not content
 
-| Device | Clients |
-|---|---|
-| `switch` | Tinfoil |
-| `psvita` | pkgj **and** pkgi |
-| `psp` | pkgj **and** pkgi |
-| `psx` | pkgj |
-| `ps3` | pkgi |
-| `ps4` | fpkgi |
-| `ps5` | fpkgi |
-| `nds` | Kekatsu |
+A client runs on one piece of hardware and can serve several platforms' content. pkgj is the case that forces the distinction: it runs **only** on a Vita, and its feeds carry Vita, PSP *and* PSX games. So the catalog has two types — `ContentPlatform` (what the server hosts) and `Device` (what the user owns and runs a client on) — and each `Feed` names the content it carries.
+
+Two consequences. **PSX is content, never a device**: no homebrew installer runs on an original PlayStation, and offering one would invite a user to set up hardware that cannot run any of this. And **a device is offered when the server hosts content for any feed it can use** — a Vita is worth offering to someone whose library is all PSP, which is precisely what pkgj exists for. Matching a device by its own name would have hidden it.
+
+The embed then drops feeds whose content the server lacks, so that Vita owner gets PSP URLs rather than three dead Vita ones.
+
+**Device → client fan-out** (seven devices):
+
+| Device (hardware) | Clients | Content served |
+|---|---|---|
+| `switch` | Tinfoil | switch |
+| `psvita` | pkgj **and** pkgi | psvita, psp, psx |
+| `psp` | pkgi | psp |
+| `ps3` | pkgi | ps3 |
+| `ps4` | fpkgi | ps4 |
+| `ps5` | fpkgi | ps5 |
+| `nds` | Kekatsu | nds |
 
 **Client caveats that must appear in the embed** (each is a known support-thread cause):
 
@@ -82,7 +93,7 @@ No I/O, no `discord` imports. Frozen dataclasses:
 
 - `FeedClient` — key, display name, `auth_style`, accepted file formats, caveat strings, docs URL.
 - `Feed` — owning client, **concrete** URL path, label (`"Games"`, `"DLC"`), and `extra_content_types: tuple[str, ...]`.
-- `Device` — key, display name, the RomM slugs/names identifying it, and its tuple of feeds.
+- `Device` — key, display name, and its tuple of feeds. Hardware only; the names that identify a platform live on `ContentPlatform`, and `Device.content_keys` derives what a device can carry from its feeds.
 
 **Content types resolve here, not in `embeds.py`.** pkgi accepts 5 content types on PS3/PSP and 11 on Vita; enumerating all of them as `Feed` entries would swamp the embed, and storing a template string would make the "every path starts `/api/feeds/`" integrity test vacuous. So: `Feed` stays concrete and is enumerated only for `game` and `dlc`, and the remaining types ride on `extra_content_types`, which `embeds.py` renders as a single template line. The catalog therefore owns the decision about what is shown in full versus summarized, and `embeds.py` owns no filtering rule.
 
