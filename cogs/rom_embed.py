@@ -7,7 +7,7 @@ they can be tested without a Discord view or a RomM server.
 
 import logging
 from collections import defaultdict
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 logger = logging.getLogger(__name__)
@@ -94,14 +94,15 @@ def format_release_date(release_date) -> Optional[str]:
     """Render an IGDB release timestamp, in seconds or milliseconds.
 
     IGDB is inconsistent about the unit, so anything implausibly far in the
-    future is treated as milliseconds. Returns None if it cannot be read.
+    future is treated as milliseconds. Read as UTC, since IGDB stores a
+    release date as midnight UTC. Returns None if it cannot be read.
     """
     if not release_date:
         return None
     try:
         if release_date > MAX_PLAUSIBLE_TIMESTAMP:
             release_date = release_date / 1000
-        return datetime.fromtimestamp(int(release_date)).strftime('%b %d, %Y')
+        return datetime.fromtimestamp(int(release_date), tz=UTC).strftime('%b %d, %Y')
     except (ValueError, TypeError, OSError, OverflowError) as e:
         logger.error(f"Error formatting date: {e}")
         logger.error(f"Raw release_date value: {release_date}")

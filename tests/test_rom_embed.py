@@ -7,7 +7,6 @@ two different sort orders - and had no coverage at all.
 """
 
 import unittest
-from datetime import datetime
 
 from cogs.rom_embed import (
     MAX_FILE_LISTING_CHARS,
@@ -76,10 +75,10 @@ class SubfolderTests(unittest.TestCase):
 
 class ReleaseDateTests(unittest.TestCase):
     def test_a_timestamp_in_seconds(self):
-        # Rendered in local time, so derive the expectation the same way
-        # rather than hard-coding a date that only holds in one timezone.
-        expected = datetime.fromtimestamp(GOLDENEYE_RELEASE).strftime("%b %d, %Y")
-        self.assertEqual(expected, format_release_date(GOLDENEYE_RELEASE))
+        # IGDB stores a release date as UTC midnight, so the same date has to
+        # come out on every host. Deriving the expectation with the same call
+        # the code under test uses would assert nothing.
+        self.assertEqual("Aug 25, 1997", format_release_date(GOLDENEYE_RELEASE))
 
     def test_a_timestamp_in_milliseconds_means_the_same_day(self):
         """IGDB is inconsistent about the unit; both must land on one date."""

@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Dict, List, Optional
 
 import aiohttp
@@ -420,7 +420,7 @@ class IGDBClient:
                 release_date = "Unknown"
                 if "first_release_date" in game:
                     release_date = datetime.fromtimestamp(
-                        game["first_release_date"]
+                        game["first_release_date"], tz=UTC
                     ).strftime("%Y-%m-%d")
 
                 # Process cover URL if present

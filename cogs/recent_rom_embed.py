@@ -13,7 +13,7 @@ similar and are not interchangeable.
 
 import logging
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Callable, Dict, Optional
 from urllib.parse import quote
 
@@ -56,6 +56,9 @@ def truncate_summary(summary: str) -> str:
 def format_release_date(metadatum: Optional[Dict]) -> str:
     """RomM's IGDB release timestamp as a date, or "Unknown".
 
+    Read as UTC: IGDB stores a release date as midnight UTC, so a naive
+    fromtimestamp renders the previous day for any host west of UTC.
+
     Only ValueError and TypeError are caught, which is what the original did:
     a timestamp far enough out of range to raise OverflowError or OSError is
     a broken payload and should not be swallowed.
@@ -68,7 +71,7 @@ def format_release_date(metadatum: Optional[Dict]) -> str:
     try:
         if release_date > MAX_PLAUSIBLE_TIMESTAMP:
             release_date = release_date / 1000
-        return datetime.fromtimestamp(int(release_date)).strftime("%B %d, %Y")
+        return datetime.fromtimestamp(int(release_date), tz=UTC).strftime("%B %d, %Y")
     except (ValueError, TypeError) as e:
         logger.debug(f"Error formatting release date: {e}")
         return UNKNOWN

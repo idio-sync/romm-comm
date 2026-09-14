@@ -20,7 +20,8 @@ from cogs.recent_rom_embed import (
     truncate_summary,
 )
 
-# 1995-03-09, the date the differential harness pinned this timestamp to.
+# 1995-03-10T00:00:00Z. IGDB stores a release date as UTC midnight, so the
+# rendered date must be the UTC one on every host, not the local reading.
 RELEASE_TS = 794793600
 
 
@@ -55,12 +56,12 @@ class SummaryTests(unittest.TestCase):
 
 class ReleaseDateTests(unittest.TestCase):
     def test_a_second_timestamp_becomes_a_date(self):
-        self.assertEqual(format_release_date({'first_release_date': RELEASE_TS}), "March 09, 1995")
+        self.assertEqual(format_release_date({'first_release_date': RELEASE_TS}), "March 10, 1995")
 
     def test_a_millisecond_timestamp_is_scaled_down(self):
         # RomM passes IGDB's value through, which is sometimes in milliseconds.
         self.assertEqual(
-            format_release_date({'first_release_date': RELEASE_TS * 1000}), "March 09, 1995"
+            format_release_date({'first_release_date': RELEASE_TS * 1000}), "March 10, 1995"
         )
 
     def test_missing_metadata_is_unknown(self):
