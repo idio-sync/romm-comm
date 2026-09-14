@@ -59,6 +59,12 @@ known-first-party = ["cogs", "integrations", "admin_checks", "bot", "database_ma
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The suite imports first-party modules (cogs, integrations, bot, romm_client,
+# database_manager) from the repo root. `python -m pytest` puts the cwd on
+# sys.path and so hides this, but the `pytest` console script CI runs does not,
+# and pytest itself only adds each test file's own directory. Without this the
+# whole suite fails collection on CI with ModuleNotFoundError.
+pythonpath = ["."]
 addopts = "-q"
 filterwarnings = [
     # py-cord imports audioop, removed in 3.13; nothing we can do from here.
