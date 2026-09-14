@@ -183,7 +183,7 @@ async def phase_wait_for_approval(session, base_url, init_body, pair_origin, tim
     section('1b. device/token polling until approved (or denied / expired)')
 
     url = f"{pair_origin}{init_body['verification_path_complete']}"
-    print(f'  Approve (or deny) this request in a browser:')
+    print('  Approve (or deny) this request in a browser:')
     print()
     print(f'      {url}')
     print()
