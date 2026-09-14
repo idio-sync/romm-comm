@@ -34,3 +34,6 @@ Thumbs.db
 .claude/settings.local.json
 .claude/worktrees/
 .superpowers/
+
+# Isolated worktrees for feature work
+.worktrees/

@@ -50,7 +50,7 @@ Disclaimer: This was primarily created using Claude Code after my project scope 
 - **Emojis**: Uploads custom console emojis on install; uses emojis in responses and stats. Nitro-aware to expand/revert the emoji set.
 - **QR code generation**: Generate QR codes for 3DS/Vita [FBI Reloaded](https://github.com/TheRealZora/FBI-Reloaded)/[VitaShell](https://github.com/RealYoti/VitaShell) installs by reacting to /search replies with QR emoji (requires download endpoint auth to be disabled on the RomM instance).
 - **RomM user management**: Auto-create RomM accounts for Discord users via role assignment; manage Romm > Discord user linking via gui in Discord.
-- **Switch Shop info**: Command to display instructions for connecting to a [Tinfoil](https://tinfoil.io/Download) endpoint (download endpoint auth must be disabled).
+- **Feed clients**: `/feeds` gives per-console setup instructions for RomM's five URL feeds — [Tinfoil](https://tinfoil.io/Download) (Switch), pkgj and pkgi (Vita/PSP/PSX/PS3), fpkgi (PS4/PS5), and Kekatsu (DS). Only consoles this server actually hosts are offered. To tell you in advance whether downloads will work, the bot probes its own download endpoint once it connects (an authenticated call to pick a ROM, then one unauthenticated request against it) and again at most once per `SYNC_RATE` after that, warning you if the RomM instance still has download-endpoint auth enabled.
 - **Rate-limited Discord interactions**: Built-in rate limiting to avoid overloading the Discord API.
 
 ### Planned
@@ -180,6 +180,7 @@ NETPLAY_ENABLED=true
 - `/scan [option]` — Run or check scans (admin only): `full`, `platform`, `stop`, `status`, `unidentified`, `hashes`, `new_platforms`, `partial`, `summary`.
 - `/platforms` — Display all available platforms with their ROM counts.
 - `/netplay [platform] [game]` — Announce a netplay session for a game in your library. The bot posts an embed with a join link and keeps it updated as players join and leave, then marks it ended when the session finishes.
+- `/feeds [device]` — Setup instructions for connecting a console to this server: feed URL, your RomM username, client-specific steps, and the file formats that console can actually install. Replaces the old `/switch_shop_info`, which covered Switch only. Responses are private to you.
 - `/igdb [option]` — View list of games from IGDB: `upcoming`, `recent`, `popular`, or `exclusive`, generally or by platform with option to request.
 - `/user_manager` — Manage Romm and Discord users (linking, new account prompting, etc.) (admin only).
 - `/refresh_recent_metadata` — Refresh recently added game notifiction metadata/covers (admin only).
