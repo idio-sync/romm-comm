@@ -1,6 +1,6 @@
 import asyncio
 import unittest
-from datetime import datetime
+from datetime import UTC, datetime
 
 from cogs.recent_roms import RecentRomsMonitor
 
@@ -20,7 +20,9 @@ class FakeChannel:
 
 class FakeBot:
     def __init__(self, channel):
-        self.scan_state = {"notification_cutoff_time": datetime(2025, 1, 1)}
+        # Aware, because that is what the cog stores: the cutoff is derived
+        # from the clock at scan start and compared against RomM's created_at.
+        self.scan_state = {"notification_cutoff_time": datetime(2025, 1, 1, tzinfo=UTC)}
         self.scan_state_lock = asyncio.Lock()
         self.channel = channel
         self.dispatched = []
@@ -97,6 +99,54 @@ class RecentRomsPostingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(["fetch", "enrich", "embed", "send", "mark", "update"], events)
         self.assertIn("Posted 1 new ROM(s)", "\n".join(logs.output))
+
+
+class CutoffFilterTests(unittest.IsolatedAsyncioTestCase):
+    """The scan cutoff decides which ROMs get announced.
+
+    The comparison sits inside a broad `except Exception` that includes the ROM
+    on error, so a TypeError from mixing naive and aware datetimes would not
+    raise - it would silently re-announce the whole library. These pin both
+    sides of the cutoff so that failure mode is visible.
+    """
+
+    async def test_a_rom_created_before_the_cutoff_is_not_announced(self):
+        events = []
+        roms = [{"id": 3, "name": "Old Game", "created_at": "2024-06-01T00:00:00Z"}]
+        monitor = build_monitor(events, roms)
+        monitor.create_single_rom_embed = None  # must never be reached
+
+        with self.assertLogs("cogs.recent_roms", level="INFO") as logs:
+            await monitor.process_scan_batch([{"id": 3}])
+
+        self.assertEqual(["fetch"], events)
+        self.assertIn("No new ROMs to post after filtering", "\n".join(logs.output))
+
+    async def test_a_rom_created_after_the_cutoff_is_announced(self):
+        events = []
+        roms = [{"id": 4, "name": "New Game", "created_at": "2025-06-01T00:00:00Z"}]
+        monitor = build_monitor(events, roms)
+
+        async def create_single_rom_embed(rom):
+            events.append("embed")
+            return object(), None
+
+        monitor.create_single_rom_embed = create_single_rom_embed
+
+        await monitor.process_scan_batch([{"id": 4}])
+
+        self.assertEqual(["fetch", "enrich", "embed", "send", "mark", "update"], events)
+
+    async def test_a_naive_created_at_is_still_read_as_utc(self):
+        """RomM has been seen to send created_at with no offset."""
+        events = []
+        roms = [{"id": 5, "name": "Old Game", "created_at": "2024-06-01T00:00:00"}]
+        monitor = build_monitor(events, roms)
+        monitor.create_single_rom_embed = None  # must never be reached
+
+        await monitor.process_scan_batch([{"id": 5}])
+
+        self.assertEqual(["fetch"], events)
 
 
 class RecentRomsListenerTests(unittest.IsolatedAsyncioTestCase):

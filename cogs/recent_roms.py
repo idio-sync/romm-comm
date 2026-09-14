@@ -65,7 +65,7 @@ class RecentRomsMonitor(commands.Cog):
         # Track processed ROMs to prevent duplicates
         self.currently_processing: Set[int] = set()
         self.recently_processed: Set[int] = set()
-        self.last_cleanup: datetime = datetime.utcnow()
+        self.last_cleanup: datetime = datetime.now(UTC)
         
         # IGDB client
         self.igdb = None
@@ -122,7 +122,7 @@ class RecentRomsMonitor(commands.Cog):
             async with self.bot.scan_state_lock:
                 if self.bot.scan_state['is_scanning'] and not self.bot.scan_state.get('notification_cutoff_time'):
                     # Store cutoff with 10-second buffer to handle clock skew
-                    self.bot.scan_state['notification_cutoff_time'] = datetime.utcnow() - timedelta(seconds=10)
+                    self.bot.scan_state['notification_cutoff_time'] = datetime.now(UTC) - timedelta(seconds=10)
                     logger.info(f"Set notification cutoff time: {self.bot.scan_state['notification_cutoff_time']}")
 
             # API sends 'id' and 'name', not 'rom_id' and 'rom_name'
@@ -292,7 +292,7 @@ class RecentRomsMonitor(commands.Cog):
             
             # Clear platform cache if old
             if self.platform_cache_time:
-                age = datetime.utcnow() - self.platform_cache_time
+                age = datetime.now(UTC) - self.platform_cache_time
                 if age > self.platform_cache_ttl:
                     self.platform_cache = None
                     self.platform_cache_time = None
@@ -385,7 +385,7 @@ class RecentRomsMonitor(commands.Cog):
     async def get_platform_data(self) -> Optional[Dict]:
         """Get cached platform data or fetch if needed"""
         if self.platform_cache and self.platform_cache_time:
-            age = datetime.utcnow() - self.platform_cache_time
+            age = datetime.now(UTC) - self.platform_cache_time
             if age < self.platform_cache_ttl:
                 return self.platform_cache
         
@@ -393,7 +393,7 @@ class RecentRomsMonitor(commands.Cog):
         platforms = await self.bot.fetch_api_endpoint('platforms')
         if platforms:
             self.platform_cache = {p['id']: p for p in platforms}
-            self.platform_cache_time = datetime.utcnow()
+            self.platform_cache_time = datetime.now(UTC)
             return self.platform_cache
         
         return None
@@ -514,14 +514,16 @@ class RecentRomsMonitor(commands.Cog):
                     # Parse ISO format datetime
                     created_at = parse_datetime(created_at_str)
                     
-                    # Ensure timezone-aware (convert to UTC if needed)
+                    # Ensure timezone-aware (convert to UTC if needed). The
+                    # cutoff is aware too, so both sides of the comparison
+                    # below are UTC. Do not strip tzinfo to match a naive
+                    # cutoff: the TypeError that mismatch raises is caught by
+                    # the handler below, which includes the ROM, so the filter
+                    # would quietly stop filtering.
                     if created_at.tzinfo is None:
                         created_at = created_at.replace(tzinfo=UTC)
                     else:
                         created_at = created_at.astimezone(UTC)
-                    
-                    # Remove timezone info for comparison (both should be UTC now)
-                    created_at = created_at.replace(tzinfo=None)
                     
                     # Filter: only include ROMs created during or after the scan
                     if cutoff_time and created_at < cutoff_time:
