@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import discord
 
-from cogs.netplay.cog import Netplay
+from cogs.netplay.cog import Netplay, NetplayJoinView
 from cogs.netplay.embeds import render_key
 from cogs.netplay.watcher import NetplayState
 
@@ -89,9 +89,11 @@ class RegisterWatcherTests(unittest.TestCase):
 class FakeMessage:
     def __init__(self):
         self.edits = 0
+        self.last_edit = None
 
     async def edit(self, **kwargs):
         self.edits += 1
+        self.last_edit = kwargs
 
 
 class FlakyMessage(FakeMessage):
@@ -367,6 +369,117 @@ class TickTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(polled, [first.rom_id, second.rom_id])
         self.assertIs(second.state, NetplayState.LIVE)
+
+
+
+
+class FakeInteraction:
+    """Only what the Join callback touches."""
+
+    def __init__(self, user_id):
+        self.user = SimpleNamespace(id=user_id)
+        self.sent = []
+
+        async def send_message(content=None, **kwargs):
+            self.sent.append((content, kwargs))
+
+        self.response = SimpleNamespace(send_message=send_message)
+
+
+class JoinButtonTests(unittest.IsolatedAsyncioTestCase):
+    """The roster RomM cannot give us, gathered from Discord instead."""
+
+    def _cog_and_watcher(self):
+        cog = make_cog()
+        cog.bot.config.DOMAIN = "https://roms.example.com"
+        watcher = register(cog)
+        watcher.message_id = 1
+        message = FakeMessage()
+        cog.bot.get_channel = lambda cid: FakeChannel(message)
+        return cog, watcher, message
+
+    async def test_pressing_join_records_the_presser(self):
+        cog, watcher, _ = self._cog_and_watcher()
+        view = NetplayJoinView(cog, watcher.rom_id)
+
+        await view.on_join(FakeInteraction(4242))
+
+        self.assertEqual(watcher.roster, [4242])
+
+    async def test_the_presser_gets_the_link_privately(self):
+        cog, watcher, _ = self._cog_and_watcher()
+        view = NetplayJoinView(cog, watcher.rom_id)
+        interaction = FakeInteraction(4242)
+
+        await view.on_join(interaction)
+
+        content, kwargs = interaction.sent[0]
+        self.assertIn(f"/rom/{watcher.rom_id}/ejs", content)
+        self.assertTrue(kwargs.get("ephemeral"))
+
+    async def test_pressing_twice_does_not_duplicate(self):
+        cog, watcher, _ = self._cog_and_watcher()
+        view = NetplayJoinView(cog, watcher.rom_id)
+
+        await view.on_join(FakeInteraction(4242))
+        await view.on_join(FakeInteraction(4242))
+
+        self.assertEqual(watcher.roster, [4242])
+
+    async def test_the_roster_keeps_press_order(self):
+        cog, watcher, _ = self._cog_and_watcher()
+        view = NetplayJoinView(cog, watcher.rom_id)
+
+        await view.on_join(FakeInteraction(11))
+        await view.on_join(FakeInteraction(22))
+
+        self.assertEqual(watcher.roster, [11, 22])
+
+    async def test_pressing_refreshes_the_post_immediately(self):
+        """Waiting up to a poll interval to see your own name is poor."""
+        cog, watcher, message = self._cog_and_watcher()
+        view = NetplayJoinView(cog, watcher.rom_id)
+
+        await view.on_join(FakeInteraction(4242))
+
+        self.assertEqual(message.edits, 1)
+
+    async def test_the_edit_path_keeps_the_button(self):
+        """Editing without view= is how a Join button silently disappears."""
+        cog = make_polling_cog([ROOM])
+        watcher = register(cog)
+        watcher.message_id = 1
+
+        await cog.tick(now=1000.0)
+
+        self.assertIsInstance(cog._message.last_edit.get("view"), NetplayJoinView)
+
+    async def test_a_finished_session_drops_the_button(self):
+        """Nothing left to join, so the control should not linger."""
+        cog = make_polling_cog([ROOM, {}])
+        watcher = register(cog)
+        watcher.message_id = 1
+
+        await cog.tick(now=1000.0)
+        await cog.tick(now=1020.0)
+
+        self.assertIs(watcher.state, NetplayState.ENDED)
+        # The key must be PRESENT and None. Asserting only on .get() would
+        # pass just as happily against an edit that omits view= entirely,
+        # which is the bug the sibling test above exists to catch.
+        self.assertIn("view", cog._message.last_edit)
+        self.assertIsNone(cog._message.last_edit["view"])
+
+    async def test_a_press_on_a_finished_session_still_answers(self):
+        """The watcher is gone, but the button lingers on the old post."""
+        cog, watcher, _ = self._cog_and_watcher()
+        view = NetplayJoinView(cog, watcher.rom_id)
+        cog.watchers.clear()
+        interaction = FakeInteraction(4242)
+
+        await view.on_join(interaction)
+
+        self.assertTrue(interaction.sent)
 
 
 if __name__ == "__main__":

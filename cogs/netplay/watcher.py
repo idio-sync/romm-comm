@@ -13,7 +13,7 @@ persist.
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 DEFAULT_PENDING_TIMEOUT = 900.0
 DEFAULT_STALE_AFTER = 3
@@ -55,6 +55,17 @@ class NetplayWatcher:
     state: NetplayState = NetplayState.PENDING
     rooms: Dict[str, Any] = field(default_factory=dict)
     consecutive_failures: int = 0
+    # Discord user ids of everyone who pressed Join, in press order. RomM
+    # cannot tell us who is actually in the room - /netplay/list returns the
+    # owner and a count, and the socket event carrying the roster is scoped to
+    # the room, so subscribing would mean calling join-room and occupying one
+    # of max_players. This is the Discord-side answer, and Discord
+    # authenticates it, which player_name is not.
+    roster: List[int] = field(default_factory=list)
+    # When the first room appeared, and when the last one closed. Kept apart
+    # from created_at so "ran for" measures the session rather than the wait.
+    live_since: Optional[float] = None
+    ended_at: Optional[float] = None
     # Set once polls have failed enough times that what we are showing can no
     # longer be trusted. Not a state: the session is probably still running,
     # we just cannot see it, and saying "ended" would be a claim we cannot
@@ -100,6 +111,8 @@ def advance(
 
     if rooms:
         changed = watcher.state is not NetplayState.LIVE or watcher.rooms != rooms
+        if watcher.live_since is None:
+            watcher.live_since = now
         watcher.state = NetplayState.LIVE
         watcher.rooms = rooms
         return changed or recovered
@@ -146,6 +159,7 @@ def _handle_empty(watcher: NetplayWatcher, now: float, pending_timeout: float) -
     """No rooms open: either the session finished, or it never started."""
     if watcher.state is NetplayState.LIVE:
         watcher.state = NetplayState.ENDED
+        watcher.ended_at = now
         return True
 
     if now - watcher.created_at >= pending_timeout:

@@ -31,6 +31,58 @@ UNSET_DOMAIN = "No website configured"
 ROM_SEARCH_LIMIT = 100
 
 
+class NetplayJoinView(discord.ui.View):
+    """The Join button, and the roster it builds.
+
+    A link button would be one click instead of two, but Discord fires no
+    interaction for one - so the bot would never learn who joined. That
+    matters here because RomM cannot tell us either: /netplay/list returns the
+    owner and a count, and the socket event carrying the real roster is scoped
+    to the room, so subscribing would mean calling join-room and occupying one
+    of max_players. A press is the only signal available, and unlike
+    player_name it is one Discord has authenticated.
+
+    timeout=None so the button outlives a long session. It still stops working
+    when the bot restarts, which matches the watchers themselves.
+    """
+
+    def __init__(self, cog, rom_id: int):
+        super().__init__(timeout=None)
+        self.cog = cog
+        self.rom_id = rom_id
+
+    @discord.ui.button(label="Join", style=discord.ButtonStyle.primary, emoji="🎮")
+    async def join(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await self.on_join(interaction)
+
+    async def on_join(self, interaction: discord.Interaction) -> None:
+        """Record the presser, hand them the link, and refresh the post.
+
+        Split out from the decorated callback so it can be exercised without a
+        gateway. Answering comes first and unconditionally: the button lingers
+        on a post whose watcher is long gone, and an interaction that goes
+        unanswered shows the user an error.
+        """
+        link = f"{self.cog.bot.config.DOMAIN}/rom/{self.rom_id}/ejs"
+        await interaction.response.send_message(
+            f"Opening **{link}** — pick the room from the netplay menu once it loads.",
+            ephemeral=True,
+        )
+
+        watcher = self.cog.watchers.get(self.rom_id)
+        if watcher is None or watcher.is_terminal:
+            return
+
+        if interaction.user.id in watcher.roster:
+            return
+
+        # A list, not a set: the order people arrived in is worth keeping, and
+        # a set would render the roster in an arbitrary order that reshuffles
+        # between renders and spends an edit each time.
+        watcher.roster.append(interaction.user.id)
+        await self.cog.refresh_message(watcher)
+
+
 class Netplay(commands.Cog):
     """Announce netplay sessions and keep the announcements current."""
 
@@ -384,7 +436,9 @@ class Netplay(commands.Cog):
         # .send is the plain Messageable send. It returns a WebhookMessage
         # here, so .id is available.
         try:
-            message = await ctx.respond(embed=embed)
+            message = await ctx.respond(
+                embed=embed, view=NetplayJoinView(self, watcher.rom_id)
+            )
         except discord.HTTPException as e:
             # Release the slot. Leaving a watcher with no message behind would
             # hold a capacity slot and block this ROM forever, polling to
@@ -492,7 +546,13 @@ class Netplay(commands.Cog):
 
         try:
             message = await channel.fetch_message(watcher.message_id)
-            await message.edit(embed=self.render(watcher))
+            # view= is not optional on the edit path. Omitting it leaves the
+            # components untouched on some routes and strips them on others,
+            # and a Join button that vanishes on the first seat change is
+            # worse than never having had one. Terminal states drop it on
+            # purpose - there is nothing left to join.
+            view = None if watcher.is_terminal else NetplayJoinView(self, watcher.rom_id)
+            await message.edit(embed=self.render(watcher), view=view)
             watcher.last_render_key = key
             return True
         except discord.NotFound:
