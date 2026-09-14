@@ -1196,15 +1196,23 @@ class UserManager(commands.Cog):
             f"using main channel_id: {self.log_channel_id}"
         )
 
-    async def cog_load(self):
-        """Initialize when cog is loaded"""
-       
+        bot.loop.create_task(self._startup())
+
+    async def _startup(self):
+        """Initialize the database and start background work.
+
+        Kicked from __init__ rather than a lifecycle hook, because neither of
+        the obvious ones works here. py-cord's Cog has no cog_load - that is
+        discord.py, and this was an `async def cog_load` for a long time, which
+        meant none of this ran and invite reconciliation never happened. An
+        on_ready listener is no better: bot.py calls load_all_cogs() from
+        inside on_ready, and Client.dispatch snapshots its listener list before
+        invoking it, so a cog added during that dispatch never sees the event.
+        """
         if not self.db_manager._initialized:
             logger.warning("Database not initialized, attempting initialization...")
             await self.db_manager.initialize()
-        
-        # await self.store_discord_info_for_existing_links()
-        
+
         self.invite_reconcile_loop.start()
 
         logger.debug("User Manager cog loaded successfully")

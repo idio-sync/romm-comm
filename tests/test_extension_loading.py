@@ -49,7 +49,9 @@ def fake_bot(loop):
     """
     bot = discord.Bot(intents=discord.Intents.default())
     bot.loop = loop
-    bot.db = object()
+    # Stands in for MasterDatabase. `_initialized` is the one attribute a cog
+    # reads at startup - user_manager falls back to initialize() without it.
+    bot.db = SimpleNamespace(_initialized=True)
     bot.config = SimpleNamespace(
         REQUESTS_ENABLED=True,
         # Absent credentials are a supported configuration: the cog is
@@ -63,6 +65,11 @@ def fake_bot(loop):
         NETPLAY_PENDING_TIMEOUT=900,
         NETPLAY_MAX_WATCHERS=25,
         DOMAIN="https://roms.example.com",
+        # user_manager's setup() gates on this, and its __init__ reads the
+        # other two.
+        ENABLE_USER_MANAGER=True,
+        AUTO_REGISTER_ROLE_ID=None,
+        CHANNEL_ID=None,
     )
 
     async def fetch_api_endpoint(*args, **kwargs):
@@ -169,3 +176,33 @@ class NetplayExtensionTests(unittest.IsolatedAsyncioTestCase):
         bot = await self.load()
 
         self.assertFalse(bot.get_cog("Netplay").poll_sessions.is_running())
+
+
+class UserManagerExtensionTests(unittest.IsolatedAsyncioTestCase):
+    async def load(self):
+        bot = fake_bot(asyncio.get_running_loop())
+        bot.load_extension("cogs.user_manager")
+        # Startup is spawned as a task; let it run so a failure inside it
+        # surfaces here rather than as an unretrieved exception at teardown.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        return bot
+
+    async def test_the_extension_loads_and_registers_the_cog(self):
+        bot = await self.load()
+
+        self.assertIsNotNone(bot.get_cog("UserManager"))
+
+    async def test_loading_starts_the_invite_reconcile_loop(self):
+        """py-cord has no cog_load hook, so startup must be kicked elsewhere.
+
+        This is the regression guard for a real bug: the loop was started from
+        an `async def cog_load`, which py-cord never calls (only cog_unload
+        exists — cog_load is discord.py). Invite reconciliation therefore never
+        ran. An on_ready listener would not have rescued it either, because
+        bot.py calls load_all_cogs() from inside on_ready and dispatch
+        snapshots its listener list before running it.
+        """
+        bot = await self.load()
+
+        self.assertTrue(bot.get_cog("UserManager").invite_reconcile_loop.is_running())

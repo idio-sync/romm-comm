@@ -303,3 +303,36 @@ class Caller:
         members = class_members(classes["Thing"])
         undefined = sorted(attr for cog, attr in uses if attr not in members)
         self.assertEqual(undefined, ["also_missing", "missing"])
+
+
+class NoDeadLifecycleHooksTests(unittest.TestCase):
+    """`cog_load` is discord.py's hook. py-cord's Cog has only `cog_unload`.
+
+    A cog that defines `cog_load` gets no error and no warning - the method is
+    simply never called, and whatever it set up silently never happens. That is
+    not hypothetical: user_manager started its invite reconciliation loop from
+    one, so reconciliation never ran at all until it was moved.
+
+    An `on_ready` listener is not the fix either, and this does not check for
+    that because on_ready has legitimate uses. Note only that bot.py calls
+    load_all_cogs() from inside on_ready, and Client.dispatch snapshots its
+    listener list before invoking it, so a cog added during that dispatch never
+    receives the event it was just registered for. Startup work belongs in
+    __init__, spawned as a task.
+    """
+
+    def test_no_cog_defines_cog_load(self):
+        offenders = []
+        for path in SOURCE_FILES:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                is_def = isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                if is_def and node.name == "cog_load":
+                    offenders.append(f"{path.relative_to(ROOT)}:{node.lineno}")
+
+        self.assertEqual(
+            offenders,
+            [],
+            "cog_load is never called by py-cord; move the work to __init__ "
+            "and spawn it with bot.loop.create_task",
+        )
