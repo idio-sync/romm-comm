@@ -273,14 +273,33 @@ class TickTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cog.watchers, {})
 
     async def test_a_forbidden_edit_does_not_drop_a_replacement_watcher(self):
-        cog = make_polling_cog([ROOM], message=ForbiddenMessage())
-        watcher = register(cog)
-        watcher.message_id = 1
-        replacement = register(cog)
+        """The replacement must land DURING the tick, not before it.
 
+        Registering it up front would evict the original from the registry by
+        key, leaving the tick's snapshot holding only the replacement - whose
+        message_id is None, so refresh_message returns before the Forbidden
+        handler ever runs. The test would then pass without exercising the
+        identity check it exists to protect.
+        """
+        cog = make_polling_cog([ROOM], message=ForbiddenMessage())
+        old = register(cog)
+        old.message_id = 1
+
+        original = cog.bot.romm.list_netplay_rooms
+        replacement = None
+
+        async def replace_then_poll(rom_id):
+            nonlocal replacement
+            result = await original(rom_id)
+            replacement = register(cog)
+            cog.watchers[50265] = replacement
+            return result
+
+        cog.bot.romm.list_netplay_rooms = replace_then_poll
         await cog.tick(now=1000.0)
 
         self.assertIs(cog.watchers.get(50265), replacement)
+        self.assertIsNot(cog.watchers.get(50265), old)
 
     async def test_cleanup_does_not_delete_a_replacement_watcher(self):
         """A new /netplay for the same ROM can land during the awaits."""
