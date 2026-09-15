@@ -241,6 +241,7 @@ All read in `bot.py`'s `Config`, per house style. No `os.getenv` outside it.
 | `ROMM_TOKEN_KEY` | — | Base64 32-byte key. Fallback. |
 | `ROMM_PAIR_BASE_URL` | see below | Origin the relative `verification_path` is joined to. |
 | `ROMM_PAIR_ROLE_ID` | `AUTO_REGISTER_ROLE_ID` | Gates who may run `/pair`. With both unset, any guild member may pair — the rate limits, not the role, are what stop abuse. |
+| `ROMM_PAIR_MAX_AGE_DAYS` | `90` | Bot-side credential lifetime, because RomM's default is no expiry at all. `0` disables it. |
 
 **`ROMM_PAIR_BASE_URL` precedence, stated precisely, because the obvious spelling is broken.** `bot.py:309` reads:
 
@@ -331,6 +332,12 @@ Every one of those writes carries `AND generation = ?` against the value read wh
 
 That last distinction matters more than it looks: marking every token dead during a RomM restart would be the worst bug this loop could have. The existing `RommApiError` / `RommAuthError` split already encodes it.
 
+**Bot-side maximum age, because the server-side default is "never".** Verified on 2026-09-14: an ordinary approval returns `expires_at: null`. The lifetime is the approver's to choose and `init` cannot request one, so the realistic outcome is that most paired credentials never expire on their own and the warning ladder below never fires for them. A custodian holding non-expiring credentials for every paired user, indefinitely, is not what "security over convenience" chose.
+
+So the bot imposes its own bound: `ROMM_PAIR_MAX_AGE_DAYS` (default 90). A grant whose `created_at` is older is treated as expired — `get_grant` returns `None`, the revalidation loop marks it and DMs a re-pair prompt, and the row is revoked and deleted like any other. This is entirely bot-side, needs no cooperation from RomM, and turns an unbounded custody window into a renewable one. Setting it to 0 disables the bound for operators who would rather not re-pair.
+
+The warning ladder applies to whichever bound comes first, the server's `expires_at` or the bot's max age.
+
 Expiry warnings are DM'd once at 7 days and once at 1 day. `expiry_warned_at` records when the last warning was sent, and a threshold fires only when it is crossed *and* `expiry_warned_at` predates that crossing — so a restart mid-window does not re-send, and the 1-day warning still fires after the 7-day one. Non-expiring tokens are revalidated but never warned.
 
 ### Departure and role loss
@@ -379,6 +386,7 @@ New tests, `tests/`, pytest:
   - a second `/pair` supersedes the first, and the loser's completion does not overwrite the winner;
   - an `invalid_since` write for generation *n* affects zero rows once a re-pair has stored generation *n+1*, and sends no DM;
   - `last_verified_at`, `last_used_at` and `expiry_warned_at` carry the same guard.
+- **`test_romm_tokens_expiry.py`** — a grant with `expires_at` null is still refused once `created_at` is older than `ROMM_PAIR_MAX_AGE_DAYS`, and accepted before that; `0` disables the bound; the warning ladder fires against whichever bound comes first; comparisons use an aware "now", so a naive datetime raises rather than silently comparing wrong.
 - **`test_romm_client_identity.py`** — bot-path headers are byte-identical to today (regression); the acting path uses the grant's token; **a 401 on the acting path raises rather than refreshing, and leaves the bot's `access_token` untouched** (this is the `romm_client.py:358` trap); `ActingClient` exposes no cache-backed method and the acting path writes nothing to `APICache`.
 - **`test_romm_tokens_secrecy.py`** — no token material in any emitted log record (assert over `caplog` across a full pair-and-use cycle); `repr(grant)` does not contain the token.
 - **`test_streaming_auth_outcome.py`** — a `RommAuthError` raised inside `_send` surfaces as `ClaimOutcome.DENIED`, not `ERROR`; the same failure invalidates the stored credential exactly once. This is a regression test for `integrations/romm_streaming.py:175`'s catch-all, which would otherwise swallow it into status `0`.
@@ -399,7 +407,28 @@ This has two ends, not one: `cogs/search.py:795` does `embed.set_image(url="atta
 
 All five are undeclared in the OpenAPI spec, so they cannot be settled by reading it.
 
-These are run **before** the implementation plan is written, not during implementation. Items 1 and 2 can each change the plan's shape rather than one of its steps.
+**Status after the 2026-09-14 probe run** (`tools/verify_romm_device_auth.py --cleanup`, bishop.lan, RomM 5.2):
+
+| # | Question | Result |
+|---|----------|--------|
+| 1 | `device/token` responses | **Partly answered.** Pending and approved confirmed; denied and expired still to capture. |
+| 2 | Can `token_id` be recovered? | **Passes.** 1 token, 1 matching `device_id`, `name` as sent. No fallback needed. |
+| 3 | Does the session list identify the holder? | **Blocked** — streaming is disabled on this instance. |
+| 4 | Does the approve screen render `name`? | **Passes.** Device name and both requested scopes shown. |
+| 5 | URL of a user's own token list | Open. Copy only. |
+| 6 | `expires_at` format | **Answered, and it changed the design** — see below. |
+| 7 | Can an admin token release another user's session? | **Blocked** — streaming is disabled on this instance. |
+| 8 | Does re-pairing accumulate tokens? | Open. Needs a second approval with the same `--device-id`. |
+
+Three results worth stating plainly:
+
+- **Revocation works end to end.** `DELETE /api/client-tokens/{id}/admin` returned 200 using the bot's own credential — the exact call `/unpair` and `on_member_remove` make. The revocation design is confirmed rather than assumed.
+- **Scope minimization holds.** RomM granted `['me.read', 'roms.user.write']` and nothing more; it does not over-grant beyond what `init` requested. The token carries the `rmm_` prefix, confirming empirically that the device grant mints an ordinary client token.
+- **`expires_at` came back `null`, and timestamps are timezone-aware.** `created_at` is ISO 8601 with an explicit `+00:00`, so `dateutil` parses it aware and comparisons must use an aware "now". The null expiry is the finding that added `ROMM_PAIR_MAX_AGE_DAYS`. One caution for the expiry arithmetic: the observed `created_at` was ~1 day ahead of the client's own clock, so **compare server timestamps against each other, and treat any threshold as approximate** — a naive local-clock comparison could fire or suppress a warning by a day.
+
+**Verifications 3 and 7 are blocked, and that matters for sequencing.** `GET /streaming/config` reports `enabled: false` with zero containers, so the streaming surface cannot be exercised on this instance at all. This does not block the credential-custody work — nothing in the plan below depends on it — but the streaming queue cog cannot be developed or tested here until emulator containers are configured. Worth knowing before that cog is planned rather than after.
+
+The remaining items are refinements, not shape changes. They are run **before** the implementation plan is written.
 
 1. **What `POST /api/auth/device/token` returns while pending, on denial, and after expiry.** The spec declares only 201/200 and 422. This is the polling loop's entire control flow.
 
@@ -418,7 +447,9 @@ These are run **before** the implementation plan is written, not during implemen
 7. **Whether a token holding `roms.user.write` can release a session it does not own.** The force-reclaim paths assume an admin token overrides ownership, but `roms.user.write` is not an admin-override scope and nothing in the OpenAPI document establishes this. If it cannot, force-reclaim needs a different mechanism and the residual-risk paragraph needs revising.
 8. **Whether re-pairing with a stable `client_device_identifier` reuses the device row, and whether it replaces or accumulates client tokens.** Determines whether step 6's `created_at` tiebreak is sufficient or whether stale tokens pile up per user.
 
-**Fallback if verification 2 fails.** `POST /api/client-tokens/exchange` returns `ClientTokenCreateSchema`, which carries both `raw_token` *and* `id` — the `token_id` the device grant never returns. That is the one genuine advantage of the `pair`/`exchange` path this design set aside, and it is the reason revocation currently depends on a lookup that might not resolve. The device grant is still the right primary choice, because it is the only one the bot can initiate and it keeps the user starting in Discord. But if `GET /api/client-tokens` will not yield a usable `token_id`, the answer is to offer `pair`/`exchange` as a second enrollment path — the user creates the token in RomM, pastes the code into `/pair code:<...>` — rather than shipping a design whose `/unpair` cannot revoke.
+**Fallback if verification 2 fails — not needed.** Verification 2 passed on 2026-09-14, so enrollment stays as designed and the paragraph below is kept only as the recorded contingency should another RomM version behave differently.
+
+ `POST /api/client-tokens/exchange` returns `ClientTokenCreateSchema`, which carries both `raw_token` *and* `id` — the `token_id` the device grant never returns. That is the one genuine advantage of the `pair`/`exchange` path this design set aside, and it is the reason revocation currently depends on a lookup that might not resolve. The device grant is still the right primary choice, because it is the only one the bot can initiate and it keeps the user starting in Discord. But if `GET /api/client-tokens` will not yield a usable `token_id`, the answer is to offer `pair`/`exchange` as a second enrollment path — the user creates the token in RomM, pastes the code into `/pair code:<...>` — rather than shipping a design whose `/unpair` cannot revoke.
 
 ## Out of scope
 
