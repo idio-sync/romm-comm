@@ -167,7 +167,10 @@ NETPLAY_ENABLED=true
 - `RECENT_ROMS_*` — Controls for recent-ROM posting (enabled, channel id, thresholds).
 - `GGREQUESTZ_ENABLED` — Enable GGrrequestz for request managmenet (default: false).
 - `GGREQUESTZ_URL` — Base URL for your GGRequestz instance (use `http://ip:port` or a domain).
-- `GGREQUESTZ_API_KEY`  — Your GGRequestz API key (properly scoped).
+- `GGREQUESTZ_API_KEY`  — Your GGRequestz API key. GGRequestz enforces key scopes
+  per route and denies anything unscoped, so the key needs `requests:read`,
+  `requests:write` and `games:read`. A key missing one gets a 403 naming it; the
+  bot logs that at first use, not at startup.
 
 ---
 

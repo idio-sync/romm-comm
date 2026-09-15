@@ -16,6 +16,46 @@ logger = logging.getLogger(__name__)
 GGR_REQUEST_PAGE_SIZE = 100
 GGR_REQUEST_MAX_PAGES = 20
 
+# ggrequestz enforces API key scopes per route (src/lib/apiScopes.js), and
+# resolution is default-deny: a key without the scope gets a 403 naming what it
+# lacks, not a 401. These are the scopes this integration's calls need.
+GGR_REQUIRED_SCOPES = (
+    'requests:read',   # GET /api/request -- status sync
+    'requests:write',  # POST /api/request -- mirroring a Discord request
+    'games:read',      # GET /api/games/{id}, GET /api/search -- game_data cache
+)
+
+def _failure_from_response(status: int, body_text: str) -> Dict[str, Any]:
+    """A failed call's result, keeping whatever ggrequestz said about it.
+
+    ggrequestz explains its own refusals: a 409 from POST /api/request carries
+    the reason and the `existing_request_id` of the request already open for
+    that game, and a 403 names the scope the API key lacks. Reporting only
+    "HTTP 409" threw all of that away and left the log saying no more than that
+    something went wrong.
+    """
+    failure: Dict[str, Any] = {
+        "success": False,
+        "error": f"HTTP {status}",
+        "status": status,
+    }
+    try:
+        body = json.loads(body_text)
+    except (json.JSONDecodeError, ValueError):
+        return failure
+
+    if not isinstance(body, dict):
+        return failure
+
+    if body.get('error'):
+        failure["error"] = body['error']
+    if body.get('existing_request_id') is not None:
+        failure["existing_request_id"] = body['existing_request_id']
+    if body.get('required_scope'):
+        failure["required_scope"] = body['required_scope']
+    return failure
+
+
 class GGRequestzIntegration(commands.Cog):
     """Integration with GGRequestz API using API key authentication"""
     
@@ -39,10 +79,6 @@ class GGRequestzIntegration(commands.Cog):
             'games': {'path': '/api/games', 'auth': 'bearer'},
             'request': {'path': '/api/request', 'auth': 'bearer'},
             'request_list': {'path': '/api/request', 'auth': 'bearer'},
-            'rescind': {'path': '/api/request/rescind', 'auth': 'bearer'},
-            'watchlist_add': {'path': '/api/watchlist/add', 'auth': 'bearer'},
-            'watchlist_remove': {'path': '/api/watchlist/remove', 'auth': 'bearer'}, 
-            'watchlist_status': {'path': '/api/watchlist/status', 'auth': 'bearer'},
         }
         
         # Validate config
@@ -84,7 +120,18 @@ class GGRequestzIntegration(commands.Cog):
         return self.session is not None and not self.session.closed
 
     async def setup(self):
-        """Initialize connection and validate API key"""
+        """Initialize the session and check the server is reachable.
+
+        This used to be described as validating the API key. It cannot: on
+        current ggrequestz /api/version is in publicApiRoutes, so it answers
+        200 before authentication is even attempted, and a revoked, expired or
+        mis-scoped key passes here just as well as a good one. What it does
+        establish is that the URL points at a ggrequestz that answers, which is
+        the other half of a misconfiguration and worth keeping.
+
+        A bad key surfaces at first use instead, as a 401, or as a 403 naming
+        the missing scope -- see GGR_REQUIRED_SCOPES.
+        """
         if not self.enabled:
             self._setup_complete.set()  # Signal completion even if disabled
             return
@@ -108,7 +155,7 @@ class GGRequestzIntegration(commands.Cog):
             timeout=aiohttp.ClientTimeout(total=30)
         )
         
-        # Test the API key with a simple request
+        # Reachability check; see the docstring for what it does not prove.
         try:
             url = self.get_endpoint_url('version')
             async with self.session.get(url, headers=self.get_auth_headers('version')) as response:
@@ -120,12 +167,12 @@ class GGRequestzIntegration(commands.Cog):
                         self.enabled = False
                         return
                     version = data.get('version', 'unknown')
-                    logger.info(f"✅ GGRequestz API key validated successfully (v{version})")
+                    logger.info(f"✅ GGRequestz reachable (v{version})")
                 else:
-                    logger.error(f"❌ API key validation failed: {response.status}")
+                    logger.error(f"❌ GGRequestz version check failed: {response.status}")
                     self.enabled = False
         except Exception as e:
-            logger.error(f"❌ API key validation error: {e}")
+            logger.error(f"❌ GGRequestz version check error: {e}")
             self.enabled = False
         finally:
             # Signal that setup is complete (whether successful or not)
@@ -156,8 +203,18 @@ class GGRequestzIntegration(commands.Cog):
                     except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
                         logger.error(f"Invalid JSON response for game details {igdb_id}: {e}")
                         return None
-                    if data.get('success'):
+                    # /api/games/{id} returns the game object itself -- `return
+                    # json(game)`, with no envelope. src/lib/openapi.json still
+                    # documents {"success": true, "game": {...}}, which is what
+                    # this used to read, so every lookup came back None and the
+                    # game_data cache below was silently never sent. Both
+                    # shapes are accepted because the spec and the route
+                    # disagree and only one of them is the server.
+                    if not isinstance(data, dict) or not data:
+                        return None
+                    if data.get('success') and 'game' in data:
                         return data.get('game')
+                    return data
                 return None
 
         except Exception as e:
@@ -368,7 +425,7 @@ class GGRequestzIntegration(commands.Cog):
                     logger.error(f"Request creation failed with status {response.status}")
                     logger.error(f"URL attempted: {url}")
                     logger.error(f"Response: {response_text[:500]}")
-                    return {"success": False, "error": f"HTTP {response.status}"}
+                    return _failure_from_response(response.status, response_text)
                     
         except Exception as e:
             logger.error(f"Error creating request: {e}", exc_info=True)
@@ -424,8 +481,11 @@ class GGRequestzIntegration(commands.Cog):
 
         Two details that make a naive version silently never match:
 
-        - the list returns `id` as a string, while ggr_request_id is stored
-          here as an integer, so the comparison is done on str() of both;
+        - the id's type is not guaranteed on either side: ggr_request_id is
+          whatever was stored when the request was created, and the list
+          serialises the column as ggrequestz's driver hands it over. A direct
+          == would silently never match on a mismatch, so both are compared as
+          str();
         - the list response carries no `admin_notes`. That field exists only
           on the admin update response, so a status synced back from
           ggrequestz arrives without the reason attached, and the caller's
@@ -461,123 +521,6 @@ class GGRequestzIntegration(commands.Cog):
         )
         return None
 
-    async def rescind_request(self, request_id: str) -> Dict[str, Any]:
-        """Rescind/cancel a request"""
-        if not await self.ensure_session():
-            return {"success": False, "error": "Integration not enabled or session not ready"}
-
-        try:
-            url = self.get_endpoint_url('rescind')
-            
-            request_data = {
-                "request_id": request_id  # Changed from requestId
-            }
-            
-            async with self.session.post(
-                url,
-                json=request_data,
-                headers=self.get_auth_headers('rescind')
-            ) as response:
-                response_text = await response.text()
-                
-                if response.status == 200:
-                    try:
-                        data = json.loads(response_text)
-                        if data.get('success'):
-                            logger.info(f"✅ Successfully rescinded request {request_id}")
-                            return {"success": True}
-                        else:
-                            return {"success": False, "error": data.get('error', 'Unknown error')}
-                    except (json.JSONDecodeError, ValueError):
-                        return {"success": False, "error": f"Invalid response: {response_text[:100]}"}
-                else:
-                    logger.error(f"Rescind failed: {response.status} - {response_text[:200]}")
-                    return {"success": False, "error": f"HTTP {response.status}"}
-                    
-        except Exception as e:
-            logger.error(f"Error rescinding request: {e}", exc_info=True)
-            return {"success": False, "error": str(e)}
-    
-    async def add_to_watchlist(self, igdb_id: str) -> Dict[str, Any]:
-        """Add a game to the user's watchlist"""
-        if not await self.ensure_session():
-            return {"success": False, "error": "Integration not enabled or session not ready"}
-
-        try:
-            url = self.get_endpoint_url('watchlist_add')
-
-            async with self.session.post(
-                url,
-                json={"igdb_id": igdb_id},  # Correct field name
-                headers=self.get_auth_headers('watchlist_add')
-            ) as response:
-                if response.status == 200:
-                    try:
-                        data = await response.json()
-                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
-                        logger.error(f"Invalid JSON response for add_to_watchlist: {e}")
-                        return {"success": False, "error": "Invalid JSON response"}
-                    return data
-                else:
-                    return {"success": False, "error": f"HTTP {response.status}"}
-
-        except Exception as e:
-            logger.error(f"Error adding to watchlist: {e}")
-            return {"success": False, "error": str(e)}
-    
-    async def remove_from_watchlist(self, igdb_id: str) -> Dict[str, Any]:
-        """Remove a game from the user's watchlist"""
-        if not await self.ensure_session():
-            return {"success": False, "error": "Integration not enabled or session not ready"}
-
-        try:
-            url = self.get_endpoint_url('watchlist_remove')
-
-            async with self.session.post(
-                url,
-                json={"igdb_id": igdb_id},
-                headers=self.get_auth_headers('watchlist_remove')
-            ) as response:
-                if response.status == 200:
-                    try:
-                        data = await response.json()
-                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
-                        logger.error(f"Invalid JSON response for remove_from_watchlist: {e}")
-                        return {"success": False, "error": "Invalid JSON response"}
-                    return data
-                else:
-                    return {"success": False, "error": f"HTTP {response.status}"}
-
-        except Exception as e:
-            logger.error(f"Error removing from watchlist: {e}")
-            return {"success": False, "error": str(e)}
-    
-    async def check_watchlist_status(self, igdb_id: str) -> bool:
-        """Check if a game is in the user's watchlist"""
-        if not await self.ensure_session():
-            return False
-
-        try:
-            # Include the ID in the path
-            url = f"{self.ggr_base_url}/api/watchlist/status/{igdb_id}"
-
-            async with self.session.get(
-                url,
-                headers=self.get_auth_headers('watchlist_status')
-            ) as response:
-                if response.status == 200:
-                    try:
-                        data = await response.json()
-                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
-                        logger.error(f"Invalid JSON response for check_watchlist_status: {e}")
-                        return False
-                    return data.get('isInWatchlist', False)  # Changed from inWatchlist
-                return False
-
-        except Exception as e:
-            logger.error(f"Error checking watchlist: {e}")
-            return False
-    
     async def cog_unload(self):
         """Cleanup session on cog unload"""
         if self.session and not self.session.closed:

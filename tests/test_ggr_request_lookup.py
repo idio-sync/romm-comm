@@ -2,8 +2,8 @@
 
 ggrequestz has no endpoint for a single request, so this pages the caller's own
 request list and matches on id. Two details decide whether it works at all: the
-list returns `id` as a string while ggr_request_id is stored here as an
-integer, and a short page is the last page.
+list's `id` and the stored ggr_request_id need not share a type, and a short
+page is the last page.
 """
 
 from unittest import IsolatedAsyncioTestCase
