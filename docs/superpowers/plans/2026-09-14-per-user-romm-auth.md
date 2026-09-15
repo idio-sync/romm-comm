@@ -63,6 +63,9 @@
 Add this class to `tests/test_bot_auth.py`:
 
 ```python
+VALID_KEY = base64.b64encode(b"K" * 32).decode()  # add `import base64` at the top
+
+
 class PairingConfigTests(unittest.TestCase):
     BASE = {
         "TOKEN": "discord-token",
@@ -86,14 +89,14 @@ class PairingConfigTests(unittest.TestCase):
     def test_sentinel_domain_never_becomes_the_pairing_origin(self):
         # DOMAIN defaults to 'No website configured'. Joining a relative
         # verification path to that ships users a broken link.
-        config = self._config(ROMM_USER_AUTH_ENABLED="true", ROMM_TOKEN_KEY="x" * 44)
+        config = self._config(ROMM_USER_AUTH_ENABLED="true", ROMM_TOKEN_KEY=VALID_KEY)
         self.assertEqual("https://romm.example", config.ROMM_PAIR_BASE_URL)
 
     def test_real_domain_is_preferred_over_the_api_url(self):
         config = self._config(
             DOMAIN="https://roms.example.com/",
             ROMM_USER_AUTH_ENABLED="true",
-            ROMM_TOKEN_KEY="x" * 44,
+            ROMM_TOKEN_KEY=VALID_KEY,
         )
         self.assertEqual("https://roms.example.com", config.ROMM_PAIR_BASE_URL)
 
@@ -102,7 +105,7 @@ class PairingConfigTests(unittest.TestCase):
             DOMAIN="https://roms.example.com",
             ROMM_PAIR_BASE_URL="https://pair.example.com",
             ROMM_USER_AUTH_ENABLED="true",
-            ROMM_TOKEN_KEY="x" * 44,
+            ROMM_TOKEN_KEY=VALID_KEY,
         )
         self.assertEqual("https://pair.example.com", config.ROMM_PAIR_BASE_URL)
 
@@ -856,7 +859,7 @@ and add to `REPOSITORIES`:
     Path("romm_tokens/repo.py"),
 ```
 
-Then add this test to the same file, alongside `test_the_scan_reaches_inside_the_requests_package`:
+Then add this test to the same file (the analogous rule for the requests package lives in `tests/test_import_boundaries.py`; this is its counterpart for the SQL scan):
 
 ```python
     def test_the_scan_reaches_the_token_package(self):
@@ -1209,7 +1212,7 @@ In `romm_client.py`, add this method to `RommClient` directly above `make_authen
 
 - [ ] **Step 5: Route the two straightforward header sites through it**
 
-In `make_authenticated_request`, replace these six lines:
+In `make_authenticated_request`, replace this block (`romm_client.py:323-329`):
 
 ```python
             if not await self.ensure_valid_token():
@@ -1727,12 +1730,13 @@ git commit -m "feat(pair): drive the device grant off the detail string, not the
 ## Task 7: `romm_tokens/store.py` — the only producer of a bearer token
 
 **Files:**
-- Modify: `romm_tokens/store.py` (the Task 3 placeholder), `romm_tokens/__init__.py`
+- Create: `romm_tokens/store.py`
+- Modify: `romm_tokens/__init__.py`
 - Test: `tests/test_romm_tokens_store.py`, `tests/test_romm_tokens_expiry.py`, `tests/test_romm_tokens_secrecy.py`
 
 **Interfaces:**
 - Consumes: Task 2 `crypto`, Task 3 `TokenRepo`, Task 4 `get_user_link_strict`, Task 5 `acting_as`, Task 6 `DeviceFlow`.
-- Produces: `Grant(discord_id, generation, romm_user_id, romm_username, scopes, expires_at, created_at, token)` with `token` at `repr=False`; `PairRefusal` enum (`SCOPE_SHORTFALL`, `IDENTITY_MISMATCH`, `LOOKUP_FAILED`, `ALREADY_PAIRED_ELSEWHERE`); `TokenStore(db, config, romm_client)` with `async get_grant(discord_id) -> Grant | None`, `async acting_client(discord_id) -> ActingClient | None`, `async complete_pair(discord_id, payload) -> tuple[Grant | None, PairRefusal | None]`, `async invalidate(grant)`, `async unpair(discord_id) -> bool`, `async revoke_token(token_id) -> bool`.
+- Produces: `Grant(discord_id, generation, romm_user_id, romm_username, scopes, expires_at, created_at, token)` with `token` at `repr=False`; `PairRefusal` enum (`SCOPE_SHORTFALL`, `IDENTITY_MISMATCH`, `LOOKUP_FAILED`, `ALREADY_PAIRED_ELSEWHERE`, `UNREADABLE`); `TokenStore(db, config, romm_client)` with `async get_grant(discord_id) -> Grant | None`, `async acting_client(discord_id) -> ActingClient | None`, `async complete_pair(discord_id, payload) -> tuple[Grant | None, PairRefusal | None]`, `async invalidate(grant)`, `async unpair(discord_id) -> bool`, `async revoke_token(token_id) -> bool`.
 
 - [ ] **Step 1: Write the failing store tests**
 
@@ -1775,20 +1779,35 @@ class _Config:
 
 
 class _FakeActing:
-    """Answers /users/me and /client-tokens the way RomM 5.2 does."""
+    """Answers /users/me and /client-tokens the way RomM 5.2 actually does.
 
-    def __init__(self, me=None, tokens=None):
+    The behaviour that matters: approving again does **not** replace the
+    previous client token, it adds a second one on the same device. That
+    was verified against a live instance, and it is the entire reason
+    complete_pair revokes what it supersedes. A fake that replaced instead
+    would make that test pass without exercising anything.
+    """
+
+    def __init__(self, me=None):
         self.me = me or {"id": 7, "username": "idiosync"}
-        self.tokens = tokens if tokens is not None else [
-            {"id": 3, "device_id": "dev-1", "name": "romm-comm probe",
-             "created_at": "2026-09-15T02:59:09+00:00"}
-        ]
+        self.tokens = []
+        self._next_id = 2
+
+    def _mint(self):
+        self.tokens.append({
+            "id": self._next_id,
+            "device_id": "dev-1",
+            "name": "romm-comm - probe - a7f3",
+            "created_at": f"2026-09-15T02:5{self._next_id}:00+00:00",
+        })
+        self._next_id += 1
 
     async def request(self, method, path, **kwargs):
         if path == "/api/users/me":
+            self._mint()  # an approval is what mints the token
             return 200, self.me
         if path == "/api/client-tokens":
-            return 200, self.tokens
+            return 200, list(self.tokens)
         raise AssertionError(f"unexpected path {path}")
 
 
@@ -1876,13 +1895,34 @@ class CompletePairTests(StoreTestCase):
 
     def test_re_pairing_revokes_the_token_it_supersedes(self):
         # Verified 2026-09-14: RomM does not replace the old token, it keeps
-        # both. Left alone, every re-pair strands a live credential.
+        # both. Left alone, every re-pair strands a live, fully scoped,
+        # never-expiring credential the bot has stopped tracking.
+        self.complete()                       # mints token id 2
+        self.romm.admin_deleted.clear()
+
+        self.complete()                       # mints token id 3
+
+        self.assertIn(("DELETE", "client-tokens/2/admin"), self.romm.admin_deleted)
+
+    def test_re_pairing_does_not_revoke_the_token_it_just_minted(self):
         self.complete()
         self.romm.admin_deleted.clear()
 
         self.complete()
 
-        self.assertIn(("DELETE", "client-tokens/3/admin"), self.romm.admin_deleted)
+        self.assertNotIn(("DELETE", "client-tokens/3/admin"), self.romm.admin_deleted)
+
+    def test_a_token_the_bot_did_not_mint_is_never_recorded(self):
+        # /unpair admin-deletes whatever token_id was recorded, so recording
+        # someone else's would revoke a credential that is not ours.
+        self.romm._acting.tokens.append(
+            {"id": 99, "device_id": "dev-1", "name": "someone's phone",
+             "created_at": "2099-01-01T00:00:00+00:00"}
+        )
+
+        self.complete()
+
+        self.assertNotEqual(99, asyncio.run(self.store.repo.audit_row(111))['token_id'])
 
 
 class GetGrantTests(StoreTestCase):
@@ -1976,6 +2016,11 @@ class AgeBoundTests(unittest.TestCase):
             created_at=days_ago(1), expires_at=days_ago(1), max_age_days=90
         ))
 
+    # Deliberate divergence from the spec, which said a naive datetime
+    # should raise. RomM sends aware ISO 8601 today, but the field is typed
+    # as a bare string, so a format change would turn a cosmetic difference
+    # into a crash inside the revalidation loop. Coercing to UTC is the
+    # safer reading of the same intent.
     def test_a_naive_timestamp_is_treated_as_utc_rather_than_crashing(self):
         naive = (datetime.now(timezone.utc) - timedelta(days=1)).replace(tzinfo=None).isoformat()
         self.assertFalse(is_past_bound(created_at=naive, expires_at=None, max_age_days=90))
@@ -2063,7 +2108,7 @@ Expected: collection errors — `ImportError: cannot import name 'TokenStore' fr
 
 - [ ] **Step 5: Write `romm_tokens/store.py`**
 
-Replace the placeholder file entirely:
+Create the file:
 
 ```python
 """Orchestration for per-user RomM credentials.
@@ -2088,13 +2133,16 @@ from typing import Any, Dict, Optional, Tuple
 from dateutil import parser as date_parser
 
 from romm_tokens.crypto import CredentialUnsealError, load_key, seal, unseal
-from romm_tokens.device_flow import REQUESTED_SCOPES
 from romm_tokens.repo import TokenRepo
 
 logger = logging.getLogger('romm_bot.tokens')
 
 # The scope without which a pairing cannot do the job it was created for.
 ESSENTIAL_SCOPE = "roms.user.write"
+
+# Every device name the bot composes starts with this. Revocation checks it
+# before deleting anything, so the bot only ever removes its own tokens.
+TOKEN_NAME_PREFIX = "romm-comm"
 
 
 class PairRefusal(Enum):
@@ -2343,7 +2391,15 @@ class TokenStore:
         if status != 200 or not isinstance(body, list):
             return None
 
-        matching = [t for t in body if t.get('device_id') == device_id]
+        # Both filters matter. device_id alone would match a token the user
+        # created themselves on the same device, and /unpair admin-deletes
+        # whatever id is recorded here - so a loose match revokes a
+        # credential the bot did not mint.
+        matching = [
+            t for t in body
+            if t.get('device_id') == device_id
+            and str(t.get('name') or '').startswith(TOKEN_NAME_PREFIX)
+        ]
         if not matching:
             logger.warning(f"No client token found for device {device_id}")
             return None
@@ -2524,7 +2580,9 @@ def generate_qr(url: str, filename: str = "qr.png") -> Optional[discord.File]:
             version=1,
             error_correction=qrcode.constants.ERROR_CORRECT_L,
             box_size=10,
-            border=4,
+            # 2, matching what search.py has always rendered. This is a
+            # lift, so the output should be byte-identical to before.
+            border=2,
         )
         code.add_data(url)
         code.make(fit=True)
@@ -2552,6 +2610,8 @@ In `cogs/search.py`, add `from qr import generate_qr` to the imports, then repla
         """
         return generate_qr(url, filename="download_qr.png")
 ```
+
+Also delete `import qrcode` from `cogs/search.py` line 11 — lines 389 and 391 were its only consumers, and ruff's `F401` is enforced at Task 12's lint gate.
 
 Leave `embed.set_image(url="attachment://download_qr.png")` at line ~795 alone — it matches the filename passed above. That pairing is the reason the filename is explicit here rather than defaulted.
 
@@ -2643,7 +2703,7 @@ from typing import Any, Dict, List, Optional
 import discord
 
 
-def pairing_started_embed(user_code: str, verification_url: str, confirm_code: str) -> discord.Embed:
+def pairing_started_embed(user_code: str, verification_url: str, device_name: str) -> discord.Embed:
     embed = discord.Embed(
         title="🔗 Link your RomM account",
         description=(
@@ -2655,8 +2715,11 @@ def pairing_started_embed(user_code: str, verification_url: str, confirm_code: s
     embed.add_field(
         name="Check before you approve",
         value=(
-            f"The request should be named `romm-comm · … · {confirm_code}`.\n"
-            "If it shows a different name, someone else started it — deny it."
+            # The whole name, verbatim, because RomM renders exactly this
+            # string. Telling people to look for a format that never appears
+            # teaches them to skip the check.
+            f"RomM should show this request as:\n`{device_name}`\n"
+            "If it shows anything else, someone else started it — deny it."
         ),
         inline=False,
     )
@@ -2745,7 +2808,7 @@ import asyncio
 import logging
 import re
 import secrets
-from typing import Dict, Optional
+from typing import Dict
 
 import discord
 from discord.ext import commands, tasks
@@ -2753,8 +2816,9 @@ from discord.ext import commands, tasks
 from admin_checks import is_admin
 from cogs.pair import embeds
 from qr import generate_qr
+from romm_client import RommAuthError
 from romm_tokens.device_flow import DeviceFlow, PairOutcome
-from romm_tokens.store import PairRefusal
+from romm_tokens.store import TOKEN_NAME_PREFIX, PairRefusal
 
 logger = logging.getLogger('romm_bot.pair')
 
@@ -2780,7 +2844,9 @@ def sanitize_device_name(display_name: str, discord_id: int) -> str:
     cleaned = re.sub(r'\s+', ' ', cleaned)[:80]
     who = cleaned or str(discord_id)
     confirm = secrets.token_hex(2)
-    return f"romm-comm - {who} - {confirm}"[:255]
+    # The prefix is shared with the store, which checks it before revoking
+    # anything: the bot must only ever delete tokens it minted.
+    return f"{TOKEN_NAME_PREFIX} - {who} - {confirm}"[:255]
 
 
 class PairCog(commands.Cog):
@@ -2792,13 +2858,20 @@ class PairCog(commands.Cog):
         self.enabled = bool(getattr(bot.config, 'ROMM_USER_AUTH_ENABLED', False))
         self.store = getattr(bot, 'romm_tokens', None)
 
+        # Set before the early return: cog_unload and the listeners run even
+        # when the feature is off, and an unload would otherwise raise.
+        # discord_id -> asyncio.Task. In memory only: these hold device codes.
+        self._in_flight: Dict[int, asyncio.Task] = {}
+        # discord_id -> a token identifying the current attempt. A second
+        # /pair replaces it, so a loser that is already past its cancellation
+        # point can still tell it has been superseded before it writes.
+        self._attempts: Dict[int, object] = {}
+
         if not self.enabled or self.store is None:
             logger.info("Per-user RomM authentication is disabled; /pair will refuse")
             return
 
         self.flow = DeviceFlow(bot.romm)
-        # discord_id -> asyncio.Task. In memory only: these hold device codes.
-        self._in_flight: Dict[int, asyncio.Task] = {}
         self.revalidate_loop.start()
 
     def cog_unload(self):
@@ -2826,7 +2899,11 @@ class PairCog(commands.Cog):
     # ------------------------------------------------------------ commands
 
     @discord.slash_command(name="pair", description="Link your RomM account to the bot")
-    async def pair(self, ctx: discord.ApplicationContext):
+    async def pair(
+        self,
+        ctx: discord.ApplicationContext,
+        renew: discord.Option(bool, "Replace an existing link", required=False) = False,
+    ):
         if await self._refuse_if_unavailable(ctx):
             return
         if not self._may_pair(ctx.author):
@@ -2838,18 +2915,32 @@ class PairCog(commands.Cog):
             return
 
         discord_id = ctx.author.id
+
+        # Never mint a second credential silently. Re-pairing is supported -
+        # it revokes what it replaces - but it is asked for explicitly.
+        existing = await self.store.repo.audit_row(discord_id)
+        if existing and not existing.get('invalid_since') and not renew:
+            await ctx.respond(
+                f"You are already linked to RomM account `{existing['romm_username']}` "
+                f"(since {existing['created_at']}). Run `/pair renew:True` to replace it, "
+                "or `/unpair` to remove it.",
+                ephemeral=True,
+            )
+            return
+
         self._cancel_in_flight(discord_id)
 
         display = sanitize_device_name(getattr(ctx.author, 'display_name', ''), discord_id)
-        confirm = display.rsplit('- ', 1)[-1]
 
-        request = await self.flow.init(f"romm-comm:{discord_id}", display)
+        request = await self.flow.init(f"{TOKEN_NAME_PREFIX}:{discord_id}", display)
         if request is None:
             await ctx.respond("RomM refused to start the link. Ask an admin to check the logs.",
                               ephemeral=True)
             return
 
-        embed = embeds.pairing_started_embed(request.user_code, request.verification_url, confirm)
+        # The embed shows the whole name, not a code fragment: what the user
+        # has to compare against is the exact string RomM will render.
+        embed = embeds.pairing_started_embed(request.user_code, request.verification_url, display)
         qr_file = generate_qr(request.verification_url, filename="pair_qr.png")
 
         try:
@@ -2862,16 +2953,19 @@ class PairCog(commands.Cog):
             message = None
             await ctx.respond(embed=embed, file=qr_file, ephemeral=True)
 
+        attempt = object()
+        self._attempts[discord_id] = attempt
         self._in_flight[discord_id] = asyncio.create_task(
-            self._await_approval(discord_id, request, message)
+            self._await_approval(discord_id, request, message, attempt)
         )
 
     def _cancel_in_flight(self, discord_id: int) -> None:
         task = self._in_flight.pop(discord_id, None)
+        self._attempts.pop(discord_id, None)
         if task is not None and not task.done():
             task.cancel()
 
-    async def _await_approval(self, discord_id, request, message) -> None:
+    async def _await_approval(self, discord_id, request, message, attempt) -> None:
         """Poll to a conclusion, then re-check everything the gate checked."""
         try:
             result = await self.flow.poll(request)
@@ -2884,7 +2978,7 @@ class PairCog(commands.Cog):
                 }[result.outcome])
                 return
 
-            if not await self._still_eligible(discord_id):
+            if not await self._still_eligible(discord_id, attempt):
                 # Approval can arrive up to ten minutes after the gate ran.
                 logger.warning(f"Discarding a pairing for {discord_id}: no longer eligible")
                 return
@@ -2904,11 +2998,24 @@ class PairCog(commands.Cog):
             logger.error(f"Pairing for {discord_id} failed: {e}", exc_info=True)
         finally:
             self._in_flight.pop(discord_id, None)
+            if self._attempts.get(discord_id) is attempt:
+                self._attempts.pop(discord_id, None)
 
-    async def _still_eligible(self, discord_id: int) -> bool:
+    async def _still_eligible(self, discord_id: int, attempt) -> bool:
+        """Re-run the gate, because approval arrives up to ten minutes later.
+
+        The attempt check is not covered by cancellation: a task only stops
+        at an await boundary, so a superseded attempt can already be inside
+        complete_pair when the winner stores. Comparing the token is what
+        stops the loser overwriting the winner.
+        """
+        if self._attempts.get(discord_id) is not attempt:
+            return False
+        if not self.enabled or self.store is None:
+            return False
         guild = self.bot.get_guild(self.config.GUILD_ID)
         member = guild.get_member(discord_id) if guild else None
-        return bool(member) and self._may_pair(member) and self.enabled
+        return bool(member) and self._may_pair(member)
 
     @staticmethod
     def _refusal_text(refusal: PairRefusal) -> str:
@@ -3000,22 +3107,48 @@ class PairCog(commands.Cog):
             await self._revalidate_one(row['discord_id'])
 
     async def _revalidate_one(self, discord_id: int) -> None:
+        grant = await self.store.get_grant(discord_id)
+        if grant is None:
+            return
         acting = await self.store.acting_client(discord_id)
         if acting is None:
             return
         try:
             await acting.request("GET", "/api/users/me")
+        except RommAuthError:
+            # The store's callback has already marked the row under the
+            # generation guard. Whether to tell the user is a separate
+            # question: if a re-pair landed while this probe was in flight,
+            # the guard rejected the write and the user now has a working
+            # credential, so saying "your link stopped working" would be
+            # both wrong and alarming. Anchoring on the generation we probed
+            # answers that without any shared state to race over.
+            row = await self.store.repo.audit_row(discord_id)
+            if row and row['generation'] == grant.generation and row['invalid_since']:
+                await self._dm(
+                    discord_id,
+                    "⚠️ Your RomM link stopped working — RomM no longer accepts it. "
+                    "Run `/pair` to link again.",
+                )
+            return
         except Exception as e:
-            # ActingClient already invalidated on 401/403 via the callback.
-            # Everything else - a timeout, a restart, a 502 - must leave the
-            # row alone: marking every token dead during a RomM restart
-            # would be the worst bug this loop could have.
+            # A timeout, a restart, a 502 must leave the row alone. Marking
+            # every token dead during a RomM restart would be the worst bug
+            # this loop could have.
             logger.debug(f"Revalidation for {discord_id} did not complete: {e}")
             return
 
         grant = await self.store.get_grant(discord_id)
         if grant is not None:
             await self.store.repo.touch_verified(discord_id, grant.generation)
+
+    async def _dm(self, discord_id: int, text: str) -> None:
+        try:
+            user = self.bot.get_user(discord_id) or await self.bot.fetch_user(discord_id)
+            if user:
+                await user.send(text)
+        except discord.HTTPException as e:
+            logger.warning(f"Could not DM {discord_id}: {e}")
 
     @revalidate_loop.before_loop
     async def before_revalidate_loop(self):
@@ -3090,17 +3223,55 @@ In `setup_hook`, after the database verification block and before the SocketIO b
                     self.config.ROMM_USER_AUTH_ENABLED = False
 ```
 
-In `load_all_cogs`, add to `core_cogs` after `'cogs.netplay'`:
+In `load_all_cogs`, extend `core_cogs`. `'cogs.netplay'` has **no trailing comma** today, so add one — pasting a bare line underneath would silently concatenate the two into `'cogs.netplaycogs.pair'`:
 
 ```python
+            'cogs.netplay',
             'cogs.pair'
+        ]
+```
+
+`tests/test_extension_loading.py::DependencyMapTests::test_every_declared_cog_has_a_dependency_entry` asserts that every entry in `core_cogs` also appears in `cog_dependencies`, so add one there too:
+
+```python
+            'cogs.pair': ['aiosqlite', 'cryptography'],
 ```
 
 The list stays unconditional — `test_extension_loading.py` reads it by AST — and `PairCog` refuses at runtime when the feature is off, following the `REQUESTS_ENABLED` pattern.
 
 - [ ] **Step 7: Widen the import boundary scan**
 
-In `tests/test_import_boundaries.py`, add:
+In `tests/test_import_boundaries.py`, add `import ast` at the top, then this module-level helper:
+
+```python
+def _reads_sealed_column(path):
+    """Whether this module actually touches the `sealed` column.
+
+    Docstrings are excluded deliberately: explaining why ciphertext is kept
+    out of a module is not the same as reading it, and a text scan that
+    cannot tell those apart makes the rule unwritable-about.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            doc = ast.get_docstring(node, clean=False)
+            if doc is not None:
+                docstrings.add(doc)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if node.value not in docstrings and "sealed" in node.value:
+                return True
+        if isinstance(node, ast.Attribute) and node.attr == "sealed":
+            return True
+        if isinstance(node, ast.Name) and node.id == "sealed":
+            return True
+    return False
+```
+
+Then add the rules themselves:
 
 ```python
     def test_shared_packages_do_not_import_from_cogs(self):
@@ -3120,15 +3291,23 @@ In `tests/test_import_boundaries.py`, add:
         self.assertEqual([], offenders)
 
     def test_only_the_token_package_names_the_sealed_column(self):
-        """Ciphertext must be unreachable from anything that renders."""
+        """Ciphertext must be unreachable from anything that renders.
+
+        Matched through the AST rather than on raw text. A substring scan
+        would flag prose - the pairing cog's own docstring explains why it
+        keeps device codes out of the sealed column - and a rule that
+        punishes writing about itself gets weakened until it catches
+        nothing.
+        """
         offenders = []
         for path in Path(".").rglob("*.py"):
             parts = path.parts
-            if parts[0] in {".git", "tests", "tools", "romm_tokens"}:
+            if parts[0] in {".git", ".venv", ".worktrees", ".backend",
+                            "tests", "tools", "romm_tokens"}:
                 continue
-            if "database_manager.py" in parts:
+            if path.name == "database_manager.py":
                 continue  # owns the DDL
-            if "sealed" in path.read_text(encoding="utf-8"):
+            if _reads_sealed_column(path):
                 offenders.append(str(path))
 
         self.assertEqual([], offenders)
@@ -3157,22 +3336,27 @@ git commit -m "feat(pair): add the /pair command family and its lifecycle listen
 
 **Files:**
 - Test: `tests/test_romm_tokens_lifecycle.py`
-- Modify: `cogs/pair/cog.py` only if a test exposes a gap
+- Modify: `cogs/pair/cog.py` or `romm_tokens/store.py` only if a test exposes a gap
 
 **Interfaces:**
 - Consumes: Tasks 7 and 9.
-- Produces: no new interface — this task proves the ordering hazards are closed.
+- Produces: no new interface — this task proves the ordering hazards are closed, at the store level and at the cog level.
 
 - [ ] **Step 1: Write the tests**
 
 Create `tests/test_romm_tokens_lifecycle.py`:
 
 ```python
-"""The four ordering hazards, each as a named scenario.
+"""The ordering hazards, at both levels they can bite.
 
-None of these are hypothetical. Each is a window that exists because
-approval arrives up to ten minutes after the command, and because a
-revalidation probe can outlive the credential it was checking.
+None are hypothetical. Each is a window that exists because approval
+arrives up to ten minutes after the command, and because a revalidation
+probe can outlive the credential it was checking.
+
+The store-level half proves the generation guard holds. The cog-level half
+proves the two cases the guard alone cannot cover: a member who leaves
+mid-pairing, and a second /pair whose loser is already past the point
+where cancellation could stop it.
 """
 
 import asyncio
@@ -3261,18 +3445,134 @@ class LifecycleTests(unittest.TestCase):
         self.assertFalse(asyncio.run(self.store.repo.touch_used(111, old.generation)))
         self.assertFalse(asyncio.run(self.store.repo.mark_expiry_warned(111, old.generation)))
         self.assertFalse(asyncio.run(self.store.repo.mark_invalid(111, old.generation)))
+
+
+# --- the cog-level half: the window between /pair and the approval ---------
+
+class _Member:
+    def __init__(self, member_id):
+        self.id = member_id
+        self.roles = []
+
+
+class _Guild:
+    def __init__(self, members):
+        self._members = {m.id: m for m in members}
+
+    def get_member(self, member_id):
+        return self._members.get(member_id)
+
+
+class _Bot:
+    def __init__(self, guild):
+        self._guild = guild
+
+    def get_guild(self, guild_id):
+        return self._guild
+
+
+class _RecordingStore:
+    """Records whether a credential would have been written."""
+
+    def __init__(self):
+        self.completed = []
+
+    async def complete_pair(self, discord_id, payload):
+        self.completed.append(discord_id)
+        return None, None
+
+
+class _ApprovingFlow:
+    """A user who approves the moment we start polling."""
+
+    async def poll(self, request, sleeper=None):
+        from romm_tokens.device_flow import PairOutcome, PollResult
+        return PollResult(outcome=PairOutcome.APPROVED, payload={"access_token": "rmm_x"})
+
+
+def _cog(store, member_present=True):
+    from cogs.pair.cog import PairCog
+
+    cog = object.__new__(PairCog)
+    cog.bot = _Bot(_Guild([_Member(111)] if member_present else []))
+    cog.config = type("C", (), {"GUILD_ID": 1, "ROMM_PAIR_ROLE_ID": None})()
+    cog.enabled = True
+    cog.store = store
+    cog.flow = _ApprovingFlow()
+    cog._in_flight = {}
+    cog._attempts = {}
+    return cog
+
+
+class GateRecheckTests(unittest.TestCase):
+    """Approval arrives up to ten minutes after the gate ran."""
+
+    def test_a_departed_member_fails_the_recheck(self):
+        cog = _cog(store=object(), member_present=False)
+        attempt = object()
+        cog._attempts[111] = attempt
+
+        self.assertFalse(asyncio.run(cog._still_eligible(111, attempt)))
+
+    def test_a_superseded_attempt_fails_the_recheck(self):
+        cog = _cog(store=object())
+        cog._attempts[111] = object()  # a second /pair replaced this one
+
+        self.assertFalse(asyncio.run(cog._still_eligible(111, object())))
+
+    def test_the_current_attempt_by_a_present_member_passes(self):
+        cog = _cog(store=object())
+        attempt = object()
+        cog._attempts[111] = attempt
+
+        self.assertTrue(asyncio.run(cog._still_eligible(111, attempt)))
+
+
+class CompletionAfterTheGateTests(unittest.TestCase):
+    def test_a_member_who_left_mid_pairing_writes_no_row(self):
+        # Otherwise departure is not final: leave, approve in the browser,
+        # and the completion path recreates the credential on_member_remove
+        # just deleted.
+        store = _RecordingStore()
+        cog = _cog(store=store, member_present=False)
+        attempt = object()
+        cog._attempts[111] = attempt
+
+        asyncio.run(cog._await_approval(111, request=None, message=None, attempt=attempt))
+
+        self.assertEqual([], store.completed)
+
+    def test_the_loser_of_two_pairings_does_not_overwrite_the_winner(self):
+        store = _RecordingStore()
+        cog = _cog(store=store)
+        loser = object()
+        cog._attempts[111] = object()  # the winner's attempt
+
+        asyncio.run(cog._await_approval(111, request=None, message=None, attempt=loser))
+
+        self.assertEqual([], store.completed)
+
+    def test_an_eligible_completion_does_write(self):
+        store = _RecordingStore()
+        cog = _cog(store=store)
+        attempt = object()
+        cog._attempts[111] = attempt
+
+        asyncio.run(cog._await_approval(111, request=None, message=None, attempt=attempt))
+
+        self.assertEqual([111], store.completed)
 ```
 
 - [ ] **Step 2: Run the tests**
 
 Run: `python -m pytest tests/test_romm_tokens_lifecycle.py -v`
-Expected: PASS against Tasks 7 and 9 as written. If any fail, the gap is in `store.py` or `repo.py`, not in the test — fix the source.
+Expected: PASS (10 tests) against Tasks 7 and 9 as written. If any fail, the gap is in `store.py`, `repo.py` or `cog.py`, not in the test — fix the source.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add tests/test_romm_tokens_lifecycle.py
-git commit -m "test(pair): pin the four credential ordering hazards"
+git commit -m "test(pair): pin the credential ordering hazards at both levels"
 ```
 
 ---
@@ -3285,7 +3585,7 @@ git commit -m "test(pair): pin the four credential ordering hazards"
 
 **Interfaces:**
 - Consumes: Task 5 `ActingClient`, Task 7 `TokenStore.acting_client`.
-- Produces: `RommStreaming._send(method, path, json_body=None, timeout=..., grant=None)`; `claim(rom_id, grant)`; `release(platform, grant=None)`; `save_and_exit(platform, slot=None, grant=None)`.
+- Produces: `RommStreaming._send(method, path, json_body=None, timeout=..., acting_user_id=None)`; `claim(rom_id, acting_user_id)`; `release(platform, acting_user_id=None)`; `save_and_exit(platform, slot=None, acting_user_id=None)`. Discord ids, never `Grant` objects: a queue entry holding a credential would keep it alive across someone's whole wait.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -3326,12 +3626,6 @@ class _Store:
         return self._acting
 
 
-class _Grant:
-    discord_id = 111
-    generation = 1
-    token = "rmm_user_token"
-
-
 def _cog(acting):
     cog = object.__new__(RommStreaming)
     cog.enabled = True
@@ -3346,14 +3640,14 @@ class ClaimOutcomeTests(unittest.TestCase):
         acting = _Acting(RommAuthError("revoked"))
         cog = _cog(acting)
 
-        result = asyncio.run(cog.claim(42, _Grant()))
+        result = asyncio.run(cog.claim(42, acting_user_id=111))
 
         self.assertIs(ClaimOutcome.DENIED, result.outcome)
 
     def test_a_transport_failure_still_reads_as_broker_trouble(self):
         cog = _cog(_Acting(OSError("connection refused")))
 
-        result = asyncio.run(cog.claim(42, _Grant()))
+        result = asyncio.run(cog.claim(42, acting_user_id=111))
 
         self.assertIs(ClaimOutcome.ERROR, result.outcome)
 
@@ -3361,7 +3655,7 @@ class ClaimOutcomeTests(unittest.TestCase):
         acting = _Acting(RommAuthError("revoked"))
         cog = _cog(acting)
 
-        asyncio.run(cog.claim(42, _Grant()))
+        asyncio.run(cog.claim(42, acting_user_id=111))
 
         self.assertEqual(1, acting.calls)
 ```
@@ -3382,9 +3676,15 @@ In `integrations/romm_streaming.py`, replace the whole `_send` method with:
         path: str,
         json_body: Optional[Dict[str, Any]] = None,
         timeout: int = DEFAULT_TIMEOUT_SECONDS,
-        grant=None,
+        acting_user_id: Optional[int] = None,
     ) -> tuple[int, Optional[Dict[str, Any]]]:
-        """Make a call as the bot, or as a specific user when given a grant.
+        """Make a call as the bot, or as a specific user.
+
+        Takes a Discord id rather than a Grant deliberately. A queue entry
+        that held a Grant would be holding a bearer token for as long as
+        someone waits for their turn, and revoking it in the meantime would
+        have no effect. An id is not a credential, so the credential is
+        re-read here, at the moment of use.
 
         Status 0 means the request never reached RomM, so callers can treat
         it like a 5xx without catching anything.
@@ -3395,8 +3695,11 @@ In `integrations/romm_streaming.py`, replace the whole `_send` method with:
         outage report for a user who simply needs to pair again.
         """
         try:
-            if grant is not None:
-                acting = await self.store.acting_client(grant.discord_id)
+            if acting_user_id is not None:
+                if self.store is None:
+                    logger.error("Per-user auth is not configured; cannot act as a user")
+                    return 401, None
+                acting = await self.store.acting_client(acting_user_id)
                 if acting is None:
                     return 401, None
                 return await acting.request(method, path, json=json_body, timeout=timeout)
@@ -3444,37 +3747,39 @@ from romm_client import RommAuthError
 Replace the signatures and `_send` calls for the acting methods:
 
 ```python
-    async def claim(self, rom_id: int, grant) -> ClaimResult:
+    async def claim(self, rom_id: int, acting_user_id: int) -> ClaimResult:
         """POST /api/streaming/sessions - start a session for a ROM.
 
-        Takes a grant because RomM binds the session to whoever claimed it.
-        Claiming as the bot is the bug per-user auth exists to remove, so
-        there is no default here: a caller without a grant cannot claim.
+        Takes a Discord id because RomM binds the session to whoever claimed
+        it. Claiming as the bot is the bug per-user auth exists to remove,
+        so there is no default here: a caller with nobody to act as cannot
+        claim at all.
         """
         status, body = await self._send(
             "POST",
             "/api/streaming/sessions",
             json_body={"rom_id": rom_id},
             timeout=CLAIM_TIMEOUT_SECONDS,
-            grant=grant,
+            acting_user_id=acting_user_id,
         )
         outcome = _CLAIM_OUTCOMES.get(status, ClaimOutcome.ERROR)
         if outcome is ClaimOutcome.ERROR:
             logger.error(f"Unexpected claim status {status} for rom {rom_id}: {body}")
         return ClaimResult(outcome=outcome, body=body)
 
-    async def release(self, platform: str, grant=None) -> bool:
+    async def release(self, platform: str, acting_user_id: Optional[int] = None) -> bool:
         """DELETE /api/streaming/sessions/{platform} - stop the emulator.
 
-        grant=None runs it as the bot, which is the admin force-reclaim
-        path. Pass the owner's grant for an ordinary release.
+        None runs it as the bot, which is the admin force-reclaim path. Pass
+        the owner's Discord id for an ordinary release.
         """
         status, _ = await self._send(
-            "DELETE", f"/api/streaming/sessions/{platform}", grant=grant
+            "DELETE", f"/api/streaming/sessions/{platform}", acting_user_id=acting_user_id
         )
         return status in (200, 204)
 
-    async def save_and_exit(self, platform: str, slot: Optional[int] = None, grant=None) -> bool:
+    async def save_and_exit(self, platform: str, slot: Optional[int] = None,
+                            acting_user_id: Optional[int] = None) -> bool:
         body: Dict[str, Any] = {"wait": True}
         if slot is not None:
             body["slot"] = slot
@@ -3483,30 +3788,32 @@ Replace the signatures and `_send` calls for the acting methods:
             f"/api/streaming/sessions/{platform}/save-and-exit",
             json_body=body,
             timeout=SAVE_AND_EXIT_TIMEOUT_SECONDS,
-            grant=grant,
+            acting_user_id=acting_user_id,
         )
         return status in (200, 204)
 
-    async def save_state(self, platform: str, slot: Optional[int] = None, grant=None) -> bool:
+    async def save_state(self, platform: str, slot: Optional[int] = None,
+                         acting_user_id: Optional[int] = None) -> bool:
         status, _ = await self._send(
             "POST",
             f"/api/streaming/sessions/{platform}/save-state",
             json_body={} if slot is None else {"slot": slot},
-            grant=grant,
+            acting_user_id=acting_user_id,
         )
         return status in (200, 204)
 
-    async def load_state(self, platform: str, slot: Optional[int] = None, grant=None) -> bool:
+    async def load_state(self, platform: str, slot: Optional[int] = None,
+                         acting_user_id: Optional[int] = None) -> bool:
         status, _ = await self._send(
             "POST",
             f"/api/streaming/sessions/{platform}/load-state",
             json_body={} if slot is None else {"slot": slot},
-            grant=grant,
+            acting_user_id=acting_user_id,
         )
         return status in (200, 204)
 ```
 
-Leave `get_config`, `list_sessions` and `force_release_all` without a grant: those are reads or admin actions and stay on the bot token.
+Leave `get_config`, `list_sessions` and `force_release_all` without an acting user: those are reads or admin actions and stay on the bot token.
 
 Update `ClaimOutcome.DENIED`'s comment to:
 
@@ -3540,7 +3847,25 @@ git commit -m "feat(streaming): claim as the acting user, and keep DENIED distin
 - Modify: `README.md`
 - Test: the whole suite
 
-- [ ] **Step 1: Document the feature**
+- [ ] **Step 1: Update the documented client-token scopes**
+
+`README.md:155` lists the scopes an operator ticks when minting a `ROMM_CLIENT_TOKEN`, and that is the *preferred* deployment path — so adding `roms.user.write` to the OAuth password grant in Task 5 is only half the job. Without this edit, admin force-reclaim of a streaming session 403s on the recommended configuration.
+
+In that bullet, change the scope list from:
+
+```
+roms.read platforms.read firmware.read users.read users.write me.write
+```
+
+to:
+
+```
+roms.read platforms.read firmware.read users.read users.write me.write roms.user.write
+```
+
+and add to the same bullet: "`roms.user.write` is needed for admin force-reclaim of emulator streaming sessions, and `users.write` for revoking a member's pairing."
+
+- [ ] **Step 2: Document the feature**
 
 Add to `README.md`, after the `ROMM_CLIENT_TOKEN` bullet in the configuration list:
 
@@ -3564,17 +3889,17 @@ Set `ROMM_USER_AUTH_ENABLED=true` to let members link their own RomM account wit
 **Requires** the bot's own RomM credential to hold `users.write` (for revocation) and `roms.user.write` (for admin force-reclaim of a session).
 ```
 
-- [ ] **Step 2: Run the whole suite**
+- [ ] **Step 3: Run the whole suite**
 
 Run: `python -m pytest -v`
 Expected: PASS. Every pre-existing test must still pass — `test_romm_client.py`, `test_bot_auth.py`, `test_extension_loading.py` and the two boundary tests are the regression gates for the four files this plan modified.
 
-- [ ] **Step 3: Lint everything touched**
+- [ ] **Step 4: Lint everything touched**
 
 Run: `python -m ruff check bot.py romm_client.py database_manager.py qr.py romm_tokens/ cogs/pair/ integrations/romm_streaming.py tests/`
 Expected: `All checks passed!`
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add README.md
@@ -3588,3 +3913,11 @@ git commit -m "docs: describe per-user RomM linking, and what the stored token c
 - **Streaming queue cog.** The consumer this exists for. Blocked on the dev instance having zero emulator containers (`GET /api/streaming/config` reports `enabled: false`), so spec verifications 3 and 7 could not be answered: whether `GET /api/streaming/sessions` identifies the holding user, and whether a `roms.user.write` token can release a session it does not own. Both must be settled before that cog is planned.
 - **Expiry warning DMs** at 7 and 1 days. `expiry_warned_at` and `mark_expiry_warned` exist and are tested; nothing sends the DM yet. RomM's default of no expiry means the ladder would rarely fire, and `ROMM_PAIR_MAX_AGE_DAYS` covers the case that matters. Worth adding when there is evidence of a deployment that sets expiries.
 - **`/pairings` reconcile against `GET /api/client-tokens/all`.** The audit view lists what the bot knows; reconciliation against what RomM knows would catch credentials orphaned before supersede-and-revoke existed. One admin command, no new plumbing.
+- **`ROMM_PAIR_ALLOW_IDENTITY_DRIFT`.** The spec offers it as an escape hatch for operators who want a pairing stored even when it contradicts `user_links`. Not implemented: it exists only to re-open the phishing path the identity check closes, and no one has asked for it. Adding it later is one branch in `complete_pair` and one setting in `Config`.
+- **A re-pair *button*.** The spec's architecture names a `cogs/pair/views.py`; the plan uses a `renew:` option on `/pair` instead. Same guarantee — no second credential is minted without the user asking — with no view state to time out, and no file whose only content is one button.
+
+## A note for whoever executes this
+
+Task 11 modifies `integrations/romm_streaming.py`, which is **untracked** in this checkout. Commit it before starting, or that task has nothing to modify.
+
+`romm_client.py` has a fourth `Authorization: Bearer` site at line 528 (`netplay_scope_ok`) that this plan deliberately leaves alone. It is bot-only and unreachable from the acting path, so it is correct as it stands — noted here so a careful reader does not think it was missed.
