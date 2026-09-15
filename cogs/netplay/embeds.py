@@ -25,6 +25,10 @@ from .watcher import NetplayState, NetplayWatcher
 
 ENDED_HINT = "Run `/netplay` to announce a new one."
 STALE_NOTE = "⚠️ Cannot reach RomM — this may be out of date."
+UNLISTED_NOTE = (
+    "RomM only lists rooms with a free seat, so this drops off while it is "
+    "full. It comes back here if someone leaves."
+)
 
 STATE_COLORS = {
     NetplayState.PENDING: discord.Color.blurple,
@@ -113,30 +117,33 @@ def seat_counts(rooms: Dict[str, Any]) -> Tuple[int, int]:
     return taken, total
 
 
-def join_button_state(watcher: NetplayWatcher) -> Tuple[str, bool]:
-    """What the Join button says, and whether it can be pressed.
+def join_button_label(watcher: NetplayWatcher) -> str:
+    """What the Join button says. It is always pressable.
 
-    Both come from RomM's own counts, which is the whole reason there is
-    one button rather than one per seat: RomM reports how many are in a
-    room, never who. A "Player 2" button would be a slot the bot invented
-    and could not keep true - it would sit there looking free while the
-    room filled through the web UI. A count the bot did not make up cannot
-    drift like that.
+    The seat count comes from RomM's own numbers, which is the whole reason
+    there is one button rather than one per seat: RomM reports how many are
+    in a room, never who. A "Player 2" button would be a slot the bot
+    invented and could not keep true.
 
-    No room open is not a dead end: the press still hands over the player,
-    which is where a room gets started.
+    Nothing here disables it. An unlisted session has no seat to advertise,
+    but it is not evidence the session is over - and a dead button would lock
+    out a spectator and take the roster signal with it, at the moment the
+    session is most active. No room open is not a dead end either: the press
+    hands over the player, which is where a room gets started.
     """
+    if watcher.unlisted_since is not None:
+        return "Open the player"
+
     taken, total = seat_counts(watcher.rooms)
+    free = total - taken
 
-    if not total:
-        return "Join", False
-
-    free = max(total - taken, 0)
-    if not free:
-        return "Room full", True
+    # free <= 0 covers both no room at all and a payload RomM cannot actually
+    # send, since _is_room_open drops a room from the list once it is full.
+    if free <= 0:
+        return "Join"
 
     seats = "seat" if free == 1 else "seats"
-    return f"Join — {free} {seats} left", False
+    return f"Join — {free} {seats} left"
 
 
 def seat_summary(rooms: Dict[str, Any]) -> str:
@@ -184,6 +191,9 @@ def render_key(watcher: NetplayWatcher) -> str:
         watcher.state.value,
         str(watcher.rom_id),
         str(watcher.stale),
+        # The flag, not the moment: the embed renders it as a relative
+        # timestamp, which Discord keeps current on its own.
+        str(watcher.unlisted_since is not None),
         ",".join(str(uid) for uid in watcher.roster),
     ]
     for room_id in sorted(watcher.rooms):
@@ -223,7 +233,19 @@ def build_description(watcher: NetplayWatcher, domain: str) -> str:
         return "\n".join(lines)
 
     if watcher.state is NetplayState.LIVE:
-        lines.append(seat_summary(watcher.rooms))
+        if watcher.unlisted_since is not None:
+            # Deliberately not "Full". RomM drops a room from the list the
+            # moment it fills AND when it closes, and for a two-player game
+            # those are equally likely - the host alone at 1 of 2 is both
+            # one join from full and one click from gone. "No open seats"
+            # is the part that is true either way, and it answers the only
+            # question the reader has.
+            lines.append(
+                f"**No open seats** — since {relative(watcher.unlisted_since)}"
+            )
+            lines.append(UNLISTED_NOTE)
+        else:
+            lines.append(seat_summary(watcher.rooms))
         # One room is the common case, and a labelled field for a single line
         # is a heading over nothing. Several rooms keep the field, where the
         # label starts doing real work.
@@ -238,7 +260,13 @@ def build_description(watcher: NetplayWatcher, domain: str) -> str:
         return "\n".join(lines)
 
     if watcher.state is NetplayState.ENDED:
-        if watcher.live_since and watcher.ended_at:
+        if watcher.unlisted_since is not None:
+            # Ended by the session cap, not by observation. ended_at is
+            # when the room stopped being listed, so a duration would
+            # measure the visible part and call it the session - every
+            # minute after it filled is unaccounted for.
+            lines.append(f"Last seen {relative(watcher.ended_at)}")
+        elif watcher.live_since and watcher.ended_at:
             ran = format_duration(watcher.ended_at - watcher.live_since)
             lines.append(f"Ran for {ran} · ended {relative(watcher.ended_at)}")
         else:

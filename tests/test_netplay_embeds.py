@@ -10,8 +10,9 @@ import unittest
 from cogs.netplay.embeds import (
     ENDED_HINT,
     STALE_NOTE,
+    UNLISTED_NOTE,
     build_netplay_embed,
-    join_button_state,
+    join_button_label,
     player_link,
     render_key,
 )
@@ -232,44 +233,107 @@ class JoinButtonStateTests(unittest.TestCase):
     could not keep true.
     """
 
-    def _state(self, rooms, **overrides):
-        return join_button_state(make_watcher(rooms=rooms, **overrides))
+    def _label(self, rooms, **overrides):
+        return join_button_label(make_watcher(rooms=rooms, **overrides))
 
     def test_no_room_yet_is_a_plain_join(self):
         """Pressing still opens the player, where a room can be started."""
-        self.assertEqual(self._state({}, state=NetplayState.PENDING),
-                         ("Join", False))
+        self.assertEqual(
+            self._label({}, state=NetplayState.PENDING), "Join")
 
     def test_one_free_seat_is_singular(self):
-        label, disabled = self._state(
-            {"a": {"current": 1, "max": 2}}, state=NetplayState.LIVE)
-        self.assertIn("1 seat left", label)
-        self.assertFalse(disabled)
+        self.assertIn("1 seat left", self._label(
+            {"a": {"current": 1, "max": 2}}, state=NetplayState.LIVE))
 
     def test_several_free_seats_are_plural(self):
-        label, _ = self._state(
-            {"a": {"current": 1, "max": 4}}, state=NetplayState.LIVE)
-        self.assertIn("3 seats left", label)
-
-    def test_a_full_room_is_not_pressable(self):
-        label, disabled = self._state(
-            {"a": {"current": 2, "max": 2}}, state=NetplayState.LIVE)
-        self.assertEqual(label, "Room full")
-        self.assertTrue(disabled)
+        self.assertIn("3 seats left", self._label(
+            {"a": {"current": 1, "max": 4}}, state=NetplayState.LIVE))
 
     def test_seats_are_summed_across_rooms(self):
-        label, disabled = self._state(
-            {"a": {"current": 2, "max": 2}, "b": {"current": 1, "max": 4}},
-            state=NetplayState.LIVE)
-        self.assertIn("3 seats left", label)
-        self.assertFalse(disabled)
+        self.assertIn("4 seats left", self._label(
+            {"a": {"current": 1, "max": 2}, "b": {"current": 1, "max": 4}},
+            state=NetplayState.LIVE))
 
-    def test_an_overfull_room_does_not_go_negative(self):
-        """current can exceed max between a join and the next poll."""
-        label, disabled = self._state(
-            {"a": {"current": 5, "max": 2}}, state=NetplayState.LIVE)
-        self.assertEqual(label, "Room full")
-        self.assertTrue(disabled)
+    def test_an_unlisted_session_drops_the_count(self):
+        """No seat to advertise, and no evidence the session is over either."""
+        self.assertEqual(
+            self._label({"a": {"current": 1, "max": 2}},
+                        state=NetplayState.LIVE, unlisted_since=1010.0),
+            "Open the player",
+        )
+
+    def test_a_count_romm_cannot_send_falls_back_rather_than_dying(self):
+        """current == max is filtered out of /netplay/list, so it never
+        arrives. If it somehow did, a plain Join beats a nonsense label."""
+        self.assertEqual(
+            self._label({"a": {"current": 2, "max": 2}},
+                        state=NetplayState.LIVE),
+            "Join",
+        )
+
+
+class UnlistedDescriptionTests(unittest.TestCase):
+    """What the post says once RomM stops listing the room."""
+
+    def _embed(self):
+        return build(make_watcher(
+            state=NetplayState.LIVE, rooms=ROOM, unlisted_since=1010.0))
+
+    def test_it_reports_no_open_seats(self):
+        self.assertIn("No open seats", self._embed().description)
+
+    def test_it_does_not_claim_the_room_filled(self):
+        """Full and closed look identical from here. Asserting either lies.
+
+        Scoped to the status line: the note below it explains that RomM
+        hides full rooms, which necessarily uses the word.
+        """
+        status = self._embed().description.splitlines()[0]
+        self.assertNotIn("Full", status)
+        self.assertIn("No open seats", status)
+
+    def test_it_explains_why_the_room_vanished(self):
+        """Otherwise it reads as the bot having lost the session."""
+        self.assertIn(UNLISTED_NOTE, self._embed().description)
+
+    def test_it_still_names_the_room_and_host(self):
+        body = visible(self._embed())
+        self.assertIn("Bomberman", body)
+        self.assertIn("idiosync", body)
+
+    def test_a_listed_session_says_none_of_this(self):
+        clean = build(make_watcher(state=NetplayState.LIVE, rooms=ROOM))
+        self.assertNotIn(UNLISTED_NOTE, clean.description)
+
+    def test_going_unlisted_changes_the_render_key(self):
+        """Or the edit is suppressed and the post never says any of it."""
+        listed = make_watcher(state=NetplayState.LIVE, rooms=ROOM)
+        unlisted = make_watcher(
+            state=NetplayState.LIVE, rooms=ROOM, unlisted_since=1010.0)
+        self.assertNotEqual(render_key(listed), render_key(unlisted))
+
+
+class CappedEndingTests(unittest.TestCase):
+    """A session given up on did not necessarily stop when we stopped looking."""
+
+    def _capped(self):
+        return build(make_watcher(
+            state=NetplayState.ENDED, rooms=ROOM,
+            live_since=1000.0, unlisted_since=1100.0, ended_at=1100.0))
+
+    def test_it_says_last_seen_not_ran_for(self):
+        """ended_at is when it vanished, so a duration would time the wrong
+        thing: everything after the room filled is invisible to us."""
+        body = self._capped().description
+        self.assertIn("Last seen", body)
+        self.assertNotIn("Ran for", body)
+
+    def test_an_observed_ending_still_reports_a_duration(self):
+        """A room that closed with seats free really was watched throughout."""
+        embed = build(make_watcher(
+            state=NetplayState.ENDED, rooms=ROOM,
+            live_since=1000.0, ended_at=1600.0))
+        self.assertIn("Ran for", embed.description)
 
 
 if __name__ == "__main__":

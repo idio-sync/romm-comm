@@ -351,6 +351,10 @@ class Config:
         self.NETPLAY_ENABLED = self.parse_bool(os.getenv('NETPLAY_ENABLED', 'true'), True)
         self.NETPLAY_POLL_INTERVAL = int(os.getenv('NETPLAY_POLL_INTERVAL', '20'))
         self.NETPLAY_PENDING_TIMEOUT = int(os.getenv('NETPLAY_PENDING_TIMEOUT', '900'))
+        # A session that fills up vanishes from /netplay/list exactly like one
+        # that closed, so nothing can observe its ending. This caps how long a
+        # watcher keeps looking before giving up on it.
+        self.NETPLAY_SESSION_TIMEOUT = int(os.getenv('NETPLAY_SESSION_TIMEOUT', '3600'))
         self.NETPLAY_MAX_WATCHERS = int(os.getenv('NETPLAY_MAX_WATCHERS', '25'))
 
         # GGRequestz integration. The URL is stored without a trailing /api;

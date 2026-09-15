@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 DEFAULT_PENDING_TIMEOUT = 900.0
 DEFAULT_STALE_AFTER = 3
+DEFAULT_SESSION_TIMEOUT = 3600.0
 
 
 class NetplayState(str, Enum):
@@ -70,6 +71,12 @@ class NetplayWatcher:
     # longer be trusted. Not a state: the session is probably still running,
     # we just cannot see it, and saying "ended" would be a claim we cannot
     # support. Cleared by the first successful poll.
+    # Set when the rooms stopped being listed and they were one seat short
+    # of full, which is the only way a room can vanish without closing.
+    # Not a state, for the same reason `stale` is not one: the session is
+    # probably still running, we just cannot see it from outside. Cleared
+    # the moment a room is listed again.
+    unlisted_since: Optional[float] = None
     stale: bool = False
     last_render_key: Optional[str] = None
 
@@ -85,6 +92,7 @@ def advance(
     now: float,
     pending_timeout: float = DEFAULT_PENDING_TIMEOUT,
     stale_after: int = DEFAULT_STALE_AFTER,
+    session_timeout: float = DEFAULT_SESSION_TIMEOUT,
 ) -> bool:
     """Apply one poll result. Returns whether a reader would see a difference.
 
@@ -110,14 +118,24 @@ def advance(
     watcher.consecutive_failures = 0
 
     if rooms:
-        changed = watcher.state is not NetplayState.LIVE or watcher.rooms != rooms
+        # Coming back from unlisted counts as a change even when the payload
+        # is byte-identical to the last one we saw. Without that the post
+        # goes on saying "no open seats" over a room with a seat in it.
+        changed = (
+            watcher.state is not NetplayState.LIVE
+            or watcher.rooms != rooms
+            or watcher.unlisted_since is not None
+        )
         if watcher.live_since is None:
             watcher.live_since = now
         watcher.state = NetplayState.LIVE
         watcher.rooms = rooms
+        watcher.unlisted_since = None
         return changed or recovered
 
-    return _handle_empty(watcher, now, pending_timeout) or recovered
+    return (
+        _handle_empty(watcher, now, pending_timeout, session_timeout) or recovered
+    )
 
 
 def _handle_failure(
@@ -155,9 +173,40 @@ def _handle_failure(
     return became_stale
 
 
-def _handle_empty(watcher: NetplayWatcher, now: float, pending_timeout: float) -> bool:
-    """No rooms open: either the session finished, or it never started."""
+def _could_have_filled(rooms: Dict[str, Any]) -> bool:
+    """Whether what we last saw was one join away from vanishing.
+
+    RomM omits a room from /netplay/list once len(players) >= max_players,
+    so a room that disappears may have filled rather than closed. Only if
+    it had a single free seat, though: a room that vanished with three
+    seats free did not gain three players inside one poll interval.
+    """
+    return any(r.get("max", 0) - r.get("current", 0) == 1 for r in rooms.values())
+
+
+def _handle_empty(
+    watcher: NetplayWatcher,
+    now: float,
+    pending_timeout: float,
+    session_timeout: float,
+) -> bool:
+    """Nothing listed: the session finished, filled up, or never started."""
     if watcher.state is NetplayState.LIVE:
+        if watcher.unlisted_since is not None:
+            # Nothing here can tell a full room from a closed one, so the
+            # cap is a garbage collector rather than an observation. Date
+            # the ending from the disappearance: ending it at `now` would
+            # credit the session with the hour we spent not seeing it.
+            if now - watcher.unlisted_since >= session_timeout:
+                watcher.state = NetplayState.ENDED
+                watcher.ended_at = watcher.unlisted_since
+                return True
+            return False
+
+        if _could_have_filled(watcher.rooms):
+            watcher.unlisted_since = now
+            return True
+
         watcher.state = NetplayState.ENDED
         watcher.ended_at = now
         return True

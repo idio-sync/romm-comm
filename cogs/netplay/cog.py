@@ -20,7 +20,7 @@ from discord.ext import commands, tasks
 
 from .embeds import (
     build_netplay_embed,
-    join_button_state,
+    join_button_label,
     player_link,
     render_key,
     sanitize_name,
@@ -64,8 +64,7 @@ class NetplayJoinView(discord.ui.View):
     when the bot restarts, which matches the watchers themselves.
     """
 
-    def __init__(self, cog, rom_id: int, *, label: str = "Join",
-                 disabled: bool = False):
+    def __init__(self, cog, rom_id: int, *, label: str = "Join"):
         super().__init__(timeout=None)
         self.cog = cog
         self.rom_id = rom_id
@@ -73,7 +72,6 @@ class NetplayJoinView(discord.ui.View):
         # to self under the callback's name, so this is the instance that
         # goes out - not the class-level template.
         self.join.label = label
-        self.join.disabled = disabled
 
     @discord.ui.button(label="Join", style=discord.ButtonStyle.primary, emoji="🎮")
     async def join(self, button: discord.ui.Button, interaction: discord.Interaction):
@@ -540,9 +538,8 @@ class Netplay(commands.Cog):
         seat state is part of the post, and a view kept around would go on
         advertising seats that filled two polls ago.
         """
-        label, disabled = join_button_state(watcher)
         return NetplayJoinView(
-            self, watcher.rom_id, label=label, disabled=disabled
+            self, watcher.rom_id, label=join_button_label(watcher)
         )
 
     def render(self, watcher: NetplayWatcher) -> discord.Embed:
@@ -579,6 +576,7 @@ class Netplay(commands.Cog):
                     rooms,
                     now=now,
                     pending_timeout=self.bot.config.NETPLAY_PENDING_TIMEOUT,
+                    session_timeout=self.bot.config.NETPLAY_SESSION_TIMEOUT,
                 )
 
                 # Called every tick, not only when advance() reported a

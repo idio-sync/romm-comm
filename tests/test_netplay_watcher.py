@@ -13,6 +13,11 @@ from cogs.netplay.watcher import NetplayState, NetplayWatcher, advance
 ROOM = {"r1": {"room_name": "Bomberman", "current": 2, "max": 4,
                "player_name": "idiosync", "hasPassword": False}}
 
+# One free seat: the only shape that can vanish by filling rather than by
+# closing, because RomM drops a room from /netplay/list once it is full.
+NEARLY_FULL = {"r1": {"room_name": "Bomberman", "current": 1, "max": 2,
+                      "player_name": "idiosync", "hasPassword": False}}
+
 
 def make_watcher(**overrides):
     values = {
@@ -57,7 +62,8 @@ class PendingTests(unittest.TestCase):
 
 
 class LiveTests(unittest.TestCase):
-    def test_empty_poll_ends_the_session(self):
+    def test_a_room_with_seats_to_spare_ends_when_it_vanishes(self):
+        """2 of 4 cannot have filled inside one poll. It closed."""
         w = make_watcher(state=NetplayState.LIVE, rooms=ROOM)
         changed = advance(w, {}, now=1010.0)
         self.assertIs(w.state, NetplayState.ENDED)
@@ -181,6 +187,94 @@ class TerminalTests(unittest.TestCase):
         self.assertFalse(make_watcher(state=NetplayState.LIVE).is_terminal)
         self.assertTrue(make_watcher(state=NetplayState.ENDED).is_terminal)
         self.assertTrue(make_watcher(state=NetplayState.EXPIRED).is_terminal)
+
+
+class UnlistedTests(unittest.TestCase):
+    """A room that fills disappears from RomM's list exactly like one that closes.
+
+    _is_room_open drops a room once len(players) >= max_players, so `current
+    == max` never arrives and a full room is indistinguishable from a gone
+    one. A grace period cannot separate them either: for a two-player game
+    full IS the steady state, so the room stays absent for the whole session.
+    All the machine can do is decline to call it an ending.
+    """
+
+    def _unlisted(self, now=1010.0):
+        w = make_watcher(state=NetplayState.LIVE, rooms=NEARLY_FULL)
+        advance(w, {}, now=now)
+        return w
+
+    def test_a_room_one_seat_short_does_not_end_when_it_vanishes(self):
+        self.assertIs(self._unlisted().state, NetplayState.LIVE)
+
+    def test_vanishing_is_stamped(self):
+        self.assertEqual(self._unlisted(now=1010.0).unlisted_since, 1010.0)
+
+    def test_vanishing_is_a_visible_change(self):
+        w = make_watcher(state=NetplayState.LIVE, rooms=NEARLY_FULL)
+        self.assertTrue(advance(w, {}, now=1010.0))
+
+    def test_the_last_known_rooms_are_kept(self):
+        """The post still has to name the room and its host."""
+        self.assertEqual(self._unlisted().rooms, NEARLY_FULL)
+
+    def test_staying_unlisted_is_not_a_change_every_tick(self):
+        w = self._unlisted()
+        self.assertFalse(advance(w, {}, now=1030.0))
+
+    def test_a_reappearing_room_goes_back_to_listed(self):
+        """Someone left: the freed seat is the whole reason to keep polling."""
+        w = self._unlisted()
+        advance(w, NEARLY_FULL, now=1100.0)
+        self.assertIsNone(w.unlisted_since)
+        self.assertIs(w.state, NetplayState.LIVE)
+
+    def test_a_reappearing_room_is_a_change_even_if_identical(self):
+        """Without this the post keeps saying "no open seats" over an open one."""
+        w = self._unlisted()
+        self.assertTrue(advance(w, NEARLY_FULL, now=1100.0))
+
+    def test_it_ends_at_the_session_cap(self):
+        w = self._unlisted(now=1010.0)
+        changed = advance(w, {}, now=1010.0 + 3600.0, session_timeout=3600.0)
+        self.assertIs(w.state, NetplayState.ENDED)
+        self.assertTrue(changed)
+
+    def test_it_does_not_end_one_second_early(self):
+        w = self._unlisted(now=1010.0)
+        advance(w, {}, now=1010.0 + 3599.0, session_timeout=3600.0)
+        self.assertIs(w.state, NetplayState.LIVE)
+
+    def test_the_cap_dates_the_ending_from_the_disappearance(self):
+        """Not from when we gave up looking - that would invent an hour."""
+        w = self._unlisted(now=1010.0)
+        advance(w, {}, now=1010.0 + 3600.0, session_timeout=3600.0)
+        self.assertEqual(w.ended_at, 1010.0)
+
+    def test_the_cap_restarts_when_a_seat_opens_and_closes_again(self):
+        w = self._unlisted(now=1010.0)
+        advance(w, NEARLY_FULL, now=2000.0)
+        advance(w, {}, now=2010.0)
+        self.assertEqual(w.unlisted_since, 2010.0)
+
+    def test_a_failed_poll_while_unlisted_does_not_end_it(self):
+        w = self._unlisted()
+        advance(w, None, now=1030.0)
+        self.assertIs(w.state, NetplayState.LIVE)
+        self.assertEqual(w.unlisted_since, 1010.0)
+
+    def test_several_rooms_need_only_one_that_could_have_filled(self):
+        both = {"a": NEARLY_FULL["r1"], "b": ROOM["r1"]}
+        w = make_watcher(state=NetplayState.LIVE, rooms=both)
+        advance(w, {}, now=1010.0)
+        self.assertIs(w.state, NetplayState.LIVE)
+
+    def test_a_pending_watcher_never_goes_unlisted(self):
+        """Nothing was ever listed, so nothing can have stopped being."""
+        w = make_watcher()
+        advance(w, {}, now=1010.0)
+        self.assertIsNone(w.unlisted_since)
+        self.assertIs(w.state, NetplayState.PENDING)
 
 
 if __name__ == "__main__":

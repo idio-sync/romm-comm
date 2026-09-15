@@ -86,6 +86,7 @@ def fake_bot(loop):
         NETPLAY_ENABLED=False,
         NETPLAY_POLL_INTERVAL=20,
         NETPLAY_PENDING_TIMEOUT=900,
+            NETPLAY_SESSION_TIMEOUT=3600,
         NETPLAY_MAX_WATCHERS=25,
         DOMAIN="https://roms.example.com",
         # user_manager's setup() gates on this, and its __init__ reads the

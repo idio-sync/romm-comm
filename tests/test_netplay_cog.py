@@ -22,6 +22,7 @@ def make_cog(max_watchers=25):
             DOMAIN="https://roms.example.com",
             NETPLAY_MAX_WATCHERS=max_watchers,
             NETPLAY_PENDING_TIMEOUT=900,
+            NETPLAY_SESSION_TIMEOUT=3600,
         )
     )
     cog.enabled = True
@@ -639,13 +640,15 @@ class SeatAwareButtonTests(unittest.IsolatedAsyncioTestCase):
         watcher.rooms = rooms
         return cog, watcher
 
-    async def test_a_full_room_hands_back_a_dead_button(self):
-        cog, watcher = self._watcher({"a": {"current": 2, "max": 2}})
+    async def test_an_unlisted_session_relabels_but_stays_pressable(self):
+        """A dead button would lock out a spectator and lose the roster."""
+        cog, watcher = self._watcher({"a": {"current": 1, "max": 2}})
+        watcher.unlisted_since = 1010.0
 
         button = cog.join_view(watcher).children[0]
 
-        self.assertTrue(button.disabled)
-        self.assertEqual(button.label, "Room full")
+        self.assertFalse(button.disabled)
+        self.assertEqual(button.label, "Open the player")
 
     async def test_a_free_seat_stays_pressable(self):
         cog, watcher = self._watcher({"a": {"current": 1, "max": 2}})
@@ -655,18 +658,20 @@ class SeatAwareButtonTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(button.disabled)
         self.assertIn("1 seat left", button.label)
 
-    async def test_a_poll_that_fills_the_room_disables_the_button(self):
+    async def test_a_poll_that_unlists_the_room_relabels_the_button(self):
         """Renders in isolation are worth nothing if the edit drops them."""
-        full = {"a": {"room_name": "r", "current": 2, "max": 2,
-                      "player_name": "h", "hasPassword": False}}
         message = FakeMessage()
-        cog = make_polling_cog([full], message=message)
+        cog = make_polling_cog([{}], message=message)
         watcher = register(cog)
+        watcher.state = NetplayState.LIVE
+        watcher.rooms = {"a": {"room_name": "r", "current": 1, "max": 2,
+                               "player_name": "h", "hasPassword": False}}
         watcher.message_id = 1
 
         await cog.poll_sessions()
 
-        self.assertTrue(message.last_edit["view"].children[0].disabled)
+        button = message.last_edit["view"].children[0]
+        self.assertEqual(button.label, "Open the player")
 
 
 if __name__ == "__main__":

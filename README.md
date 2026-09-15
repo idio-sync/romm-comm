@@ -312,12 +312,16 @@ Two things worth knowing before enabling it:
 NETPLAY_ENABLED=true
 NETPLAY_POLL_INTERVAL=20
 NETPLAY_PENDING_TIMEOUT=900
+NETPLAY_SESSION_TIMEOUT=3600
 NETPLAY_MAX_WATCHERS=25
 ```
 
 - `NETPLAY_ENABLED` — enable the `/netplay` command (default: `true`).
 - `NETPLAY_POLL_INTERVAL` — seconds between room checks (default: `20`).
 - `NETPLAY_PENDING_TIMEOUT` — seconds before an announcement with no room gives up (default: `900`).
+- `NETPLAY_SESSION_TIMEOUT` — seconds before a session whose room stopped being listed is
+  given up on (default: `3600`). RomM omits a full room from `/netplay/list`, so a room that
+  filled looks exactly like one that closed; this is a cap, not an observation.
 - `NETPLAY_MAX_WATCHERS` — how many sessions to track at once (default: `25`). Each one costs one RomM request per interval.
 
 `DOMAIN` must be set to your public RomM URL, or the bot cannot build a join
