@@ -481,6 +481,8 @@ Existing tokens will 403. See §13 before editing that string.
 | Startup probe itself fails (server restarting) | **Fail open**: log a warning, leave the command enabled. A transient boot-order failure must not silently disable the feature until the next restart. |
 | `DOMAIN` unset (`No website configured`) | `/netplay` refuses at command time with a config error. Never post an embed whose primary link is broken. |
 | Poll returns `None` | Leave the state alone — **never** flip to `ENDED`, however long it persists. After several consecutive failures mark the watcher **stale**, say so in the embed, and keep polling; a successful poll clears it. RomM being unreachable is not evidence a session ended, and there is no retry beneath this (§7). |
+| **Room fills up** | `_is_room_open` in RomM's `backend/endpoints/netplay.py` returns `False` once `len(players) >= max_players`, so **a full room is omitted from `/netplay/list` entirely**. `current == max` can therefore never appear in a response, and a filling room looks identical to a closing one: both simply vanish. A grace period cannot separate them — for a 2-player game *full is the steady state for the whole session*, so the room stays absent for its entire duration. Behaviour: a LIVE session whose rooms disappear **while one seat was free** stays LIVE, records `unlisted_since`, keeps its last-known rooms, and keeps polling; it returns to a listed LIVE the moment a room reappears, which is how a freed seat gets re-advertised. Rooms that disappear with **more than one seat free** did not fill inside a 20s poll — they closed, and end immediately as before. |
+| Session never reappears | An unlisted LIVE session cannot be distinguished from a finished one, so it is ended by a cap (`NETPLAY_SESSION_TIMEOUT`, default 3600s) rather than by observation. `ended_at` is set to `unlisted_since`, not to the moment the cap fired. The embed says "last seen", never "ran for": duration is unknowable once a session spends most of its life invisible. |
 | Watcher cap reached | Refuse politely; suggest waiting for a session to end. |
 | Message deleted | Drop the watcher on the resulting 404 rather than retrying forever. |
 | Bot restart | Watchers lost; posts stop updating (§5.5). |
@@ -493,9 +495,15 @@ Following the suite's existing approach — build subjects with
 `object.__new__`, no live Discord, no live RomM:
 
 - **State machine** (`watcher.py`) — every transition, driven by fabricated API
-  payloads: `{}` → room → `{}`; `None` mid-session *not* ending it; the pending
+  payloads: `None` mid-session *not* ending it; the pending
   timeout; multiple concurrent rooms; and the snapshot-iteration guarantee
-  (registering a watcher mid-tick must not raise).
+  (registering a watcher mid-tick must not raise). Note that `{}` → room →
+  `{}` is **not** a single transition: the trailing `{}` ends the session only
+  when the last-known rooms had more than one free seat. One free seat means
+  the room may have filled (§9), and the session goes unlisted rather than
+  ending — with its own transitions to cover: unlisted → listed (a seat
+  opened), and unlisted → ENDED at the session cap, stamping `ended_at` from
+  `unlisted_since`.
 - **Edit suppression** — an unchanged payload across two ticks issues no edit.
   This protects §5.3's rate-limit rule, which is otherwise invisible.
 - **Embed formatters** (`embeds.py`) — one test per state; a password-protected
