@@ -1,7 +1,7 @@
 # Per-User RomM Authentication — Design Spec
 
 **Date:** 2026-09-13
-**Status:** Approved (brainstorming), revised 2026-09-13 after code review — ready for implementation plan once the live-instance verifications are done
+**Status:** Approved (brainstorming), revised after code review and six live-instance probe runs — **ready for implementation planning**. Verifications 3 and 7 remain blocked on streaming being disabled; neither gates this work.
 **Feature area:** Credential custody. Unblocks any RomM feature where the server binds a resource to the acting user; the first is the streaming session queue.
 
 ## Overview
@@ -418,7 +418,7 @@ All five are undeclared in the OpenAPI spec, so they cannot be settled by readin
 
 | # | Question | Result |
 |---|----------|--------|
-| 1 | `device/token` responses | **Answered** for pending, approved and denied — all HTTP 400 bar success, discriminated by `detail`. Expiry pending capture. |
+| 1 | `device/token` responses | **Answered, all four.** pending / slow_down / access_denied / expired_token, every one HTTP 400, discriminated only by `detail`. |
 | 2 | Can `token_id` be recovered? | **Passes.** 1 token, 1 matching `device_id`, `name` as sent. No fallback needed. |
 | 3 | Does the session list identify the holder? | **Blocked** — streaming is disabled on this instance. |
 | 4 | Does the approve screen render `name`? | **Passes.** Device name and both requested scopes shown. |
@@ -455,7 +455,19 @@ The remaining items are refinements, not shape changes. They are run **before** 
 
    Same status as pending, different `detail` — which is exactly the case a status-keyed loop would have got wrong, spinning for the remaining ~10 minutes while the user waited for the bot to notice they had said no.
 
-   Observed timings across runs: approval is seen within 2 polls (~10s) of the user clicking, denial within 3. `expires_in` is 600 and `interval` is 5, so an attempt is at most ~120 polls.
+   **Expiry and `slow_down`: answered** (2026-09-14, a code left to die). Leaving an attempt unanswered produced, in order:
+
+   ```
+   tick  1   HTTP 400  {"detail": "authorization_pending"}
+   tick 57   HTTP 400  {"detail": "slow_down"}        <- backed off 5s -> 10s
+   tick 89   HTTP 400  {"detail": "expired_token"}    <- terminal
+   ```
+
+   **`slow_down` is not hypothetical, and it is not an edge case.** It appeared at poll 57, roughly five minutes in. The bot polls at `interval` 5 for up to `expires_in` 600 — up to ~120 polls — so *any* attempt where the user takes more than about five minutes to reach their browser will hit it. Honouring it by widening the interval is mandatory behaviour on the ordinary slow-user path, not defensive coding for a rare server mood. A loop that ignored it would spend the back half of every unhurried pairing being throttled.
+
+   All four responses share HTTP 400. Nothing but the `detail` string distinguishes "still waiting" from "they said no", "you are polling too fast" and "too late" — which is the entire argument for the loop's design.
+
+   Observed timings across runs: approval is seen within 1-2 polls (~5-10s) of the user clicking, denial within 3.
 2. **That `GET /api/client-tokens` lists the just-minted token with a matching `device_id`**, so `token_id` can be recorded. Without it, revocation and reconciliation both lose their handle — see the fallback below.
 3. **Whether `GET /api/streaming/sessions` identifies the holding user.** Its response schema is `{}`. The queue needs it to map a session back to a Discord member.
 4. **That RomM's approve screen renders the `name` field as sent.** Load-bearing, not cosmetic: with the confirmation code demoted to hygiene, this is one of only three real anti-phishing controls.
