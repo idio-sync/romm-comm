@@ -387,20 +387,51 @@ class Netplay(commands.Cog):
         if view.selected_rom is None:
             return
 
-        await self.announce(ctx, view.selected_rom, platform_display)
+        # The picker becomes the announcement. Responding again would post
+        # a second message and leave "Which one?" sitting above it for the
+        # life of the session.
+        await self.announce(
+            ctx, view.selected_rom, platform_display, prompt=view.message
+        )
+
+    @staticmethod
+    async def reply(ctx, prompt, **kwargs):
+        """Say one thing, in one message, however we got here.
+
+        With no prompt this is ctx.respond. With one, it edits the message
+        already on screen - the ROM picker - so a command that had to ask a
+        question still leaves exactly one message behind. Every key is
+        passed explicitly, including the None ones: an omitted content= or
+        view= leaves the old value in place, which is how a stale question
+        or a dead select survives an edit.
+        """
+        fields = {"content": None, "embed": None, "view": None}
+        fields.update(kwargs)
+
+        if prompt is None:
+            return await ctx.respond(**fields)
+
+        await prompt.edit(**fields)
+        return prompt
 
     async def announce(
         self,
         ctx: discord.ApplicationContext,
         rom: Dict[str, Any],
         platform_display: str,
+        prompt=None,
     ) -> None:
         """Post the PENDING embed and register the watcher behind it."""
         existing = self.live_watcher_for(int(rom["id"]))
         if existing is not None:
-            await ctx.respond(
-                f"**{existing.rom_name}** already has a live announcement in "
-                "this server. Use that post rather than starting a second one."
+            await self.reply(
+                ctx,
+                prompt,
+                content=(
+                    f"**{existing.rom_name}** already has a live announcement "
+                    "in this server. Use that post rather than starting a "
+                    "second one."
+                ),
             )
             return
 
@@ -408,9 +439,13 @@ class Netplay(commands.Cog):
         # search and possibly a human picking from a select happened in
         # between, and other invocations were free to take the last slot.
         if self.at_capacity():
-            await ctx.respond(
-                "I am already tracking as many netplay sessions as I can. "
-                "Wait for one to finish and try again."
+            await self.reply(
+                ctx,
+                prompt,
+                content=(
+                    "I am already tracking as many netplay sessions as I can. "
+                    "Wait for one to finish and try again."
+                ),
             )
             return
 
@@ -436,8 +471,11 @@ class Netplay(commands.Cog):
         # .send is the plain Messageable send. It returns a WebhookMessage
         # here, so .id is available.
         try:
-            message = await ctx.respond(
-                embed=embed, view=NetplayJoinView(self, watcher.rom_id)
+            message = await self.reply(
+                ctx,
+                prompt,
+                embed=embed,
+                view=NetplayJoinView(self, watcher.rom_id),
             )
         except discord.HTTPException as e:
             # Release the slot. Leaving a watcher with no message behind would

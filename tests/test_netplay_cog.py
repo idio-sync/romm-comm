@@ -482,5 +482,84 @@ class JoinButtonTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(interaction.sent)
 
 
+class FakeSentMessage(FakeMessage):
+    """A message already on Discord, so it has an id and can be edited."""
+
+    def __init__(self, message_id=777):
+        super().__init__()
+        self.id = message_id
+
+
+class FakeCtx:
+    """Only what announce() touches."""
+
+    def __init__(self):
+        self.author = SimpleNamespace(id=7, display_name="alice")
+        self.channel_id = 9
+        self.responses = []
+
+    async def respond(self, content=None, **kwargs):
+        self.responses.append((content, kwargs))
+        return FakeSentMessage(message_id=900 + len(self.responses))
+
+
+class OneMessagePerCommandTests(unittest.IsolatedAsyncioTestCase):
+    """A command leaves exactly one message behind, whichever path it took.
+
+    The picker is sent before we know which ROM was chosen, so the
+    announcement has to become that message rather than follow it - otherwise
+    a two-match search posts a dead "Which one?" above every embed.
+    """
+
+    async def test_the_picker_message_becomes_the_announcement(self):
+        cog, ctx = make_cog(), FakeCtx()
+        picker = FakeSentMessage()
+
+        await cog.announce(ctx, ROM, "SNES", prompt=picker)
+
+        self.assertEqual(picker.edits, 1)
+        self.assertEqual(ctx.responses, [])
+
+    async def test_the_watcher_points_at_the_edited_message(self):
+        """Point it at the wrong id and every later refresh edits nothing."""
+        cog, ctx = make_cog(), FakeCtx()
+        picker = FakeSentMessage(message_id=4321)
+
+        await cog.announce(ctx, ROM, "SNES", prompt=picker)
+
+        self.assertEqual(cog.watchers[50265].message_id, 4321)
+
+    async def test_the_announcement_clears_the_question_and_the_select(self):
+        cog, ctx = make_cog(), FakeCtx()
+        picker = FakeSentMessage()
+
+        await cog.announce(ctx, ROM, "SNES", prompt=picker)
+
+        self.assertIsNone(picker.last_edit["content"])
+        self.assertIsInstance(picker.last_edit["view"], NetplayJoinView)
+        self.assertIsNotNone(picker.last_edit["embed"])
+
+    async def test_a_refusal_replaces_the_picker_too(self):
+        """A guard that posts its own message would leave the picker sitting."""
+        cog, ctx = make_cog(max_watchers=1), FakeCtx()
+        register(cog, rom={"id": 1, "name": "Other"})
+        picker = FakeSentMessage()
+
+        await cog.announce(ctx, ROM, "SNES", prompt=picker)
+
+        self.assertEqual(ctx.responses, [])
+        self.assertIn("as many", picker.last_edit["content"])
+        self.assertIsNone(picker.last_edit["view"])
+
+    async def test_without_a_picker_it_still_posts(self):
+        """The single-match path has no message to reuse yet."""
+        cog, ctx = make_cog(), FakeCtx()
+
+        await cog.announce(ctx, ROM, "SNES")
+
+        self.assertEqual(len(ctx.responses), 1)
+        self.assertIsNotNone(cog.watchers[50265].message_id)
+
+
 if __name__ == "__main__":
     unittest.main()
