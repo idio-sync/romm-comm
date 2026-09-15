@@ -413,9 +413,10 @@ class JoinButtonTests(unittest.IsolatedAsyncioTestCase):
 
         await view.on_join(interaction)
 
-        content, kwargs = interaction.sent[0]
-        self.assertIn(f"/rom/{watcher.rom_id}/ejs", content)
+        _, kwargs = interaction.sent[0]
         self.assertTrue(kwargs.get("ephemeral"))
+        button = kwargs["view"].children[0]
+        self.assertIn(f"/rom/{watcher.rom_id}/ejs", button.url)
 
     async def test_pressing_twice_does_not_duplicate(self):
         cog, watcher, _ = self._cog_and_watcher()
@@ -559,6 +560,72 @@ class OneMessagePerCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(ctx.responses), 1)
         self.assertIsNotNone(cog.watchers[50265].message_id)
+
+
+class JoinLinkTests(unittest.IsolatedAsyncioTestCase):
+    """One click from the reply, and a room named in the link.
+
+    RomM ignores ?room= today. It is emitted anyway: the link then starts
+    working the moment the player honours it, with nothing to change here.
+    """
+
+    def _cog_and_watcher(self, rooms=None, state=NetplayState.LIVE):
+        cog = make_cog()
+        cog.bot.config.DOMAIN = "https://roms.example.com"
+        watcher = register(cog)
+        watcher.state = state
+        watcher.rooms = rooms or {}
+        watcher.message_id = 1
+        cog.bot.get_channel = lambda cid: FakeChannel(FakeMessage())
+        return cog, watcher
+
+    async def _press(self, cog, watcher, user_id=4242):
+        view = NetplayJoinView(cog, watcher.rom_id)
+        interaction = FakeInteraction(user_id)
+        await view.on_join(interaction)
+        return interaction.sent[0]
+
+    async def test_the_reply_carries_a_link_button(self):
+        """A URL in prose has to be found before it can be clicked."""
+        cog, watcher = self._cog_and_watcher()
+
+        _, kwargs = await self._press(cog, watcher)
+
+        button = kwargs["view"].children[0]
+        self.assertIs(button.style, discord.ButtonStyle.link)
+
+    async def test_the_button_names_the_only_open_room(self):
+        cog, watcher = self._cog_and_watcher(rooms={"sid-9": {"max": 2}})
+
+        _, kwargs = await self._press(cog, watcher)
+
+        self.assertTrue(kwargs["view"].children[0].url.endswith("?room=sid-9"))
+
+    async def test_several_rooms_name_none_of_them(self):
+        """Guessing which one they meant is worse than the menu."""
+        cog, watcher = self._cog_and_watcher(
+            rooms={"sid-9": {"max": 2}, "sid-4": {"max": 2}}
+        )
+
+        _, kwargs = await self._press(cog, watcher)
+
+        self.assertNotIn("room=", kwargs["view"].children[0].url)
+
+    async def test_a_session_with_no_room_yet_names_none(self):
+        cog, watcher = self._cog_and_watcher(state=NetplayState.PENDING)
+
+        _, kwargs = await self._press(cog, watcher)
+
+        self.assertNotIn("room=", kwargs["view"].children[0].url)
+
+    async def test_a_finished_session_still_hands_over_a_button(self):
+        """The button outlives its watcher; the reply must not break."""
+        cog, watcher = self._cog_and_watcher()
+        cog.watchers.clear()
+
+        _, kwargs = await self._press(cog, watcher)
+
+        self.assertIn(f"/rom/{watcher.rom_id}/ejs", kwargs["view"].children[0].url)
 
 
 if __name__ == "__main__":

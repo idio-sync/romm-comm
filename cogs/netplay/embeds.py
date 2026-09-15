@@ -17,6 +17,7 @@ actually in the room.
 """
 
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 import discord
 
@@ -51,13 +52,21 @@ ROSTER_LABELS = {
 }
 
 
-def player_link(domain: str, rom_id: int) -> str:
-    """The EmulatorJS player for one ROM.
+def player_link(
+    domain: str, rom_id: int, session_id: Optional[str] = None
+) -> str:
+    """The EmulatorJS player for one ROM, and the room to land in.
 
-    There is no room-id query parameter, so this lands the player in the right
-    game and they pick the room from the netplay menu themselves.
+    RomM does not read ?room= yet: its player route takes no props and
+    Base.vue reads only route.params.rom, so an unknown query parameter is
+    inert. It is emitted anyway. The value costs nothing today and the link
+    starts working the moment the player honours it - upstream, or via a
+    userscript - with no change needed here.
     """
-    return f"{domain}/rom/{rom_id}/ejs"
+    link = f"{domain}/rom/{rom_id}/ejs"
+    if session_id:
+        link += f"?room={quote(str(session_id), safe='')}"
+    return link
 
 
 def sanitize_name(name: Any) -> str:

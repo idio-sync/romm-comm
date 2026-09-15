@@ -11,6 +11,7 @@ from cogs.netplay.embeds import (
     ENDED_HINT,
     STALE_NOTE,
     build_netplay_embed,
+    player_link,
     render_key,
 )
 from cogs.netplay.watcher import NetplayState, NetplayWatcher
@@ -192,6 +193,34 @@ class EmbedTests(unittest.TestCase):
     def test_platform_is_shown_when_known(self):
         embed = build(make_watcher(platform_display="SNES ⭐"))
         self.assertIn("SNES ⭐", [f.value for f in embed.fields])
+
+
+class PlayerLinkTests(unittest.TestCase):
+    """A link that names a room, for the day RomM reads one.
+
+    RomM ignores unknown query parameters today, so this is inert until the
+    player learns to honour it. Emitting it now means the link starts working
+    without a bot change - and a userscript can honour it in the meantime.
+    """
+
+    def test_without_a_room_the_link_is_unchanged(self):
+        self.assertEqual(
+            player_link("https://x.example.com", 50265),
+            "https://x.example.com/rom/50265/ejs",
+        )
+
+    def test_a_room_becomes_a_query_parameter(self):
+        self.assertEqual(
+            player_link("https://x.example.com", 50265, session_id="abc-123"),
+            "https://x.example.com/rom/50265/ejs?room=abc-123",
+        )
+
+    def test_a_room_id_is_escaped(self):
+        """RomM mints guids, but this value is echoed from the server."""
+        link = player_link("https://x.example.com", 1, session_id="a b&c=d")
+        self.assertNotIn(" ", link)
+        self.assertEqual(link.count("&"), 0)
+        self.assertEqual(link.count("="), 1)
 
 
 if __name__ == "__main__":

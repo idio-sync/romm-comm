@@ -18,7 +18,7 @@ from urllib.parse import quote
 import discord
 from discord.ext import commands, tasks
 
-from .embeds import build_netplay_embed, render_key, sanitize_name
+from .embeds import build_netplay_embed, player_link, render_key, sanitize_name
 from .views import MAX_SELECT_OPTIONS, RomSelectView
 from .watcher import NetplayWatcher, advance
 
@@ -29,6 +29,18 @@ logger = logging.getLogger(__name__)
 UNSET_DOMAIN = "No website configured"
 
 ROM_SEARCH_LIMIT = 100
+
+
+def deep_link_session(watcher) -> Optional[str]:
+    """The room a link may name, or None when naming one would be a guess.
+
+    Only when exactly one is open. Two rooms for the same game means the
+    presser has a choice to make, and picking for them lands half of them
+    in the wrong game - worse than the menu they would have used anyway.
+    """
+    if watcher is None or len(watcher.rooms) != 1:
+        return None
+    return next(iter(watcher.rooms))
 
 
 class NetplayJoinView(discord.ui.View):
@@ -63,13 +75,32 @@ class NetplayJoinView(discord.ui.View):
         on a post whose watcher is long gone, and an interaction that goes
         unanswered shows the user an error.
         """
-        link = f"{self.cog.bot.config.DOMAIN}/rom/{self.rom_id}/ejs"
+        watcher = self.cog.watchers.get(self.rom_id)
+        link = player_link(
+            self.cog.bot.config.DOMAIN,
+            self.rom_id,
+            session_id=deep_link_session(watcher),
+        )
+
+        # A link button, not the URL in the sentence: the reply is the one
+        # step between pressing Join and being in the game, and a URL in
+        # prose has to be found before it can be clicked. Nothing on it
+        # times out, so the view needs no timeout of its own.
+        view = discord.ui.View(
+            discord.ui.Button(
+                label="Open the player",
+                style=discord.ButtonStyle.link,
+                url=link,
+                emoji="🎮",
+            ),
+            timeout=None,
+        )
         await interaction.response.send_message(
-            f"Opening **{link}** — pick the room from the netplay menu once it loads.",
+            "Pick the room from the netplay menu once the player loads.",
+            view=view,
             ephemeral=True,
         )
 
-        watcher = self.cog.watchers.get(self.rom_id)
         if watcher is None or watcher.is_terminal:
             return
 
