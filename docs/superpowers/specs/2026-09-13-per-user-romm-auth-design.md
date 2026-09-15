@@ -312,7 +312,7 @@ This is not hypothetical. The probe run on 2026-09-13 reported `DOMAIN unusable,
 
 Cancel any in-flight attempt, delete the row, and attempt the server-side revoke via `DELETE /api/client-tokens/{token_id}/admin` on the bot token. The revoke is guarded: the bot only ever admin-deletes a token whose `device_id` matches the row it stored for that Discord user and whose name carries the bot's prefix. It never touches a token it did not mint.
 
-If the bot's token lacks `users.write`, or `token_id` is null because step 6 of pairing could not read it back, or the revoke fails, the DM says plainly that the bot has forgotten the credential but it still exists in RomM, and links to the user's token list with the device name so they can find the right one.
+If the bot's token lacks `users.write`, or `token_id` is null because step 6 of pairing could not read it back, or the revoke fails, the DM says plainly that the bot has forgotten the credential but it still exists in RomM, and links the user to `ROMM_PAIR_BASE_URL` + `/client-api-tokens` — naming the device so they can pick the right row, since the list shows one entry per token and a re-pairing history can leave several with the same name.
 
 ### `/pair-status`
 
@@ -418,14 +418,14 @@ All five are undeclared in the OpenAPI spec, so they cannot be settled by readin
 
 | # | Question | Result |
 |---|----------|--------|
-| 1 | `device/token` responses | **Partly answered.** Pending and approved confirmed; denied and expired still to capture. |
+| 1 | `device/token` responses | **Answered** for pending, approved and denied — all HTTP 400 bar success, discriminated by `detail`. Expiry pending capture. |
 | 2 | Can `token_id` be recovered? | **Passes.** 1 token, 1 matching `device_id`, `name` as sent. No fallback needed. |
 | 3 | Does the session list identify the holder? | **Blocked** — streaming is disabled on this instance. |
 | 4 | Does the approve screen render `name`? | **Passes.** Device name and both requested scopes shown. |
-| 5 | URL of a user's own token list | Open. Copy only. |
+| 5 | URL of a user's own token list | **Answered.** `/client-api-tokens`. |
 | 6 | `expires_at` format | **Answered, and it changed the design** — see below. |
 | 7 | Can an admin token release another user's session? | **Blocked** — streaming is disabled on this instance. |
-| 8 | Does re-pairing accumulate tokens? | Open. Needs a second approval with the same `--device-id`. |
+| 8 | Does re-pairing accumulate tokens? | **Answered, and it changed the design.** Device row reused; tokens accumulate. `/pair` now revokes what it supersedes. |
 
 Three results worth stating plainly:
 
@@ -459,7 +459,7 @@ The remaining items are refinements, not shape changes. They are run **before** 
 2. **That `GET /api/client-tokens` lists the just-minted token with a matching `device_id`**, so `token_id` can be recorded. Without it, revocation and reconciliation both lose their handle — see the fallback below.
 3. **Whether `GET /api/streaming/sessions` identifies the holding user.** Its response schema is `{}`. The queue needs it to map a session back to a Discord member.
 4. **That RomM's approve screen renders the `name` field as sent.** Load-bearing, not cosmetic: with the confirmation code demoted to hygiene, this is one of only three real anti-phishing controls.
-5. **The RomM UI path to a user's own token list**, for the `/unpair` instructions.
+5. **The RomM UI path to a user's own token list**, for the `/unpair` instructions. **Answered** (2026-09-14): `/client-api-tokens`, joined to `ROMM_PAIR_BASE_URL` exactly as the pairing URL is — so the same origin guard covers it, and a `DOMAIN` left at its sentinel cannot leak into this link either.
 6. **The format and timezone of `expires_at`.** Both `DeviceAuthTokenResponse` and `ClientTokenSchema` type it as a bare `string`, not `format: date-time`, and nullable. The whole expiry ladder — the 7-day and 1-day thresholds, `expiry_warned_at` crossing logic, "expiring within 7 days" in the revalidation query — depends on parsing it and knowing whether it is aware. A naive/aware mix here yields either no warnings or hourly ones. `python-dateutil` is already pinned.
 7. **Whether a token holding `roms.user.write` can release a session it does not own.** The force-reclaim paths assume an admin token overrides ownership, but `roms.user.write` is not an admin-override scope and nothing in the OpenAPI document establishes this. If it cannot, force-reclaim needs a different mechanism and the residual-risk paragraph needs revising.
 8. **Whether re-pairing with a stable `client_device_identifier` reuses the device row, and whether it replaces or accumulates client tokens.** Determines whether step 6's `created_at` tiebreak is sufficient or whether stale tokens pile up per user.
