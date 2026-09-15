@@ -330,12 +330,17 @@ async def phase_repair(session, base_url, device_identifier, user_headers):
     section('8. Re-pairing with the same client_device_identifier')
     status, before = await call(session, 'GET', f'{base_url}/api/client-tokens',
                                 headers=user_headers)
-    count_before = len(before) if isinstance(before, list) else '?'
-    show('tokens before second init', count_before)
-    print('    Re-run this script with the same --device-id and approve again,')
-    print('    then compare this count and the device_id. Same device_id plus a')
-    print('    higher count means tokens accumulate per device, which is what')
-    print('    makes step 6\'s created_at tiebreak necessary.')
+    # Measured AFTER this run's approval, so it counts the token just minted.
+    # Naming it "before" invited exactly the misreading it caused.
+    count_now = len(before) if isinstance(before, list) else '?'
+    show('tokens on account now', count_now, 'includes the one this run minted')
+    if isinstance(before, list):
+        for t in before:
+            show(f"  id {t.get('id')}", f"device_id={t.get('device_id')} created={t.get('created_at')!r}")
+    print('    Re-run with the same --device-id and approve again, WITHOUT --cleanup.')
+    print('    Same device_id proves the device row is reused. If this count then')
+    print('    rises, tokens accumulate per device and step 6\'s created_at tiebreak')
+    print('    is load-bearing; if it stays at 1, the new token replaced the old.')
 
 
 async def cleanup(session, base_url, headers, token_id):

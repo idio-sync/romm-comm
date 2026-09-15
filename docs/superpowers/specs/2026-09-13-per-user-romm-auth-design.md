@@ -438,7 +438,17 @@ The remaining items are refinements, not shape changes. They are run **before** 
    HTTP 400  {"detail": "authorization_pending"}
    ```
 
-   This is RFC 8628's error vocabulary carried in FastAPI's `detail` field, and it settles the loop's design: **branch on the `detail` string, never on the status code.** A 400 is pending, denied and expired all at once, so a loop keyed on status would either spin forever on a denial or abandon a live attempt. The loop must also honour `slow_down` by widening its interval. Denial and expiry are still to capture, but both are now expected at 400 with `access_denied` / `expired_token`; the probe classifies whatever it sees and prints it verbatim.
+   This is RFC 8628's error vocabulary carried in FastAPI's `detail` field, and it settles the loop's design: **branch on the `detail` string, never on the status code.** A 400 is pending, denied and expired all at once, so a loop keyed on status would either spin forever on a denial or abandon a live attempt. The loop must also honour `slow_down` by widening its interval.
+
+   **Denial: answered** (2026-09-14). Denying in RomM's UI produces, on the very next poll:
+
+   ```
+   HTTP 400  {"detail": "access_denied"}
+   ```
+
+   Same status as pending, different `detail` — which is exactly the case a status-keyed loop would have got wrong, spinning for the remaining ~10 minutes while the user waited for the bot to notice they had said no.
+
+   Observed timings across runs: approval is seen within 2 polls (~10s) of the user clicking, denial within 3. `expires_in` is 600 and `interval` is 5, so an attempt is at most ~120 polls.
 2. **That `GET /api/client-tokens` lists the just-minted token with a matching `device_id`**, so `token_id` can be recorded. Without it, revocation and reconciliation both lose their handle — see the fallback below.
 3. **Whether `GET /api/streaming/sessions` identifies the holding user.** Its response schema is `{}`. The queue needs it to map a session back to a Discord member.
 4. **That RomM's approve screen renders the `name` field as sent.** Load-bearing, not cosmetic: with the confirmation code demoted to hygiene, this is one of only three real anti-phishing controls.
@@ -446,6 +456,8 @@ The remaining items are refinements, not shape changes. They are run **before** 
 6. **The format and timezone of `expires_at`.** Both `DeviceAuthTokenResponse` and `ClientTokenSchema` type it as a bare `string`, not `format: date-time`, and nullable. The whole expiry ladder — the 7-day and 1-day thresholds, `expiry_warned_at` crossing logic, "expiring within 7 days" in the revalidation query — depends on parsing it and knowing whether it is aware. A naive/aware mix here yields either no warnings or hourly ones. `python-dateutil` is already pinned.
 7. **Whether a token holding `roms.user.write` can release a session it does not own.** The force-reclaim paths assume an admin token overrides ownership, but `roms.user.write` is not an admin-override scope and nothing in the OpenAPI document establishes this. If it cannot, force-reclaim needs a different mechanism and the residual-risk paragraph needs revising.
 8. **Whether re-pairing with a stable `client_device_identifier` reuses the device row, and whether it replaces or accumulates client tokens.** Determines whether step 6's `created_at` tiebreak is sufficient or whether stale tokens pile up per user.
+
+   **Device reuse: confirmed** (2026-09-14). A second pairing sent the same `client_device_identifier` and RomM returned the *same* `device_id` (`7d439947-…`), so step 3's rationale holds: a stable identifier keeps one device row per Discord user rather than accumulating them. The second approval minted a new client token (`id` 1 → 2) rather than reusing the first, but the first had already been admin-deleted by that point, so **whether a live token is replaced or joined by a second is still open.** The `created_at` tiebreak stays in the design either way — it is correct if tokens accumulate and harmless if they do not.
 
 **Fallback if verification 2 fails — not needed.** Verification 2 passed on 2026-09-14, so enrollment stays as designed and the paragraph below is kept only as the recorded contingency should another RomM version behave differently.
 
