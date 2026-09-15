@@ -16,7 +16,7 @@ measure different things - intent to play, and RomM's count of who is
 actually in the room.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import quote
 
 import discord
@@ -106,6 +106,39 @@ def format_room(room: Dict[str, Any]) -> str:
     return f"**{name}** — hosted by {host} · {current}/{maximum}{lock}"
 
 
+def seat_counts(rooms: Dict[str, Any]) -> Tuple[int, int]:
+    """Seats taken and seats total, summed over every open room."""
+    taken = sum(r.get("current", 0) for r in rooms.values())
+    total = sum(r.get("max", 0) for r in rooms.values())
+    return taken, total
+
+
+def join_button_state(watcher: NetplayWatcher) -> Tuple[str, bool]:
+    """What the Join button says, and whether it can be pressed.
+
+    Both come from RomM's own counts, which is the whole reason there is
+    one button rather than one per seat: RomM reports how many are in a
+    room, never who. A "Player 2" button would be a slot the bot invented
+    and could not keep true - it would sit there looking free while the
+    room filled through the web UI. A count the bot did not make up cannot
+    drift like that.
+
+    No room open is not a dead end: the press still hands over the player,
+    which is where a room gets started.
+    """
+    taken, total = seat_counts(watcher.rooms)
+
+    if not total:
+        return "Join", False
+
+    free = max(total - taken, 0)
+    if not free:
+        return "Room full", True
+
+    seats = "seat" if free == 1 else "seats"
+    return f"Join — {free} {seats} left", False
+
+
 def seat_summary(rooms: Dict[str, Any]) -> str:
     """The one fact a reader is actually looking for, in words.
 
@@ -113,8 +146,7 @@ def seat_summary(rooms: Dict[str, Any]) -> str:
     post and the most decision-relevant, so it leads instead - and says what
     it means rather than making the reader do the subtraction.
     """
-    taken = sum(r.get("current", 0) for r in rooms.values())
-    total = sum(r.get("max", 0) for r in rooms.values())
+    taken, total = seat_counts(rooms)
     free = max(total - taken, 0)
 
     if not total:
@@ -142,8 +174,10 @@ def render_key(watcher: NetplayWatcher) -> str:
     """Everything the embed shows, flattened into a comparable string.
 
     The poll loop compares this against the last one to decide whether to
-    spend a Discord edit. Anything the embed renders must appear here - except
-    the relative timestamps, which Discord re-renders on its own (see
+    spend a Discord edit. Anything the post renders must appear here - the
+    embed, and the Join button, whose label and disabled state come from the
+    same `current`/`max` already folded in below. The exception is the
+    relative timestamps, which Discord re-renders on its own (see
     `relative`).
     """
     parts = [

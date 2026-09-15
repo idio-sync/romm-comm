@@ -628,5 +628,46 @@ class JoinLinkTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(f"/rom/{watcher.rom_id}/ejs", kwargs["view"].children[0].url)
 
 
+class SeatAwareButtonTests(unittest.IsolatedAsyncioTestCase):
+    """The seat state has to reach the button people actually see."""
+
+    def _watcher(self, rooms):
+        cog = make_cog()
+        cog.bot.config.DOMAIN = "https://roms.example.com"
+        watcher = register(cog)
+        watcher.state = NetplayState.LIVE
+        watcher.rooms = rooms
+        return cog, watcher
+
+    async def test_a_full_room_hands_back_a_dead_button(self):
+        cog, watcher = self._watcher({"a": {"current": 2, "max": 2}})
+
+        button = cog.join_view(watcher).children[0]
+
+        self.assertTrue(button.disabled)
+        self.assertEqual(button.label, "Room full")
+
+    async def test_a_free_seat_stays_pressable(self):
+        cog, watcher = self._watcher({"a": {"current": 1, "max": 2}})
+
+        button = cog.join_view(watcher).children[0]
+
+        self.assertFalse(button.disabled)
+        self.assertIn("1 seat left", button.label)
+
+    async def test_a_poll_that_fills_the_room_disables_the_button(self):
+        """Renders in isolation are worth nothing if the edit drops them."""
+        full = {"a": {"room_name": "r", "current": 2, "max": 2,
+                      "player_name": "h", "hasPassword": False}}
+        message = FakeMessage()
+        cog = make_polling_cog([full], message=message)
+        watcher = register(cog)
+        watcher.message_id = 1
+
+        await cog.poll_sessions()
+
+        self.assertTrue(message.last_edit["view"].children[0].disabled)
+
+
 if __name__ == "__main__":
     unittest.main()

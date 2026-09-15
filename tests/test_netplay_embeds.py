@@ -11,6 +11,7 @@ from cogs.netplay.embeds import (
     ENDED_HINT,
     STALE_NOTE,
     build_netplay_embed,
+    join_button_state,
     player_link,
     render_key,
 )
@@ -221,6 +222,54 @@ class PlayerLinkTests(unittest.TestCase):
         self.assertNotIn(" ", link)
         self.assertEqual(link.count("&"), 0)
         self.assertEqual(link.count("="), 1)
+
+
+class JoinButtonStateTests(unittest.TestCase):
+    """The button says what RomM says, and nothing it cannot verify.
+
+    Seat numbers are deliberately absent: RomM reports a count, never an
+    identity, so a per-seat button would be a label the bot invented and
+    could not keep true.
+    """
+
+    def _state(self, rooms, **overrides):
+        return join_button_state(make_watcher(rooms=rooms, **overrides))
+
+    def test_no_room_yet_is_a_plain_join(self):
+        """Pressing still opens the player, where a room can be started."""
+        self.assertEqual(self._state({}, state=NetplayState.PENDING),
+                         ("Join", False))
+
+    def test_one_free_seat_is_singular(self):
+        label, disabled = self._state(
+            {"a": {"current": 1, "max": 2}}, state=NetplayState.LIVE)
+        self.assertIn("1 seat left", label)
+        self.assertFalse(disabled)
+
+    def test_several_free_seats_are_plural(self):
+        label, _ = self._state(
+            {"a": {"current": 1, "max": 4}}, state=NetplayState.LIVE)
+        self.assertIn("3 seats left", label)
+
+    def test_a_full_room_is_not_pressable(self):
+        label, disabled = self._state(
+            {"a": {"current": 2, "max": 2}}, state=NetplayState.LIVE)
+        self.assertEqual(label, "Room full")
+        self.assertTrue(disabled)
+
+    def test_seats_are_summed_across_rooms(self):
+        label, disabled = self._state(
+            {"a": {"current": 2, "max": 2}, "b": {"current": 1, "max": 4}},
+            state=NetplayState.LIVE)
+        self.assertIn("3 seats left", label)
+        self.assertFalse(disabled)
+
+    def test_an_overfull_room_does_not_go_negative(self):
+        """current can exceed max between a join and the next poll."""
+        label, disabled = self._state(
+            {"a": {"current": 5, "max": 2}}, state=NetplayState.LIVE)
+        self.assertEqual(label, "Room full")
+        self.assertTrue(disabled)
 
 
 if __name__ == "__main__":

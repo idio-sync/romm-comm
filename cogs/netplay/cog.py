@@ -18,7 +18,13 @@ from urllib.parse import quote
 import discord
 from discord.ext import commands, tasks
 
-from .embeds import build_netplay_embed, player_link, render_key, sanitize_name
+from .embeds import (
+    build_netplay_embed,
+    join_button_state,
+    player_link,
+    render_key,
+    sanitize_name,
+)
 from .views import MAX_SELECT_OPTIONS, RomSelectView
 from .watcher import NetplayWatcher, advance
 
@@ -58,10 +64,16 @@ class NetplayJoinView(discord.ui.View):
     when the bot restarts, which matches the watchers themselves.
     """
 
-    def __init__(self, cog, rom_id: int):
+    def __init__(self, cog, rom_id: int, *, label: str = "Join",
+                 disabled: bool = False):
         super().__init__(timeout=None)
         self.cog = cog
         self.rom_id = rom_id
+        # super().__init__ instantiates the decorated button and binds it
+        # to self under the callback's name, so this is the instance that
+        # goes out - not the class-level template.
+        self.join.label = label
+        self.join.disabled = disabled
 
     @discord.ui.button(label="Join", style=discord.ButtonStyle.primary, emoji="🎮")
     async def join(self, button: discord.ui.Button, interaction: discord.Interaction):
@@ -496,6 +508,7 @@ class Netplay(commands.Cog):
         # whose message_id is still None, so the tick in between is a no-op.
         embed = self.render(watcher)
         sent_key = render_key(watcher)
+        view = self.join_view(watcher)
 
         # ctx.respond, not ctx.send: after a defer only a response or followup
         # clears Discord's "thinking..." placeholder, and ApplicationContext
@@ -506,7 +519,7 @@ class Netplay(commands.Cog):
                 ctx,
                 prompt,
                 embed=embed,
-                view=NetplayJoinView(self, watcher.rom_id),
+                view=view,
             )
         except discord.HTTPException as e:
             # Release the slot. Leaving a watcher with no message behind would
@@ -519,6 +532,18 @@ class Netplay(commands.Cog):
 
         watcher.message_id = message.id
         watcher.last_render_key = sent_key
+
+    def join_view(self, watcher: NetplayWatcher) -> "NetplayJoinView":
+        """The button as it should look for this watcher right now.
+
+        Built fresh on every render rather than held on the watcher: the
+        seat state is part of the post, and a view kept around would go on
+        advertising seats that filled two polls ago.
+        """
+        label, disabled = join_button_state(watcher)
+        return NetplayJoinView(
+            self, watcher.rom_id, label=label, disabled=disabled
+        )
 
     def render(self, watcher: NetplayWatcher) -> discord.Embed:
         """Build the embed for a watcher's current state.
@@ -620,7 +645,7 @@ class Netplay(commands.Cog):
             # and a Join button that vanishes on the first seat change is
             # worse than never having had one. Terminal states drop it on
             # purpose - there is nothing left to join.
-            view = None if watcher.is_terminal else NetplayJoinView(self, watcher.rom_id)
+            view = None if watcher.is_terminal else self.join_view(watcher)
             await message.edit(embed=self.render(watcher), view=view)
             watcher.last_render_key = key
             return True
