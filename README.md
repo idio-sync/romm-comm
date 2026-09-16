@@ -1,283 +1,196 @@
-# RomM-ComM (RomM Communicator Module)
+<div align="center">
+  <img src=".github/logo_med.png" width="140">
 
-<img align="left" src=".github/logo_small.png">
+  <h1>RomM-ComM</h1>
+  <p><em>RomM Communicator Module — a Discord bot for your <a href="https://github.com/rommapp/romm">RomM</a> library.</em></p>
 
-A Discord bot that integrates with the [RomM](https://github.com/rommapp/romm) API to provide information about your ROM collection, handle user ROM requests, and control RomM from Discord.
+  <a href="https://github.com/idio-sync/romm-comm/actions/workflows/docker-image.yml"><img src="https://github.com/idio-sync/romm-comm/actions/workflows/docker-image.yml/badge.svg" alt="CI"></a>
+  <a href="https://hub.docker.com/r/idiosync000/romm-comm"><img src="https://img.shields.io/docker/pulls/idiosync000/romm-comm" alt="Docker pulls"></a>
+  <img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="Python 3.12+">
 
----
-
-<p align="center">
-  <img src=".github/Demo.gif" width="60%">
-</p>
-
----
-
-## Table of Contents
-
-- [Features](#features)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Discord Bot Token Creation](#discord-bot-token-creation)
-- [RomM Settings](#romm-settings)
-- [Configuration](#configuration)
-- [Recently Added Game Notifications](#recently-added-game-notifications)
-- [Visible Statistics](#visible-statistics)
-- [Emojis](#emojis)
-- [Available Commands](#available-commands)
-- [Requests](#requests)
-- [Netplay](#netplay)
-- [User Manager](#user-manager)
-- [Error Handling](#error-handling)
-- [Security](#security)
-- [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
-
----
-Disclaimer: This was primarily created using Claude Code after my project scope outpaced my programming ability.
-
-## Features
-
-### Current
-
-- **Recently Added**: Posts recently added ROM updates to a configured channel (batched when multiple ROMs are added).
-- **Request system**: Submit and manage ROM requests entirely from Discord. Requests are enriched with IGDB metadata when available. Optional [GGRequestz](https://github.com/XTREEMMAK/ggrequestz) integration. 
-- **Search**: Platform-specific searches and a random ROM roll. Results include metadata and download links.
-- **Netplay announcements**: Announce a RomM netplay session from Discord. The embed tracks the session live — waiting for a room, who is hosting, how many seats are filled — and links players straight into the browser player. Requires RomM netplay to be enabled server-side.
-- **Stats**: Near real-time collection statistics shown in voice channel names, the bot "Now Playing" status, and via commands.
-- **Multi-file support**: Searches support multi-file games; users can select one, several, or all files to download.
-- **Firmware search**: Lists firmware files for a platform with names, sizes, hashes, and download links.
-- **Scans**: Start/stop/status for different RomM scan types. The bot reports progress and a summary on completion.
-- **Emojis**: Uploads custom console emojis on install; uses emojis in responses and stats. Nitro-aware to expand/revert the emoji set.
-- **QR code generation**: Generate QR codes for 3DS/Vita [FBI Reloaded](https://github.com/TheRealZora/FBI-Reloaded)/[VitaShell](https://github.com/RealYoti/VitaShell) installs by reacting to /search replies with QR emoji (requires download endpoint auth to be disabled on the RomM instance).
-- **RomM user management**: Auto-create RomM accounts for Discord users via role assignment; manage Romm > Discord user linking via gui in Discord.
-- **Feed clients**: `/feeds` gives per-console setup instructions for RomM's five URL feeds — [Tinfoil](https://tinfoil.io/Download) (Switch), pkgj and pkgi (Vita/PSP/PSX/PS3), fpkgi (PS4/PS5), and Kekatsu (DS). Only consoles this server actually hosts are offered. To tell you in advance whether downloads will work, the bot probes its own download endpoint once it connects (an authenticated call to pick a ROM, then one unauthenticated request against it) and again at most once per `SYNC_RATE` after that, warning you if the RomM instance still has download-endpoint auth enabled.
-- **Rate-limited Discord interactions**: Built-in rate limiting to avoid overloading the Discord API.
-
-### Planned
-
-- Alternative chat client integrations: Matrix, Telegram, Slack (no ETA).
+  <br><br>
+  <img src=".github/Demo.gif" width="70%">
+</div>
 
 ---
 
-## Requirements
+Search the collection, take requests, announce netplay sessions, hand out console
+feed setup instructions, onboard users, and drive scans — all from Discord.
 
-- Python 3.12+
-- Python dependancies (see non-Docker installation below)
+> Disclaimer: this was primarily created using Claude Code after my project scope
+> outpaced my programming ability.
+
+## Contents
+
+[Quick start](#quick-start) · [Configuration](#configuration) · [Commands](#commands) ·
+[Netplay](#netplay) · [Console feeds](#console-feeds) · [Requests](#requests) ·
+[User manager](#user-manager) · [Recently added](#recently-added) ·
+[Stats](#stats) · [Emojis](#emojis) · [Troubleshooting](#troubleshooting)
 
 ---
 
-## Installation
+## What it does
+
+| | |
+|---|---|
+| **Search** | Platform-scoped search, random roll, multi-file selection, firmware listings with hashes and download links. QR codes for 3DS/Vita installs by reacting to a `/search` result. |
+| **Requests** | Submit and manage ROM requests from Discord, enriched with IGDB metadata, auto-filled on scan, with optional [GGRequestz](https://github.com/XTREEMMAK/ggrequestz) sync. |
+| **Netplay** 🆕 | Announce a RomM netplay session; the embed tracks seats, host and players live and links people straight into the browser player. |
+| **Console feeds** 🆕 | `/feeds` gives per-console setup steps for RomM's five URL feeds, offering only the consoles this server actually hosts. |
+| **Leaderboards** 🆕 | `/ra-leaderboard` ranks your users by RetroAchievements progress, server-wide or per game. |
+| **Recently added** | Posts new ROMs to a channel, batched and grouped by platform when a scan lands several at once. |
+| **Stats** | Live collection stats in voice channel names, the bot's "Now Playing" status, and on demand. |
+| **Users** | Auto-create RomM accounts from a Discord role, and link/unlink RomM ↔ Discord accounts from a GUI. |
+| **Scans** | Start, stop and follow every RomM scan type, with progress and a completion summary. |
+| **Emojis** | Uploads a console emoji set on install, expands it when the server has Nitro slots, and reverts cleanly when it doesn't. |
+
+Planned: Matrix, Telegram and Slack clients (no ETA).
+
+---
+
+## Quick start
 
 ### Docker
 
-1. `docker pull idiosync000/romm-comm:latest`
-2. Pass the environment variables (see [Configuration](#configuration)).
-3. Mount `/app/data` to a host directory — this stores the user/request DB and emoji sync status.
+```bash
+docker pull idiosync000/romm-comm:latest
+```
 
-### Non-Docker (local)
+Pass the [environment variables](#configuration) and mount `/app/data` to a host
+directory — it holds the user/request database and emoji sync state.
 
-1. Clone the repository or download the source code.
-2. Install dependencies:
+### Local
+
+Python 3.12+:
 
 ```bash
 pip install -r requirements.txt
+python bot.py
 ```
 
----
+### Discord bot setup
 
-## Discord Bot Token Creation
+Follow the [Pycord guide](https://docs.pycord.dev/en/stable/discord.html) to create
+the bot, then enable **Privileged Gateway Intents** and grant these permissions:
 
-- See the Pycord docs for bot creation and permission setup: https://docs.pycord.dev/en/stable/discord.html
-- Enable **Privileged Gateway Intents** in the bot settings.
+<p align="center"><img src=".github/screenshots/BotPermissions.png" width="55%"></p>
 
-### Permissions
-<p align="center">
-  <img src=".github/screenshots/BotPermissions.png" width="55%">
-</p>
+### RomM server settings
 
----
-
-## RomM Settings
-
-If you want downloads to work without requiring users to log in (including Switch shop / QR code console installs), set the following on your RomM server environment:
+To let downloads work without users logging in — required for QR installs and for
+the console feed clients that fetch unauthenticated — set on your RomM server:
 
 ```env
 DISABLE_DOWNLOAD_ENDPOINT_AUTH=true
 ```
 
-Setting this disables authentication for the download endpoint. If not set (or set to `false`), users must be logged in to RomM to download files.
-
 ---
 
 ## Configuration
 
-Create a `.env` file in the project root with the following variables.
+Create a `.env` in the project root.
 
 ```env
-# Required: Discord + RomM connection
+# Required
 TOKEN=your_discord_bot_token
 GUILD=your_guild_id
 API_URL=http://your_romm_host:port
+ROMM_CLIENT_TOKEN=rmm_your_client_token   # or ROMM_USER / ROMM_PASS
 
-# Required: RomM API auth — use EITHER a client token (preferred)...
-ROMM_CLIENT_TOKEN=rmm_your_client_token
-# ...OR a username/password:
-#ROMM_USER=api_username
-#ROMM_PASS=api_password
-
-# Optional
-ADMIN_ID=admin_user_id
-DOMAIN=your_website_domain
-REQUESTS_ENABLED=true
+# Commonly used
+ADMIN_ID=admin_user_or_role_id
+DOMAIN=https://your.public.romm.url
 IGDB_CLIENT_ID=your_client_id
 IGDB_CLIENT_SECRET=your_client_secret
 AUTO_REGISTER_ROLE_ID=romm_users_role_id
-UPDATE_VOICE_NAMES=true
 CHANNEL_ID=your_channel_id
 RECENT_ROMS_ENABLED=true
 RECENT_ROMS_CHANNEL_ID=your_channel_id
-RECENT_ROMS_MAX_PER_POST=10
-RECENT_ROMS_BULK_THRESHOLD=25
-GGREQUESTZ_ENABLED=false
-GGREQUESTZ_URL=http://ip:port
-GGREQUESTZ_API_KEY=ggr_api_key
-NETPLAY_ENABLED=true
-
 ```
 
-### Configuration details
+### Required
 
-**Required:**
-- `TOKEN` — Discord bot token.
-- `GUILD` — Discord server (guild) ID.
-- `API_URL` — Base URL for your RomM instance (use `http://ip:port` or a domain).
-- **RomM API auth (choose one):**
-  - `ROMM_CLIENT_TOKEN` — *(preferred, RomM 4.8+)* A Client API Token so the bot connects without storing a user's password. Create one in the RomM web UI under your user profile → **API Tokens** (or `POST /api/client-tokens`), granting the scopes `roms.read platforms.read firmware.read users.read users.write me.write assets.read`. It must be created by an admin user, since scopes are capped by the creating user's permissions (user-manager commands need `users.write`). When set, `ROMM_USER`/`ROMM_PASS` are not required. `assets.read` is required by the netplay commands; existing tokens created before it was added must be reissued.
-  - `ROMM_USER` / `ROMM_PASS` — Username/password fallback used when no client token is set. Legacy `USER` / `PASS` still work, but `USER` can collide with the operating system username.
+| Variable | Description |
+|---|---|
+| `TOKEN` | Discord bot token. |
+| `GUILD` | Discord server (guild) ID. |
+| `API_URL` | Base URL of your RomM instance (`http://ip:port` or a domain). |
+| `ROMM_CLIENT_TOKEN` | **Preferred** (RomM 4.8+). See below. |
+| `ROMM_USER` / `ROMM_PASS` | Fallback when no client token is set. Legacy `USER` / `PASS` still work, but `USER` can collide with the OS username. |
 
-**Common optional settings (defaults shown where applicable):**
-- `ADMIN_ID` — User OR role ID allowed to run admin commands (scan, sync users, etc.).
-- `DOMAIN` — Public domain for download links (default: `No website configured`).
-- `SYNC_RATE` — How often to sync with the API in seconds (default: `3600`).
-- `UPDATE_VOICE_NAMES` — Enable voice channel stats (default: `true`).
-- `REQUESTS_ENABLED` — Enable request commands (default: `true`).
-- `IGDB_CLIENT_ID`, `IGDB_CLIENT_SECRET` — For request metadata (can be shared with RomM).
-- `AUTO_REGISTER_ROLE_ID` — Role that triggers automatic RomM invite link DMs to users.
-- `CHANNEL_ID` — Channel for sync results and user manager logs.
-- `RECENT_ROMS_*` — Controls for recent-ROM posting (enabled, channel id, thresholds).
-- `GGREQUESTZ_ENABLED` — Enable GGrrequestz for request managmenet (default: false).
-- `GGREQUESTZ_URL` — Base URL for your GGRequestz instance (use `http://ip:port` or a domain).
-- `GGREQUESTZ_API_KEY`  — Your GGRequestz API key. GGRequestz enforces key scopes
-  per route and denies anything unscoped, so the key needs `requests:read`,
-  `requests:write` and `games:read`. A key missing one gets a 403 naming it; the
-  bot logs that at first use, not at startup.
+**Client API token.** Create one in the RomM web UI under your profile →
+**API Tokens** (or `POST /api/client-tokens`) with the scopes:
 
----
-
-## Available Commands
-
-- `/search [platform] [game]` — Search ROMs with interactive results and optional QR code for console installs. 
-- `/request`, `/my_requests`, `/request_admin` — Submit, view, and manage requests.
-- `/random [platform]` — Fetch a random ROM (platform optional).
-- `/firmware [platform]` — List firmware files with hash details and download links.
-- `/scan [option]` — Run or check scans (admin only): `full`, `platform`, `stop`, `status`, `unidentified`, `hashes`, `new_platforms`, `partial`, `summary`.
-- `/platforms` — Display all available platforms with their ROM counts.
-- `/netplay [platform] [game]` — Announce a netplay session for a game in your library. The bot posts an embed with a join link and keeps it updated as players join and leave, then marks it ended when the session finishes.
-- `/feeds [device]` — Setup instructions for connecting a console to this server: feed URL, your RomM username, client-specific steps, and the file formats that console can actually install. Replaces the old `/switch_shop_info`, which covered Switch only. Responses are private to you.
-- `/igdb [option]` — View list of games from IGDB: `upcoming`, `recent`, `popular`, or `exclusive`, generally or by platform with option to request.
-- `/user_manager` — Manage Romm and Discord users (linking, new account prompting, etc.) (admin only).
-- `/refresh_recent_metadata` — Refresh recently added game notifiction metadata/covers (admin only).
-- **`/ra-leaderboard [game]`** — RetroAchievements leaderboard. With no argument it ranks users across the server by total achievements earned (hardcore and games-mastered shown as columns); pass a game name for a per-game board. Discord-linked users show their server name with a 🔗 marker. Requires the bot's RomM token to have the `users.read` scope (already in the default `ROMM_CLIENT_TOKEN` scope list and the OAuth grant).
-
----
-
-## Recently Added Game Notifications
-<img align="right" width="300" height="300" src=".github/screenshots/RecentlyAddedSingle.png">
-
-- When enabled (`RECENT_ROMS_ENABLED=true`) the bot posts newly added games to the configured channel.
-- If multiple games added from a scan, the notification shows a list of games grouped into a single response sorted by platform.
-- `/refresh_recent_metadata [count: n]` where n is the number of messages you want to go back and refresh, from the most recent. Default is 1, which is the most recently posted notification.
-- If only text is changed, the notification is edited. If covers change, the original message is deleted and a new message is posted with the new cover. This due to a Discord file attachment limitation.
-
----
-
-## Visible Statistics
-
-### Voice channel stats
-<img align="right" width="300" height="300" src=".github/screenshots/VC%20Stats.png">
-
-When enabled (`UPDATE_VOICE_NAMES=true`) the bot creates voice channels to display:
-- Platform counts
-- ROM count
-- Save and save-state counts
-- Screenshot count
-- RomM user count
-- Storage usage
-
-Voice channel names are only updated when the underlying stat changes. The bot will create new channels and delete old ones to avoid duplicates.
-
-### Bot status
-<img align="right" width="300" height="300" src=".github/screenshots/Rich%20Presence.png">
-
-The bot updates its "Now Playing" / status with the total ROM count whenever it refreshes API data.
-
----
-
-## Emojis
-<img align="right" width="300" height="300" src=".github/screenshots/Basic%20Emojis.png">
-
-- On first boot or when joining a server, the bot uploads a standard set of custom console emojis (default ~50).
-- If the server has boosted Nitro/extra emoji slots available, the bot can upload an extended emoji set; if Nitro is later removed the bot reverts to the standard list to preserve the most-used emojis.
-- Emojis are used throughout bot responses to visually identify platforms when a matching emoji exists on the server. The extended emoji set covers less popular consoles as well as variants.
-- The bot has an even more extended list of emojis that it uploads to itself which are only usable in bot replies. This consists of every emoji on teh previous two lists plus logos and more obscure console emojis.
-- If you want to delete the emojis uploaded to the server (usable by users) you can, emojis used in bot responses will not be affected and the server emoji sync is tracked so they will not be reuploaded. 
-
----
-
-## Requests
-
-<img align="right" width="300" height="450" src=".github/screenshots/RequestManager.png">
-
-**User features:**
-- Submit requests with platform, game name, and optional details.
-- Platforms match to IGDB, attempts IGDB matching for fetching metadata. 
-- Non-matching requests will still go through for things like rom hacks or unrealeased games, just without metadata.
-- Detect existing ROMs in Romm to avoid unnecissary requests and brings up /search results automatically if found.
-- DMs requester notification when requests are avalable.
-- Handles duplicate requests, additional requesters will also be notified if game is added. 
-- Per user request cap (currently 25 pending each).
-- Requests can be filled automatically during Romm filesystem scan or manually by admin.
-
-**Admin features:**
-- View, filter, and manage pending requests.
-- Manually mark as fulfilled, reject or add notes.
-- Requester's Discord avatar is present in the request embed as the thumbnail.
-
-**GGRequestz Integration**
-- If enabled, requests get sent to [GGRequestz](https://github.com/XTREEMMAK/ggrequestz) for management.
-- Requests that are detected during a scan are automatically marked as fulfilled in GGRequestz and users are notified in Discord.
-- Manual fulfillments and rejections made in Discord are synced to GGRequestz, users are notified in Discord.
-- Requests fulfilled or rejected in GGRequestz are synced to Discord when an admin runs /request_admin or a user runs /my_requests, request status is always accurate when checked. 
-- Requests in GGRequestz are only synced back to Discord if they originated from a Discord user. 
-- Requests in GGRequestz from Discord are "Requested By" the GGRequestz user that you login as in the bot env variables, Discord user is listed in request details. 
-
-Add the below variables to your .env to enable:
 ```
-GGREQUESTZ_ENABLED=true
-GGREQUESTZ_URL=http://ip:port
-GGREQUESTZ_API_KEY=ggr_api_key
+roms.read platforms.read firmware.read users.read users.write me.write assets.read
 ```
+
+Create it as an admin — scopes are capped by the creating user's permissions, and
+the user-manager commands need `users.write`. `assets.read` is required by netplay;
+tokens issued before it was added must be reissued.
+
+### Optional
+
+| Variable | Default | Description |
+|---|---|---|
+| `ADMIN_ID` | — | User **or** role ID allowed to run admin commands. |
+| `DOMAIN` | `No website configured` | Public RomM URL used for download and netplay join links. |
+| `SYNC_RATE` | `3600` | Seconds between API syncs. |
+| `CACHE_TTL` | `3900` | Cache lifetime in seconds. |
+| `API_TIMEOUT` | `30` | API request timeout in seconds. |
+| `LOG_LEVEL` | `INFO` | Logging verbosity. |
+| `UPDATE_VOICE_NAMES` | `true` | Voice channel stat displays. |
+| `CHANNEL_ID` | — | Channel for sync results and user-manager logs. |
+| `SHOW_API_SUCCESS` | `false` | Post API sync results to `CHANNEL_ID` (debugging). |
+| `REQUESTS_ENABLED` | `true` | Request commands. |
+| `IGDB_CLIENT_ID` / `IGDB_CLIENT_SECRET` | — | Request metadata; can be shared with RomM. |
+| `ENABLE_USER_MANAGER` | `true` | User management module. |
+| `AUTO_REGISTER_ROLE_ID` | — | Role that triggers automatic RomM invite DMs. |
+| `RECENT_ROMS_ENABLED` | `true` | Recent-ROM posting. |
+| `RECENT_ROMS_CHANNEL_ID` | — | Channel for recent-ROM notifications. |
+| `RECENT_ROMS_MAX_PER_POST` | `10` | ROM rows shown per post. |
+| `RECENT_ROMS_BULK_THRESHOLD` | `25` | Rows before collapsing to a platform summary. |
+| `GGREQUESTZ_ENABLED` | `false` | Send requests to GGRequestz. |
+| `GGREQUESTZ_URL` | — | GGRequestz base URL. |
+| `GGREQUESTZ_API_KEY` | — | Needs the `requests:read`, `requests:write` and `games:read` scopes. GGRequestz denies unscoped routes with a 403 naming the missing scope; the bot logs that at first use, not at startup. |
+| `NETPLAY_*` | — | See [Netplay](#netplay). |
+
+---
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `/search [platform] [game]` | Interactive search results, multi-file selection, optional QR code for console installs. |
+| `/random [platform]` | Roll a random ROM. |
+| `/platforms` | Every platform with its ROM count. |
+| `/firmware [platform]` | Firmware files with sizes, hashes and download links. |
+| `/igdb [option]` | Browse IGDB: `upcoming`, `recent`, `popular` or `exclusive`, optionally per platform, with a request shortcut. |
+| `/request`, `/my_requests` | Submit and track requests. |
+| `/netplay [platform] [game]` 🆕 | Announce a netplay session and keep the post live until it ends. |
+| `/feeds [device]` 🆕 | Private setup instructions for connecting a console to this server. |
+| `/ra-leaderboard [game]` 🆕 | RetroAchievements leaderboard, server-wide or for one game. |
+| `/help` | List every command the bot has loaded. |
+| `/scan [option]` 🔒 | `full`, `platform`, `stop`, `status`, `unidentified`, `hashes`, `new_platforms`, `partial`, `summary`. |
+| `/request_admin` 🔒 | View, filter and act on pending requests. |
+| `/user_manager` 🔒 | Link, invite and remove RomM/Discord users. |
+| `/refresh_recent_metadata [count]` 🔒 | Re-pull metadata and covers for posted recent-ROM notifications. |
+
+🔒 = admin only (`ADMIN_ID`).
+
 ---
 
 ## Netplay
 
-`/netplay [platform] [game]` posts an announcement for a game in your library
-and keeps it current: it starts as "waiting for a room", flips to the host and
-seat count once someone opens one, and marks itself ended when the session
-finishes.
+`/netplay [platform] [game]` posts an announcement for a game in your library and
+keeps it current: it starts as "waiting for a room", flips to the host and seat
+count once someone opens one, shows who is playing, and marks itself ended when the
+session finishes. The join link rides on a button that carries the seat count.
 
-**RomM server prerequisites.** Netplay is a RomM feature, and the bot only
-reports it — it cannot turn it on. In RomM's `config.yml`:
+### RomM server prerequisites
+
+Netplay is a RomM feature and the bot only reports it — it cannot turn it on. In
+RomM's `config.yml`:
 
 ```yaml
 emulatorjs:
@@ -287,9 +200,9 @@ emulatorjs:
       - urls: "stun:stun.l.google.com:19302"
 ```
 
-Restart RomM, then confirm with an **authenticated** request — the ICE server
-list is redacted to `[]` for anonymous callers, so an unauthenticated check
-reports a working server as unconfigured:
+Restart RomM, then confirm with an **authenticated** request — the ICE server list
+is redacted to `[]` for anonymous callers, so an unauthenticated check reports a
+working server as unconfigured:
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" https://your-romm/api/config \
@@ -298,96 +211,162 @@ curl -s -H "Authorization: Bearer $TOKEN" https://your-romm/api/config \
 
 Two things worth knowing before enabling it:
 
-- Turning netplay on switches in-browser play to the EmulatorJS `nightly`
-  build for **all** users, not just netplay sessions.
-- RomM netplay is host-streams-video, not lockstep. The host renders the game
-  and uploads a video stream to each guest, so a four-player room means three
-  outbound streams. The best host is whoever has the best upload, and STUN
-  alone will not connect two players who are both behind symmetric NAT — that
-  needs a TURN server.
+- Turning netplay on switches in-browser play to the EmulatorJS `nightly` build for
+  **all** users, not just netplay sessions.
+- RomM netplay is host-streams-video, not lockstep. The host renders the game and
+  uploads a stream to every guest, so a four-player room means three outbound
+  streams. The best host is whoever has the best upload — and STUN alone will not
+  connect two players who are both behind symmetric NAT; that needs TURN.
 
-**Bot configuration** (all optional):
+### Bot settings
 
-```env
-NETPLAY_ENABLED=true
-NETPLAY_POLL_INTERVAL=20
-NETPLAY_PENDING_TIMEOUT=900
-NETPLAY_SESSION_TIMEOUT=3600
-NETPLAY_MAX_WATCHERS=25
-```
+| Variable | Default | Description |
+|---|---|---|
+| `NETPLAY_ENABLED` | `true` | Enable the `/netplay` command. |
+| `NETPLAY_POLL_INTERVAL` | `20` | Seconds between room checks. |
+| `NETPLAY_PENDING_TIMEOUT` | `900` | Seconds before an announcement with no room gives up. |
+| `NETPLAY_SESSION_TIMEOUT` | `3600` | Seconds before a session whose room stopped being listed is given up on. RomM omits a full room from `/netplay/list`, so a room that filled looks exactly like one that closed — this is a cap, not an observation. |
+| `NETPLAY_MAX_WATCHERS` | `25` | Sessions tracked at once; each costs one RomM request per interval. |
 
-- `NETPLAY_ENABLED` — enable the `/netplay` command (default: `true`).
-- `NETPLAY_POLL_INTERVAL` — seconds between room checks (default: `20`).
-- `NETPLAY_PENDING_TIMEOUT` — seconds before an announcement with no room gives up (default: `900`).
-- `NETPLAY_SESSION_TIMEOUT` — seconds before a session whose room stopped being listed is
-  given up on (default: `3600`). RomM omits a full room from `/netplay/list`, so a room that
-  filled looks exactly like one that closed; this is a cap, not an observation.
-- `NETPLAY_MAX_WATCHERS` — how many sessions to track at once (default: `25`). Each one costs one RomM request per interval.
-
-`DOMAIN` must be set to your public RomM URL, or the bot cannot build a join
-link and `/netplay` will refuse to run.
+`DOMAIN` must point at your public RomM URL or the bot cannot build a join link and
+`/netplay` will refuse to run.
 
 ---
 
-## User Manager
+## Console feeds
+
+`/feeds [device]` returns — privately — everything needed to point a console at this
+server: the feed URL, your RomM username, client-specific steps, and the file formats
+that console can actually install. It covers RomM's five URL feeds:
+
+| Client | Consoles |
+|---|---|
+| [Tinfoil](https://tinfoil.io/Download) | Switch |
+| pkgj / pkgi | Vita, PSP, PSX, PS3 |
+| fpkgi | PS4, PS5 |
+| Kekatsu | DS |
+
+Only consoles this server actually hosts are offered. To warn you in advance that
+downloads will fail, the bot probes its own download endpoint on connect (one
+authenticated call to pick a ROM, then one unauthenticated request against it) and
+at most once per `SYNC_RATE` after that, flagging an instance that still has
+download-endpoint auth enabled.
+
+Replaces the old `/switch_shop_info`, which covered Switch only.
+
+---
+
+## Requests
+
+<img align="right" width="300" height="450" src=".github/screenshots/RequestManager.png">
+
+**For users**
+
+- Submit with platform, game name and optional details; IGDB supplies metadata when
+  the title matches.
+- Non-matching titles still go through — ROM hacks and unreleased games just arrive
+  without metadata.
+- Already-owned games are detected up front and answered with `/search` results.
+- Duplicate requests are merged; every requester gets the DM when the game lands.
+- 25 pending requests per user.
+- Filled automatically during a RomM filesystem scan, or manually by an admin.
+
+**For admins**
+
+- View, filter and manage pending requests; mark fulfilled, reject, or add notes.
+- The requester's Discord avatar is the embed thumbnail.
+
+**GGRequestz integration** — when enabled, requests are mirrored to
+[GGRequestz](https://github.com/XTREEMMAK/ggrequestz):
+
+- Scan-detected fulfillments are marked fulfilled there and announced in Discord.
+- Manual fulfillments and rejections in Discord sync outward.
+- Fulfillments and rejections made in GGRequestz sync back whenever `/request_admin`
+  or `/my_requests` runs, so status is always accurate when checked.
+- Only requests that originated from a Discord user sync back.
+- Requests appear in GGRequestz as "Requested By" the account in your env variables;
+  the Discord user is named in the request details.
+
+---
+
+## User manager
 
 <img align="right" width="300" height="425" src=".github/screenshots/UserManager.png">
 
-- `/manage_users` — Manage Romm and Discord users (admin only).
-- Discord users can be linked to Romm users, entries in dropdown show if a user is linked or not (and to what user names).
-- Linking is useful for keeping track of who on the server has a Romm account, also for enriching request information in the request manager.
-- Unlinking accounts deletes or disables (or just unlinks) Romm user from server (unless user is an admin).
-- Select Discord user and hit 'Send Invite' button to manually onboard user to Romm via DM (see Onboarding via role).
+- `/user_manager` — admin GUI for RomM and Discord accounts.
+- Link Discord users to RomM users; the dropdown shows who is linked and to what.
+  Linking tracks who on the server has an account and enriches request embeds.
+- Unlinking can delete, disable, or merely unlink the RomM account — admins are
+  skipped.
+- **Send Invite** onboards a user to RomM by DM.
 
-**Onboarding via role:**
-- Sends RomM invite links automatically when specified role is added to Discord user.
-- Uses Discord display name + suffixes, generates a random password and DMs the user their login info.
-- Deletes or disables RomM accounts created by the bot when the role is removed (or just unlinks), skips admin accounts.
+**Onboarding by role** — when `AUTO_REGISTER_ROLE_ID` is set, adding that role DMs
+the user a RomM invite with a generated password and a username based on their
+Discord display name. Removing the role deletes, disables or unlinks the account the
+bot created; admin accounts are never touched.
 
 ---
 
-## Error Handling
+## Recently added
 
-- Handles API connectivity issues, rate limits, data validation, and caching errors.
-- Logs are descriptive but avoid exposing sensitive info.
+<img align="right" width="300" height="300" src=".github/screenshots/RecentlyAddedSingle.png">
+
+- With `RECENT_ROMS_ENABLED=true`, new games are posted to the configured channel.
+- Several games from one scan are grouped into a single post, sorted by platform.
+- `/refresh_recent_metadata [count]` re-pulls metadata for the last *count* posts
+  (default 1).
+- Text-only changes edit the existing message; a changed cover means the old message
+  is deleted and reposted, because Discord cannot swap an attachment.
+
+---
+
+## Stats
+
+<img align="right" width="300" height="300" src=".github/screenshots/VC%20Stats.png">
+
+With `UPDATE_VOICE_NAMES=true` the bot maintains voice channels showing platform
+count, ROM count, saves and save states, screenshots, RomM users and storage used.
+Names are only rewritten when the underlying number changes, and stale duplicate
+channels are cleaned up.
+
+The bot's "Now Playing" status carries the total ROM count and refreshes with every
+API sync.
+
+---
+
+## Emojis
+
+<img align="right" width="300" height="300" src=".github/screenshots/Basic%20Emojis.png">
+
+- On first boot, or on joining a server, the bot uploads a standard console emoji set
+  (~50) and uses it throughout its responses to identify platforms.
+- With Nitro emoji slots available it uploads an extended set covering less common
+  consoles and variants, reverting to the standard list if Nitro goes away.
+- A larger set — both lists plus logos and obscure consoles — is uploaded to the bot
+  itself and is usable only in bot replies.
+- Deleting the server-side emojis is safe: bot replies are unaffected, and the sync
+  state remembers not to re-upload them.
 
 ---
 
 ## Security
 
-- Uses OAuth2 bearer tokens for RomM API.
-- Secrets configured in environment variables.
-- No password logging.
-- Strict permission checks for admin commands.
+- OAuth2 bearer tokens for the RomM API, with secrets read from the environment.
+- No password logging, and logs stay descriptive without exposing sensitive values.
+- Admin commands are permission-checked against `ADMIN_ID`.
 
 ---
 
 ## Troubleshooting
 
-- Verify the Discord bot token and permissions.
-- Check API connectivity (`API_URL`).
-- Review logs for issues.
-- Confirm `.env` configuration.
+- Confirm the bot token, gateway intents and permissions.
+- Check `API_URL` connectivity and that the RomM token carries every required scope.
+- Raise `LOG_LEVEL=DEBUG` and read the logs; API, rate-limit, validation and cache
+  failures are all reported there.
 
 ---
 
 ## Contributing
 
-Contributions are welcome. Open issues or PRs with clear descriptions, logs, and reproduction steps.
-
----
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+Contributions are welcome — open an issue or PR with a clear description, logs and
+reproduction steps.
