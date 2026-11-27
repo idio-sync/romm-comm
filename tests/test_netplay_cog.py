@@ -13,6 +13,7 @@ import discord
 from cogs.netplay.cog import Netplay, NetplayJoinView
 from cogs.netplay.embeds import render_key
 from cogs.netplay.watcher import NetplayState
+from romm_client import NOT_FOUND
 
 
 def make_cog(max_watchers=25):
@@ -209,6 +210,17 @@ class TickTests(unittest.IsolatedAsyncioTestCase):
         await cog.tick(now=1000.0)
         await cog.tick(now=1020.0)
         self.assertEqual(cog.watchers, {})
+
+    async def test_a_rom_romm_no_longer_serves_frees_its_slot(self):
+        """Before, a 404 read as a failure: stale forever, slot held."""
+        cog = make_polling_cog([ROOM, NOT_FOUND])
+        watcher = register(cog)
+        watcher.message_id = 1
+        await cog.tick(now=1000.0)
+        await cog.tick(now=1020.0)
+        self.assertIs(watcher.state, NetplayState.ENDED)
+        self.assertEqual(cog.watchers, {})
+        self.assertEqual(cog._message.edits, 2)
 
     async def test_registering_during_a_tick_does_not_raise(self):
         """The loop awaits per watcher; a command can mutate the registry."""

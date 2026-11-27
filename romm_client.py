@@ -42,6 +42,23 @@ def parse_romm_version(raw: Any) -> Optional[Tuple[int, int, int]]:
     return int(match[1]), int(match[2]), int(match[3])
 
 
+class _NotFound:
+    """RomM's own 404: what was asked about does not exist, or is hidden from us.
+
+    Distinct from None, which means the request failed and says nothing about
+    the thing asked about. Only returned by calls that opt in with
+    `not_found=NOT_FOUND`; every other call still sees None for a 404.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "NOT_FOUND"
+
+
+NOT_FOUND = _NotFound()
+
+
 class RommApiError(Exception):
     """A request to RomM did not succeed."""
 
@@ -322,9 +339,15 @@ class RommClient:
         data: Optional[Dict] = None,
         params: Optional[Dict] = None,
         form_data: Optional[aiohttp.FormData] = None,
-        require_csrf: bool = False
-    ) -> Optional[Dict]:
+        require_csrf: bool = False,
+        not_found: Any = None,
+    ) -> Any:
         """Make an authenticated API request with proper headers.
+
+        Returns the decoded body, or None on failure. A caller that needs to
+        tell "RomM says this does not exist" apart from "the request failed"
+        passes a marker as `not_found` (normally NOT_FOUND), which is returned
+        instead of None for a 404 that RomM itself produced. See _read_response.
 
         require_csrf is a no-op against current RomM. Its CSRFMiddleware skips
         validation outright when the Authorization scheme is bearer or basic,
@@ -373,19 +396,37 @@ class RommClient:
                     if await self.refresh_oauth_token():
                         headers["Authorization"] = f"Bearer {self.access_token}"
                         async with session.request(method, url, **request_kwargs) as retry_response:
-                            return await self._read_response(retry_response)
+                            return await self._read_response(retry_response, not_found)
                     else:
                         return None
                 else:
-                    return await self._read_response(response)
+                    return await self._read_response(response, not_found)
 
         except Exception as e:
             logger.error(f"Error making authenticated request: {e}", exc_info=True)
             return None
 
     @staticmethod
-    async def _read_response(resp: aiohttp.ClientResponse) -> Optional[Dict]:
-        """Turn a response into a dict, or None if the request failed."""
+    async def _read_response(resp: aiohttp.ClientResponse, not_found: Any = None) -> Any:
+        """Turn a response into a dict, or None if the request failed.
+
+        With `not_found` set, a 404 carrying FastAPI's JSON error body
+        ({"detail": ...}) returns `not_found` instead. The body check is what
+        makes it RomM's answer: a reverse proxy that cannot route the request
+        also says 404, usually as an HTML page, and that is a failed request,
+        not a statement about the thing asked about.
+        """
+        if resp.status == 404 and not_found is not None:
+            try:
+                body = await resp.json(content_type=None)
+            except Exception:
+                body = None
+            if isinstance(body, dict) and 'detail' in body:
+                logger.debug(f"RomM reports not found: {body.get('detail')}")
+                return not_found
+            logger.error("Request failed with status 404 and no RomM error body")
+            return None
+
         if resp.status in (200, 201, 204):
             if resp.status == 204:
                 return {}  # Success with no content is a valid response
@@ -516,10 +557,14 @@ class RommClient:
         raw = system.get('VERSION') if isinstance(system, dict) else None
         return parse_romm_version(raw)
 
-    async def list_netplay_rooms(self, rom_id: int) -> Optional[Dict[str, Any]]:
+    async def list_netplay_rooms(self, rom_id: int) -> Any:
         """GET /api/netplay/list?game_id=<rom_id> - open rooms for one ROM.
 
-        Returns a dict keyed by room session id, or {} when nothing is open.
+        Returns a dict keyed by room session id, {} when nothing is open,
+        NOT_FOUND when RomM says the ROM is gone, or None when the request
+        failed. NOT_FOUND only happens on RomM 5.4+, which 404s a ROM that was
+        deleted or hidden from us; earlier versions never looked the ROM up
+        and answered {}.
         game_id is mandatory - omitting it is a 422 - so there is no way to
         list every room on the server, which is why callers poll a bounded
         set of ROMs rather than enumerating.
@@ -530,7 +575,7 @@ class RommClient:
         callers must tolerate a None and try again on the next tick.
         """
         return await self.make_authenticated_request(
-            'GET', 'netplay/list', params={'game_id': rom_id}
+            'GET', 'netplay/list', params={'game_id': rom_id}, not_found=NOT_FOUND
         )
 
     async def netplay_scope_ok(self) -> Optional[bool]:

@@ -25,6 +25,8 @@ from .watcher import NetplayState, NetplayWatcher
 
 ENDED_HINT = "Run `/netplay` to announce a new one."
 STALE_NOTE = "⚠️ Cannot reach RomM — this may be out of date."
+# Deleted and hidden are one answer from RomM, so the note names both.
+ROM_GONE_NOTE = "This game is no longer available in RomM."
 UNLISTED_NOTE = (
     "RomM only lists rooms with a free seat, so this drops off while it is "
     "full. It comes back here if someone leaves."
@@ -194,6 +196,7 @@ def render_key(watcher: NetplayWatcher) -> str:
         # The flag, not the moment: the embed renders it as a relative
         # timestamp, which Discord keeps current on its own.
         str(watcher.unlisted_since is not None),
+        str(watcher.rom_gone),
         ",".join(str(uid) for uid in watcher.roster),
     ]
     for room_id in sorted(watcher.rooms):
@@ -223,6 +226,8 @@ def build_description(watcher: NetplayWatcher, domain: str) -> str:
     # while RomM is unreachable, so the warning is not scoped to LIVE.
     # render_key carries `stale`, so a change here is actually delivered.
     lines = [STALE_NOTE] if watcher.stale else []
+    if watcher.rom_gone:
+        lines.append(ROM_GONE_NOTE)
 
     if watcher.state is NetplayState.PENDING:
         lines.append(f"**{watcher.requester_name}** wants to play — no room is open yet.")
@@ -271,6 +276,15 @@ def build_description(watcher: NetplayWatcher, domain: str) -> str:
             lines.append(f"Ran for {ran} · ended {relative(watcher.ended_at)}")
         else:
             lines.append("Session over.")
+        return "\n".join(lines)
+
+    if watcher.rom_gone:
+        # Not "no room was ever opened": the game went away before one could
+        # be, and blaming the wait on the players would be wrong.
+        lines.append(
+            f"**{watcher.requester_name}** announced this "
+            f"{relative(watcher.created_at)}."
+        )
         return "\n".join(lines)
 
     lines.append(

@@ -12,7 +12,7 @@ import unittest
 from types import SimpleNamespace
 from typing import Any, Dict, Optional
 
-from romm_client import RommClient
+from romm_client import NOT_FOUND, RommClient
 
 
 class RecordingClient(RommClient):
@@ -24,8 +24,9 @@ class RecordingClient(RommClient):
 
     async def make_authenticated_request(self, method, endpoint, data=None,
                                          params=None, form_data=None,
-                                         require_csrf=False):
+                                         require_csrf=False, not_found=None):
         self.calls.append((method, endpoint, params))
+        self.not_found = not_found
         return self._result
 
 
@@ -96,6 +97,64 @@ class ListNetplayRoomsTests(unittest.IsolatedAsyncioTestCase):
         }
         client = RecordingClient(rooms)
         self.assertEqual(await client.list_netplay_rooms(50265), rooms)
+
+
+class JsonResponse:
+    """Just what _read_response reads off a response."""
+
+    def __init__(self, status, body=None, raises=False):
+        self.status = status
+        self._body = body
+        self._raises = raises
+
+    async def json(self, content_type="application/json"):
+        if self._raises:
+            raise ValueError("not JSON")
+        return self._body
+
+    async def text(self):
+        return str(self._body)
+
+
+class RomGoneTests(unittest.IsolatedAsyncioTestCase):
+    """RomM 5.4+ 404s /netplay/list for a ROM deleted or hidden from us.
+
+    Only RomM's own 404 counts. A proxy that cannot route the request also
+    says 404, and ending every watched session over that would be wrong.
+    """
+
+    async def test_room_polls_opt_in_to_not_found(self):
+        client = RecordingClient({})
+        await client.list_netplay_rooms(50265)
+        self.assertIs(client.not_found, NOT_FOUND)
+
+    async def test_romms_404_body_reads_as_not_found(self):
+        body = {"detail": "Rom with id '50265' not found"}
+        result = await RommClient._read_response(JsonResponse(404, body), NOT_FOUND)
+        self.assertIs(result, NOT_FOUND)
+
+    async def test_a_404_without_romms_body_is_a_failure(self):
+        response = JsonResponse(404, raises=True)  # an HTML page from a proxy
+        self.assertIsNone(await RommClient._read_response(response, NOT_FOUND))
+
+    async def test_a_404_with_some_other_json_is_a_failure(self):
+        response = JsonResponse(404, ["not", "fastapi"])
+        self.assertIsNone(await RommClient._read_response(response, NOT_FOUND))
+
+    async def test_callers_that_do_not_opt_in_still_get_none(self):
+        body = {"detail": "Rom with id '50265' not found"}
+        self.assertIsNone(await RommClient._read_response(JsonResponse(404, body)))
+
+    async def test_other_failures_are_still_none(self):
+        body = {"detail": "Internal error"}
+        self.assertIsNone(
+            await RommClient._read_response(JsonResponse(500, body), NOT_FOUND)
+        )
+
+    async def test_success_is_unchanged(self):
+        rooms = {"r1": {"current": 1, "max": 2}}
+        result = await RommClient._read_response(JsonResponse(200, rooms), NOT_FOUND)
+        self.assertEqual(result, rooms)
 
 
 class ScopeProbeTests(unittest.IsolatedAsyncioTestCase):
