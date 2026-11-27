@@ -48,11 +48,18 @@ class FakeRomm:
     def __init__(self, version=None, error=None):
         self.version = version
         self.error = error
+        self.scan_requests = []
+        # What POST /api/tasks/scan answers: (status, body).
+        self.scan_response = (202, {"task_id": "j1", "status": "queued"})
 
     async def get_server_version(self):
         if self.error:
             raise self.error
         return self.version
+
+    async def start_scan(self, payload):
+        self.scan_requests.append(payload)
+        return self.scan_response
 
 
 class FakeBot:
@@ -165,14 +172,16 @@ class ScanMetadataSourceTests(unittest.IsolatedAsyncioTestCase):
     """
 
     async def emitted_options(self, version=None, error=None, run="_scan_full"):
+        """The options RomM received, by whichever path the bot sent them."""
         bot = FakeBot(romm_version=version)
         bot.romm.error = error
         scan = Scan(bot)
         await getattr(scan, run)(FakeContext())
-        self.assertEqual(1, len(bot.sio.emitted))
-        event, options = bot.sio.emitted[0]
-        self.assertEqual("scan", event)
-        return options
+        sent = bot.romm.scan_requests + [
+            options for event, options in bot.sio.emitted if event == "scan"
+        ]
+        self.assertEqual(1, len(sent))
+        return sent[0]
 
     async def test_5_4_leaves_the_sources_to_romm(self):
         options = await self.emitted_options(version=(5, 4, 0))
@@ -208,6 +217,81 @@ class ScanMetadataSourceTests(unittest.IsolatedAsyncioTestCase):
                 with self.subTest(run=run, version=version):
                     options = await self.emitted_options(version=version, run=run)
                     self.assertLessEqual(set(options), allowed)
+
+
+class TasksApiScanTests(unittest.IsolatedAsyncioTestCase):
+    """RomM 5.4+ starts scans over POST /api/tasks/scan.
+
+    The gain is refusals arriving as an answer, before the bot says a scan
+    is running. Anything that says nothing about the scan falls back to the
+    socket, which every version takes.
+    """
+
+    async def start(self, version=(5, 4, 1), response=None):
+        bot = FakeBot(romm_version=version)
+        if response is not None:
+            bot.romm.scan_response = response
+        scan = Scan(bot)
+        ctx = FakeContext()
+        await scan._scan_full(ctx)
+        return bot, scan, ctx
+
+    async def test_5_4_uses_the_tasks_api_and_not_the_socket(self):
+        bot, scan, ctx = await self.start()
+        self.assertEqual(1, len(bot.romm.scan_requests))
+        self.assertEqual([], bot.sio.emitted)
+        self.assertTrue(scan.is_scanning)
+        self.assertEqual("🔍 Started full system scan", ctx.responses[0][0][0])
+
+    async def test_it_still_connects_the_socket_for_progress(self):
+        bot, _, _ = await self.start()
+        self.assertEqual(1, bot.socketio_manager.connect_calls)
+
+    async def test_before_5_4_it_uses_the_socket(self):
+        bot, scan, _ = await self.start(version=(5, 3, 1))
+        self.assertEqual([], bot.romm.scan_requests)
+        self.assertEqual("scan", bot.sio.emitted[0][0])
+        self.assertTrue(scan.is_scanning)
+
+    async def test_a_scan_already_running_is_refused_up_front(self):
+        bot, scan, ctx = await self.start(
+            response=(409, {"detail": "A library scan is already queued or running"})
+        )
+        self.assertFalse(scan.is_scanning)
+        self.assertFalse(bot.scan_state["is_scanning"])
+        self.assertIn("already running", ctx.responses[0][0][0])
+        self.assertEqual([], bot.sio.emitted)
+
+    async def test_no_scan_worker_is_refused_up_front(self):
+        bot, scan, ctx = await self.start(response=(503, {"detail": "No worker"}))
+        self.assertFalse(scan.is_scanning)
+        self.assertIn("no scan worker", ctx.responses[0][0][0])
+
+    async def test_invalid_options_show_romms_reason(self):
+        bot, scan, ctx = await self.start(
+            response=(422, {"detail": "platforms: Input should be a valid list"})
+        )
+        self.assertFalse(scan.is_scanning)
+        self.assertIn("platforms: Input should be a valid list", ctx.responses[0][0][0])
+
+    async def test_a_token_without_tasks_run_falls_back_to_the_socket(self):
+        bot, scan, _ = await self.start(response=(403, {"detail": "Forbidden"}))
+        self.assertEqual("scan", bot.sio.emitted[0][0])
+        self.assertTrue(scan.is_scanning)
+
+    async def test_an_unreachable_endpoint_falls_back_to_the_socket(self):
+        bot, scan, _ = await self.start(response=(None, None))
+        self.assertEqual("scan", bot.sio.emitted[0][0])
+        self.assertTrue(scan.is_scanning)
+
+    async def test_a_server_error_falls_back_to_the_socket(self):
+        bot, scan, _ = await self.start(response=(500, None))
+        self.assertEqual("scan", bot.sio.emitted[0][0])
+
+    async def test_both_paths_get_the_same_options(self):
+        rest_bot, _, _ = await self.start()
+        socket_bot, _, _ = await self.start(response=(403, None))
+        self.assertEqual(rest_bot.romm.scan_requests[0], socket_bot.sio.emitted[0][1])
 
 
 class ScanListenerTests(unittest.IsolatedAsyncioTestCase):

@@ -42,6 +42,19 @@ def parse_romm_version(raw: Any) -> Optional[Tuple[int, int, int]]:
     return int(match[1]), int(match[2]), int(match[3])
 
 
+# Always requested. Netplay needs roms.read on RomM 5.4+ and assets.read
+# before it, so both stay.
+BASE_OAUTH_SCOPES = (
+    'roms.read', 'platforms.read', 'firmware.read', 'users.read', 'users.write',
+    'me.write', 'assets.read',
+)
+# Requested too, but given up on if refused. RomM rejects the whole grant with
+# 403 "Insufficient scope" when the user lacks any one requested scope, so a
+# scope only some setups grant must never be able to break the login.
+# tasks.run lets the bot start scans with POST /api/tasks/scan (RomM 5.4+).
+OPTIONAL_OAUTH_SCOPES = ('tasks.run',)
+
+
 class _NotFound:
     """RomM's own 404: what was asked about does not exist, or is hidden from us.
 
@@ -175,7 +188,31 @@ class RommClient:
     # ------------------------------------------------------------------- auth
 
     async def get_oauth_token(self) -> bool:
-        """Get initial OAuth token using username/password."""
+        """Get initial OAuth token using username/password.
+
+        Asks for the optional scopes as well, and asks again without them if
+        RomM refuses the grant over scope. A refusal for any other reason -
+        a wrong password, a disabled account - is final.
+        """
+        full = BASE_OAUTH_SCOPES + OPTIONAL_OAUTH_SCOPES
+        granted = await self._password_grant(full, retry_on_scope=True)
+        if granted is None:
+            logger.warning(
+                f"RomM would not grant {', '.join(OPTIONAL_OAUTH_SCOPES)} to "
+                f"{self.config.USER}; logging in without. Scans will start over "
+                "the socket instead of the tasks API."
+            )
+            granted = await self._password_grant(BASE_OAUTH_SCOPES, retry_on_scope=False)
+        return bool(granted)
+
+    async def _password_grant(
+        self, scopes: Tuple[str, ...], *, retry_on_scope: bool
+    ) -> Optional[bool]:
+        """One OAuth password grant. True on success, False on failure.
+
+        None, only with retry_on_scope, when RomM refused because the user
+        lacks a requested scope - the one refusal worth asking again over.
+        """
         try:
             session = await self.ensure_session()
 
@@ -188,7 +225,7 @@ class RommClient:
             data.add_field('grant_type', 'password')
             data.add_field('username', self.config.USER)
             data.add_field('password', self.config.PASS)
-            data.add_field('scope', 'roms.read platforms.read firmware.read users.read users.write me.write assets.read')
+            data.add_field('scope', ' '.join(scopes))
 
             # Simple headers for OAuth token request
             headers = {
@@ -200,6 +237,13 @@ class RommClient:
                 response_text = await response.text()
                 logger.debug(f"Token response status: {response.status}")
                 logger.debug(f"Token response content-type: {response.headers.get('content-type')}")
+
+                if (
+                    retry_on_scope
+                    and response.status == 403
+                    and 'Insufficient scope' in response_text
+                ):
+                    return None
 
                 if response.status != 200:
                     raise RommAuthError(
@@ -542,6 +586,38 @@ class RommClient:
         configured server as unconfigured.
         """
         return await self.make_authenticated_request('GET', 'config')
+
+    async def start_scan(self, payload: Dict[str, Any]) -> Tuple[Optional[int], Any]:
+        """POST /api/tasks/scan (RomM 5.4+): queue a scan, and say why if not.
+
+        Returns (status, body); (None, None) when RomM could not be reached.
+        The status is the point: 409 means a scan is already queued or
+        running, 503 that no scan worker is up, 401/403 that this token lacks
+        tasks.run - answers the socket path only gives later, and only as an
+        error string. Read directly for the same reason as netplay_scope_ok:
+        make_authenticated_request flattens every failure to None.
+        """
+        try:
+            if not await self.ensure_valid_token():
+                return None, None
+
+            session = await self.ensure_session()
+            url = f"{self.config.API_BASE_URL}/api/tasks/scan"
+            headers = {
+                "Authorization": f"Bearer {self.access_token}",
+                "Accept": "application/json",
+            }
+
+            async with session.post(url, headers=headers, json=payload) as response:
+                try:
+                    body = await response.json(content_type=None)
+                except Exception:
+                    body = None
+                return response.status, body
+
+        except Exception as e:
+            logger.debug(f"Scan request could not complete: {e}")
+            return None, None
 
     async def get_server_version(self) -> Optional[Tuple[int, int, int]]:
         """RomM's release as (major, minor, patch), from /api/heartbeat.

@@ -122,7 +122,7 @@ RECENT_ROMS_CHANNEL_ID=your_channel_id
 **API Tokens** (or `POST /api/client-tokens`) with the scopes:
 
 ```
-roms.read platforms.read firmware.read users.read users.write me.write assets.read
+roms.read platforms.read firmware.read users.read users.write me.write assets.read tasks.run
 ```
 
 Create it as an admin, since scopes are capped by the creating user's permissions, and
@@ -132,6 +132,12 @@ On RomM 5.4+ the bot's user also needs the emulation read permission, which ever
 permission group has by default: without it RomM hides all netplay rooms, and the
 bot disables `/netplay` at startup when RomM reports it missing (that check needs
 `me.read`; without it the bot cannot tell, and leaves `/netplay` on).
+
+`tasks.run` is optional. On RomM 5.4+ it lets `/scan` start scans through RomM's
+tasks API, which refuses a scan straight away when one is already running or no scan
+worker is up. Without it scans start over the socket as before, and such a refusal
+only shows up afterwards as a failed scan. With `ROMM_USER`/`ROMM_PASS` the bot asks
+for `tasks.run` itself and logs in without it if RomM won't grant it.
 
 ### Optional
 

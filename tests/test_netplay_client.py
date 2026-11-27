@@ -12,7 +12,7 @@ import unittest
 from types import SimpleNamespace
 from typing import Any, Dict, Optional
 
-from romm_client import NOT_FOUND, RommClient
+from romm_client import BASE_OAUTH_SCOPES, NOT_FOUND, RommClient
 
 
 class RecordingClient(RommClient):
@@ -237,13 +237,14 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 class ScopeTests(unittest.TestCase):
     """Anchored on ROOT rather than the cwd, as tests/test_cog_lookups.py is."""
 
-    def test_oauth_grant_requests_both_netplay_scopes(self):
-        """netplay/list is assets.read through RomM 5.3, roms.read from 5.4."""
-        source = (ROOT / "romm_client.py").read_text(encoding="utf-8")
-        scope_lines = [ln for ln in source.splitlines() if "add_field('scope'" in ln]
-        self.assertTrue(scope_lines, "no OAuth scope line found in romm_client.py")
-        self.assertIn("assets.read", scope_lines[0])
-        self.assertIn("roms.read", scope_lines[0])
+    def test_oauth_grant_always_requests_both_netplay_scopes(self):
+        """netplay/list is assets.read through RomM 5.3, roms.read from 5.4.
+
+        Base, not optional: an optional scope is dropped when refused, and
+        netplay without its scope is a feature that silently never updates.
+        """
+        self.assertIn("assets.read", BASE_OAUTH_SCOPES)
+        self.assertIn("roms.read", BASE_OAUTH_SCOPES)
 
     def test_readme_documents_both_netplay_scopes(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
