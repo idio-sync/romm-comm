@@ -120,6 +120,47 @@ class ScopeProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await probe_returning(None))
 
 
+class PermissionProbeTests(unittest.IsolatedAsyncioTestCase):
+    """RomM 5.4 answers {} to a user without emulation read, not a 403.
+
+    Payloads follow backend/tests/endpoints/test_permissions_me.py at 5.4.1.
+    """
+
+    @staticmethod
+    def body(*actions, is_admin=False):
+        return {
+            "is_admin": is_admin,
+            "grants": [{"action": a, "scope": {"kind": "global"}} for a in actions],
+            "hidden": {"platforms": [], "roms": []},
+        }
+
+    async def test_requests_the_permissions_me_endpoint(self):
+        client = RecordingClient(self.body("rom.play"))
+        await client.netplay_permission_ok()
+        self.assertEqual(client.calls, [("GET", "permissions/me", None)])
+
+    async def test_rom_play_granted_is_a_yes(self):
+        client = RecordingClient(self.body("rom.view", "rom.play"))
+        self.assertIs(await client.netplay_permission_ok(), True)
+
+    async def test_rom_play_revoked_is_a_definite_no(self):
+        client = RecordingClient(self.body("rom.view", "netplay.host"))
+        self.assertIs(await client.netplay_permission_ok(), False)
+
+    async def test_admin_bypasses_the_grant(self):
+        client = RecordingClient(self.body(is_admin=True))
+        self.assertIs(await client.netplay_permission_ok(), True)
+
+    async def test_no_answer_is_undetermined(self):
+        """Pre-5.4 RomM has no such route; a token without me.read is refused."""
+        client = RecordingClient(None)
+        self.assertIsNone(await client.netplay_permission_ok())
+
+    async def test_an_unexpected_shape_is_undetermined(self):
+        client = RecordingClient({"detail": "something else"})
+        self.assertIsNone(await client.netplay_permission_ok())
+
+
 class GetServerConfigTests(unittest.IsolatedAsyncioTestCase):
     async def test_requests_the_config_endpoint(self):
         client = RecordingClient({"EJS_NETPLAY_ENABLED": True})
@@ -137,16 +178,18 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 class ScopeTests(unittest.TestCase):
     """Anchored on ROOT rather than the cwd, as tests/test_cog_lookups.py is."""
 
-    def test_oauth_grant_requests_assets_read(self):
-        """netplay/list is scope assets.read; without it every call 403s."""
+    def test_oauth_grant_requests_both_netplay_scopes(self):
+        """netplay/list is assets.read through RomM 5.3, roms.read from 5.4."""
         source = (ROOT / "romm_client.py").read_text(encoding="utf-8")
         scope_lines = [ln for ln in source.splitlines() if "add_field('scope'" in ln]
         self.assertTrue(scope_lines, "no OAuth scope line found in romm_client.py")
         self.assertIn("assets.read", scope_lines[0])
+        self.assertIn("roms.read", scope_lines[0])
 
-    def test_readme_documents_assets_read(self):
+    def test_readme_documents_both_netplay_scopes(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("assets.read", readme)
+        self.assertIn("roms.read", readme)
 
 
 if __name__ == "__main__":

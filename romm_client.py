@@ -504,7 +504,13 @@ class RommClient:
         )
 
     async def netplay_scope_ok(self) -> Optional[bool]:
-        """Whether our token carries the assets.read scope netplay needs.
+        """Whether our token carries the scope /netplay/list needs.
+
+        The scope moved in RomM 5.4.0: through 5.3 the route was guarded by
+        assets.read, from 5.4 by roms.read. The probe asks the route itself
+        rather than inspecting our scopes, so it is right on either version.
+        It still answers 403 before 404 on 5.4: the scope guard wraps the
+        handler, and the handler is what 404s game_id=0.
 
         True authorized, False definitely not (401/403), None undetermined -
         the server was unreachable, or answered something that says nothing
@@ -543,3 +549,27 @@ class RommClient:
         except Exception as e:
             logger.debug(f"Netplay scope probe could not complete: {e}")
             return None
+
+    async def netplay_permission_ok(self) -> Optional[bool]:
+        """Whether our RomM user holds the emulation-read permission.
+
+        RomM 5.4.0 added a permission check inside /netplay/list on top of
+        the scope check: a user without emulation read gets {} rather than a
+        403, which is indistinguishable from "nobody is playing". Every
+        permission group is granted it by default (migration 0153), so this
+        only bites when an admin has revoked it.
+
+        /api/permissions/me reports that grant as the UI action "rom.play"
+        (revoking emulation read is what drops it). Admins bypass the check.
+
+        True or False only on a successful answer. None when it cannot be
+        determined: RomM before 5.4 has no such endpoint (404), and a token
+        without me.read is refused - neither says anything about the grant.
+        """
+        body = await self.make_authenticated_request('GET', 'permissions/me')
+        if not isinstance(body, dict) or not isinstance(body.get('grants'), list):
+            return None
+        if body.get('is_admin'):
+            return True
+        actions = {g.get('action') for g in body['grants'] if isinstance(g, dict)}
+        return 'rom.play' in actions

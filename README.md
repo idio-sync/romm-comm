@@ -126,8 +126,12 @@ roms.read platforms.read firmware.read users.read users.write me.write assets.re
 ```
 
 Create it as an admin, since scopes are capped by the creating user's permissions, and
-the user-manager commands need `users.write`. `assets.read` is required by netplay;
-tokens issued before it was added must be reissued.
+the user-manager commands need `users.write`. Netplay needs `roms.read` on RomM 5.4+
+and `assets.read` on 5.3 and earlier; keeping both makes one token work on either.
+On RomM 5.4+ the bot's user also needs the emulation read permission, which every
+permission group has by default: without it RomM hides all netplay rooms, and the
+bot disables `/netplay` at startup when RomM reports it missing (that check needs
+`me.read`; without it the bot cannot tell, and leaves `/netplay` on).
 
 ### Optional
 

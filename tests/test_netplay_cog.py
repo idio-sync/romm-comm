@@ -374,6 +374,52 @@ class TickTests(unittest.IsolatedAsyncioTestCase):
 
 
 
+class StartupProbeTests(unittest.IsolatedAsyncioTestCase):
+    """Only a definite answer from RomM turns the feature off."""
+
+    def _cog(self, *, scope, permission):
+        cog = make_cog()
+        cog.scope_ok = True
+        cog.permission_ok = True
+
+        async def scope_probe():
+            return scope
+
+        async def permission_probe():
+            return permission
+
+        cog.bot.romm = SimpleNamespace(
+            netplay_scope_ok=scope_probe, netplay_permission_ok=permission_probe
+        )
+        return cog
+
+    async def test_a_refused_scope_disables(self):
+        cog = self._cog(scope=False, permission=True)
+        await cog.check_scope()
+        self.assertFalse(cog.scope_ok)
+
+    async def test_an_undetermined_scope_leaves_it_on(self):
+        cog = self._cog(scope=None, permission=True)
+        await cog.check_scope()
+        self.assertTrue(cog.scope_ok)
+
+    async def test_a_missing_emulation_permission_disables(self):
+        cog = self._cog(scope=True, permission=False)
+        await cog.check_permission()
+        self.assertFalse(cog.permission_ok)
+
+    async def test_an_undetermined_permission_leaves_it_on(self):
+        """RomM before 5.4, or a token without me.read."""
+        cog = self._cog(scope=True, permission=None)
+        await cog.check_permission()
+        self.assertTrue(cog.permission_ok)
+
+    async def test_a_granted_permission_leaves_it_on(self):
+        cog = self._cog(scope=True, permission=True)
+        await cog.check_permission()
+        self.assertTrue(cog.permission_ok)
+
+
 class FakeInteraction:
     """Only what the Join callback touches."""
 
