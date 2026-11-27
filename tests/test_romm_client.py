@@ -11,7 +11,7 @@ of one.
 
 import unittest
 
-from romm_client import RommApiError, RommAuthError, RommClient
+from romm_client import RommApiError, RommAuthError, RommClient, parse_romm_version
 
 
 class FakeResponse:
@@ -220,6 +220,46 @@ class ClientTokenTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(await client.ensure_valid_token())
         self.assertEqual("rmm_clienttoken", client.access_token)
+
+
+class ParseRommVersionTests(unittest.TestCase):
+    def test_a_release(self):
+        self.assertEqual((5, 4, 1), parse_romm_version("5.4.1"))
+
+    def test_a_pre_release_reads_as_its_release(self):
+        self.assertEqual((5, 5, 0), parse_romm_version("5.5.0-beta.1"))
+
+    def test_a_leading_v_is_tolerated(self):
+        self.assertEqual((5, 2, 0), parse_romm_version("v5.2.0"))
+
+    def test_development_and_junk_are_unknown(self):
+        for raw in ("development", "", None, 5, "5.4"):
+            with self.subTest(raw=raw):
+                self.assertIsNone(parse_romm_version(raw))
+
+
+class GetServerVersionTests(unittest.IsolatedAsyncioTestCase):
+    async def version_from(self, body):
+        client = object.__new__(RommClient)
+        calls = []
+
+        async def make_authenticated_request(method, endpoint, **kwargs):
+            calls.append((method, endpoint))
+            return body
+
+        client.make_authenticated_request = make_authenticated_request
+        version = await client.get_server_version()
+        self.assertEqual([("GET", "heartbeat")], calls)
+        return version
+
+    async def test_reads_system_version_from_the_heartbeat(self):
+        self.assertEqual((5, 4, 1), await self.version_from({"SYSTEM": {"VERSION": "5.4.1"}}))
+
+    async def test_a_failed_heartbeat_is_unknown(self):
+        self.assertIsNone(await self.version_from(None))
+
+    async def test_a_heartbeat_without_system_is_unknown(self):
+        self.assertIsNone(await self.version_from({"OTHER": {}}))
 
 
 if __name__ == "__main__":

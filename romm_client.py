@@ -19,11 +19,27 @@ import json
 import logging
 import re
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import aiohttp
 
 logger = logging.getLogger('romm_bot')
+
+
+_VERSION_RE = re.compile(r'^v?(\d+)\.(\d+)\.(\d+)')
+
+
+def parse_romm_version(raw: Any) -> Optional[Tuple[int, int, int]]:
+    """Read a RomM version string such as "5.4.1" or "5.5.0-beta.1".
+
+    Returns None for anything else, notably "development".
+    """
+    if not isinstance(raw, str):
+        return None
+    match = _VERSION_RE.match(raw.strip())
+    if not match:
+        return None
+    return int(match[1]), int(match[2]), int(match[3])
 
 
 class RommApiError(Exception):
@@ -485,6 +501,20 @@ class RommClient:
         configured server as unconfigured.
         """
         return await self.make_authenticated_request('GET', 'config')
+
+    async def get_server_version(self) -> Optional[Tuple[int, int, int]]:
+        """RomM's release as (major, minor, patch), from /api/heartbeat.
+
+        A pre-release reads as the release it leads to: "5.5.0-beta.1" is
+        (5, 5, 0), which is what feature checks want, since a feature lands in
+        the first alpha of its release. None for anything that is not a
+        numbered release - "development" builds, an unreachable server - so
+        callers must pick their own safe default.
+        """
+        body = await self.make_authenticated_request('GET', 'heartbeat')
+        system = body.get('SYSTEM') if isinstance(body, dict) else None
+        raw = system.get('VERSION') if isinstance(system, dict) else None
+        return parse_romm_version(raw)
 
     async def list_netplay_rooms(self, rom_id: int) -> Optional[Dict[str, Any]]:
         """GET /api/netplay/list?game_id=<rom_id> - open rooms for one ROM.

@@ -139,6 +139,16 @@ class RecentRomsMonitor(commands.Cog):
                 logger.debug(f"ROM {rom_id} still being identified, waiting for complete data")
                 return
 
+            # RomM 5.4+ says outright whether this scan added the ROM. Without
+            # it the only test is created_at against a cutoff that is set only
+            # for scans the bot started, so a scheduled or web-UI rescan would
+            # announce every ROM it touched that was never posted - and fetch
+            # each one's details first. Older servers omit the key entirely,
+            # which leaves that fallback in charge.
+            if data.get('is_new') is False:
+                logger.debug(f"ROM {rom_id} is not new to RomM, skipping")
+                return
+
             # Check if already processed (prevents duplicates from multiple socket events)
             async with self.processing_lock:
                 if rom_id in self.currently_processing or rom_id in self.recently_processed:

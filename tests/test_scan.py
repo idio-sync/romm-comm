@@ -44,8 +44,19 @@ class FakeConfig:
     pass
 
 
+class FakeRomm:
+    def __init__(self, version=None, error=None):
+        self.version = version
+        self.error = error
+
+    async def get_server_version(self):
+        if self.error:
+            raise self.error
+        return self.version
+
+
 class FakeBot:
-    def __init__(self, connect_result=True):
+    def __init__(self, connect_result=True, romm_version=None):
         self.scan_state = {
             "is_scanning": False,
             "scan_start_time": None,
@@ -59,6 +70,7 @@ class FakeBot:
         self.socketio_manager = FakeSocketIOManager(self.sio, connect_result)
         self.emoji_dict = {}
         self.dispatched = []
+        self.romm = FakeRomm(romm_version)
 
     def dispatch(self, event, *args):
         self.dispatched.append((event, args))
@@ -143,6 +155,59 @@ class ScanStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, bot.socketio_manager.connect_calls)
         self.assertEqual([], bot.sio.emitted)
         self.assertIn("already in progress", ctx.responses[0][0][0])
+
+
+class ScanMetadataSourceTests(unittest.IsolatedAsyncioTestCase):
+    """RomM 5.4 picks the enabled sources itself when "apis" is left out.
+
+    Before 5.4 a missing "apis" meant no sources, so the bot must keep naming
+    them for any server it cannot place at 5.4 or later.
+    """
+
+    async def emitted_options(self, version=None, error=None, run="_scan_full"):
+        bot = FakeBot(romm_version=version)
+        bot.romm.error = error
+        scan = Scan(bot)
+        await getattr(scan, run)(FakeContext())
+        self.assertEqual(1, len(bot.sio.emitted))
+        event, options = bot.sio.emitted[0]
+        self.assertEqual("scan", event)
+        return options
+
+    async def test_5_4_leaves_the_sources_to_romm(self):
+        options = await self.emitted_options(version=(5, 4, 0))
+        self.assertNotIn("apis", options)
+
+    async def test_a_5_5_pre_release_leaves_the_sources_to_romm(self):
+        options = await self.emitted_options(version=(5, 5, 0))
+        self.assertNotIn("apis", options)
+
+    async def test_5_3_still_names_igdb_and_moby(self):
+        options = await self.emitted_options(version=(5, 3, 1))
+        self.assertEqual(["igdb", "moby"], options["apis"])
+
+    async def test_an_unknown_version_still_names_them(self):
+        options = await self.emitted_options(version=None)
+        self.assertEqual(["igdb", "moby"], options["apis"])
+
+    async def test_a_failed_version_lookup_still_names_them(self):
+        options = await self.emitted_options(error=RuntimeError("down"))
+        self.assertEqual(["igdb", "moby"], options["apis"])
+
+    async def test_a_hash_scan_keeps_its_empty_list_on_any_version(self):
+        options = await self.emitted_options(version=(5, 4, 1), run="_scan_hashes")
+        self.assertEqual([], options["apis"])
+
+    async def test_only_keys_romm_5_4_accepts_are_sent(self):
+        """5.4's ScanPayload forbids extra keys, failing the scan outright."""
+        allowed = {"type", "platforms", "platform_fs_slugs", "roms_ids", "apis",
+                   "launchbox_remote_enabled"}
+        for run in ("_scan_full", "_scan_unidentified", "_scan_hashes",
+                    "_scan_new_platforms", "_scan_partial"):
+            for version in ((5, 4, 1), (5, 2, 0)):
+                with self.subTest(run=run, version=version):
+                    options = await self.emitted_options(version=version, run=run)
+                    self.assertLessEqual(set(options), allowed)
 
 
 class ScanListenerTests(unittest.IsolatedAsyncioTestCase):

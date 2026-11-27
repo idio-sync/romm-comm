@@ -23,6 +23,13 @@ class ScanType(str, Enum):
     UNIDENTIFIED = "unmatched"
     HASHES = "hashes"
 
+# Sent only to RomM before 5.4, which reads a missing "apis" as no metadata
+# sources at all. From 5.4 a missing "apis" means every source the server has
+# enabled, which is what an admin who set up ScreenScraper or LaunchBox wants.
+LEGACY_SCAN_APIS = ("igdb", "moby")
+SERVER_PICKS_SOURCES_SINCE = (5, 4, 0)
+
+
 class ScanCommands(str, Enum):
     """Enum for scan command autocomplete"""
     PLATFORM = "platform"
@@ -354,6 +361,19 @@ class Scan(commands.Cog):
                 'channel_id': None
             })
 
+    async def _server_picks_metadata_sources(self) -> bool:
+        """Whether RomM will choose the metadata sources if we name none.
+
+        Unknown counts as no: naming IGDB and MobyGames is what every version
+        accepts, while naming none on a pre-5.4 server scans with no sources.
+        """
+        try:
+            version = await self.bot.romm.get_server_version()
+        except Exception as e:
+            logger.debug(f"Could not read the RomM version: {e}")
+            return False
+        return version is not None and version >= SERVER_PICKS_SOURCES_SINCE
+
     async def _start_discord_scan(
         self,
         ctx: discord.ApplicationContext,
@@ -376,6 +396,9 @@ class Scan(commands.Cog):
             self._reset_scan_state()
             await ctx.respond("❌ Unable to connect to scan service. Please try again later.")
             return False
+
+        if "apis" not in options and not await self._server_picks_metadata_sources():
+            options = {**options, "apis": list(LEGACY_SCAN_APIS)}
 
         try:
             await self.sio.emit('scan', options)
@@ -530,8 +553,7 @@ class Scan(commands.Cog):
             options = {
                 "platforms": [platform_id],
                 "type": ScanType.QUICK.value,
-                "roms_ids": [],
-                "apis": ["igdb", "moby"]
+                "roms_ids": []
             }
             
             await self._start_discord_scan(
@@ -565,8 +587,7 @@ class Scan(commands.Cog):
         options = {
             "platforms": [],
             "type": ScanType.COMPLETE.value,
-            "roms_ids": [],
-            "apis": ["igdb", "moby"]
+            "roms_ids": []
         }
         
         await self._start_discord_scan(
@@ -699,8 +720,7 @@ class Scan(commands.Cog):
         options = {
             "platforms": [],
             "type": ScanType.UNIDENTIFIED.value,
-            "roms_ids": [],
-            "apis": ["igdb", "moby"]
+            "roms_ids": []
         }
         
         await self._start_discord_scan(
@@ -733,8 +753,7 @@ class Scan(commands.Cog):
         options = {
             "platforms": [],
             "type": ScanType.NEW_PLATFORMS.value,
-            "roms_ids": [],
-            "apis": ["igdb", "moby"]
+            "roms_ids": []
         }
         
         await self._start_discord_scan(
@@ -750,8 +769,7 @@ class Scan(commands.Cog):
         options = {
             "platforms": [],
             "type": ScanType.PARTIAL.value,
-            "roms_ids": [],
-            "apis": ["igdb", "moby"]
+            "roms_ids": []
         }
         
         await self._start_discord_scan(
