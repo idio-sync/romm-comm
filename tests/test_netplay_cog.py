@@ -13,6 +13,7 @@ import discord
 from cogs.netplay.cog import Netplay, NetplayJoinView
 from cogs.netplay.embeds import render_key
 from cogs.netplay.watcher import NetplayState
+from romm_client import NOT_FOUND
 
 
 def make_cog(max_watchers=25):
@@ -210,6 +211,17 @@ class TickTests(unittest.IsolatedAsyncioTestCase):
         await cog.tick(now=1020.0)
         self.assertEqual(cog.watchers, {})
 
+    async def test_a_rom_romm_no_longer_serves_frees_its_slot(self):
+        """Before, a 404 read as a failure: stale forever, slot held."""
+        cog = make_polling_cog([ROOM, NOT_FOUND])
+        watcher = register(cog)
+        watcher.message_id = 1
+        await cog.tick(now=1000.0)
+        await cog.tick(now=1020.0)
+        self.assertIs(watcher.state, NetplayState.ENDED)
+        self.assertEqual(cog.watchers, {})
+        self.assertEqual(cog._message.edits, 2)
+
     async def test_registering_during_a_tick_does_not_raise(self):
         """The loop awaits per watcher; a command can mutate the registry."""
         cog = make_polling_cog([ROOM])
@@ -372,6 +384,52 @@ class TickTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(second.state, NetplayState.LIVE)
 
 
+
+
+class StartupProbeTests(unittest.IsolatedAsyncioTestCase):
+    """Only a definite answer from RomM turns the feature off."""
+
+    def _cog(self, *, scope, permission):
+        cog = make_cog()
+        cog.scope_ok = True
+        cog.permission_ok = True
+
+        async def scope_probe():
+            return scope
+
+        async def permission_probe():
+            return permission
+
+        cog.bot.romm = SimpleNamespace(
+            netplay_scope_ok=scope_probe, netplay_permission_ok=permission_probe
+        )
+        return cog
+
+    async def test_a_refused_scope_disables(self):
+        cog = self._cog(scope=False, permission=True)
+        await cog.check_scope()
+        self.assertFalse(cog.scope_ok)
+
+    async def test_an_undetermined_scope_leaves_it_on(self):
+        cog = self._cog(scope=None, permission=True)
+        await cog.check_scope()
+        self.assertTrue(cog.scope_ok)
+
+    async def test_a_missing_emulation_permission_disables(self):
+        cog = self._cog(scope=True, permission=False)
+        await cog.check_permission()
+        self.assertFalse(cog.permission_ok)
+
+    async def test_an_undetermined_permission_leaves_it_on(self):
+        """RomM before 5.4, or a token without me.read."""
+        cog = self._cog(scope=True, permission=None)
+        await cog.check_permission()
+        self.assertTrue(cog.permission_ok)
+
+    async def test_a_granted_permission_leaves_it_on(self):
+        cog = self._cog(scope=True, permission=True)
+        await cog.check_permission()
+        self.assertTrue(cog.permission_ok)
 
 
 class FakeInteraction:

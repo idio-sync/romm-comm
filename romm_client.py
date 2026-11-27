@@ -19,11 +19,57 @@ import json
 import logging
 import re
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import aiohttp
 
 logger = logging.getLogger('romm_bot')
+
+
+_VERSION_RE = re.compile(r'^v?(\d+)\.(\d+)\.(\d+)')
+
+
+def parse_romm_version(raw: Any) -> Optional[Tuple[int, int, int]]:
+    """Read a RomM version string such as "5.4.1" or "5.5.0-beta.1".
+
+    Returns None for anything else, notably "development".
+    """
+    if not isinstance(raw, str):
+        return None
+    match = _VERSION_RE.match(raw.strip())
+    if not match:
+        return None
+    return int(match[1]), int(match[2]), int(match[3])
+
+
+# Always requested. Netplay needs roms.read on RomM 5.4+ and assets.read
+# before it, so both stay.
+BASE_OAUTH_SCOPES = (
+    'roms.read', 'platforms.read', 'firmware.read', 'users.read', 'users.write',
+    'me.write', 'assets.read',
+)
+# Requested too, but given up on if refused. RomM rejects the whole grant with
+# 403 "Insufficient scope" when the user lacks any one requested scope, so a
+# scope only some setups grant must never be able to break the login.
+# tasks.run lets the bot start scans with POST /api/tasks/scan (RomM 5.4+).
+OPTIONAL_OAUTH_SCOPES = ('tasks.run',)
+
+
+class _NotFound:
+    """RomM's own 404: what was asked about does not exist, or is hidden from us.
+
+    Distinct from None, which means the request failed and says nothing about
+    the thing asked about. Only returned by calls that opt in with
+    `not_found=NOT_FOUND`; every other call still sees None for a 404.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "NOT_FOUND"
+
+
+NOT_FOUND = _NotFound()
 
 
 class RommApiError(Exception):
@@ -142,7 +188,31 @@ class RommClient:
     # ------------------------------------------------------------------- auth
 
     async def get_oauth_token(self) -> bool:
-        """Get initial OAuth token using username/password."""
+        """Get initial OAuth token using username/password.
+
+        Asks for the optional scopes as well, and asks again without them if
+        RomM refuses the grant over scope. A refusal for any other reason -
+        a wrong password, a disabled account - is final.
+        """
+        full = BASE_OAUTH_SCOPES + OPTIONAL_OAUTH_SCOPES
+        granted = await self._password_grant(full, retry_on_scope=True)
+        if granted is None:
+            logger.warning(
+                f"RomM would not grant {', '.join(OPTIONAL_OAUTH_SCOPES)} to "
+                f"{self.config.USER}; logging in without. Scans will start over "
+                "the socket instead of the tasks API."
+            )
+            granted = await self._password_grant(BASE_OAUTH_SCOPES, retry_on_scope=False)
+        return bool(granted)
+
+    async def _password_grant(
+        self, scopes: Tuple[str, ...], *, retry_on_scope: bool
+    ) -> Optional[bool]:
+        """One OAuth password grant. True on success, False on failure.
+
+        None, only with retry_on_scope, when RomM refused because the user
+        lacks a requested scope - the one refusal worth asking again over.
+        """
         try:
             session = await self.ensure_session()
 
@@ -155,7 +225,7 @@ class RommClient:
             data.add_field('grant_type', 'password')
             data.add_field('username', self.config.USER)
             data.add_field('password', self.config.PASS)
-            data.add_field('scope', 'roms.read platforms.read firmware.read users.read users.write me.write assets.read')
+            data.add_field('scope', ' '.join(scopes))
 
             # Simple headers for OAuth token request
             headers = {
@@ -167,6 +237,13 @@ class RommClient:
                 response_text = await response.text()
                 logger.debug(f"Token response status: {response.status}")
                 logger.debug(f"Token response content-type: {response.headers.get('content-type')}")
+
+                if (
+                    retry_on_scope
+                    and response.status == 403
+                    and 'Insufficient scope' in response_text
+                ):
+                    return None
 
                 if response.status != 200:
                     raise RommAuthError(
@@ -306,9 +383,15 @@ class RommClient:
         data: Optional[Dict] = None,
         params: Optional[Dict] = None,
         form_data: Optional[aiohttp.FormData] = None,
-        require_csrf: bool = False
-    ) -> Optional[Dict]:
+        require_csrf: bool = False,
+        not_found: Any = None,
+    ) -> Any:
         """Make an authenticated API request with proper headers.
+
+        Returns the decoded body, or None on failure. A caller that needs to
+        tell "RomM says this does not exist" apart from "the request failed"
+        passes a marker as `not_found` (normally NOT_FOUND), which is returned
+        instead of None for a 404 that RomM itself produced. See _read_response.
 
         require_csrf is a no-op against current RomM. Its CSRFMiddleware skips
         validation outright when the Authorization scheme is bearer or basic,
@@ -357,19 +440,37 @@ class RommClient:
                     if await self.refresh_oauth_token():
                         headers["Authorization"] = f"Bearer {self.access_token}"
                         async with session.request(method, url, **request_kwargs) as retry_response:
-                            return await self._read_response(retry_response)
+                            return await self._read_response(retry_response, not_found)
                     else:
                         return None
                 else:
-                    return await self._read_response(response)
+                    return await self._read_response(response, not_found)
 
         except Exception as e:
             logger.error(f"Error making authenticated request: {e}", exc_info=True)
             return None
 
     @staticmethod
-    async def _read_response(resp: aiohttp.ClientResponse) -> Optional[Dict]:
-        """Turn a response into a dict, or None if the request failed."""
+    async def _read_response(resp: aiohttp.ClientResponse, not_found: Any = None) -> Any:
+        """Turn a response into a dict, or None if the request failed.
+
+        With `not_found` set, a 404 carrying FastAPI's JSON error body
+        ({"detail": ...}) returns `not_found` instead. The body check is what
+        makes it RomM's answer: a reverse proxy that cannot route the request
+        also says 404, usually as an HTML page, and that is a failed request,
+        not a statement about the thing asked about.
+        """
+        if resp.status == 404 and not_found is not None:
+            try:
+                body = await resp.json(content_type=None)
+            except Exception:
+                body = None
+            if isinstance(body, dict) and 'detail' in body:
+                logger.debug(f"RomM reports not found: {body.get('detail')}")
+                return not_found
+            logger.error("Request failed with status 404 and no RomM error body")
+            return None
+
         if resp.status in (200, 201, 204):
             if resp.status == 204:
                 return {}  # Success with no content is a valid response
@@ -486,10 +587,60 @@ class RommClient:
         """
         return await self.make_authenticated_request('GET', 'config')
 
-    async def list_netplay_rooms(self, rom_id: int) -> Optional[Dict[str, Any]]:
+    async def start_scan(self, payload: Dict[str, Any]) -> Tuple[Optional[int], Any]:
+        """POST /api/tasks/scan (RomM 5.4+): queue a scan, and say why if not.
+
+        Returns (status, body); (None, None) when RomM could not be reached.
+        The status is the point: 409 means a scan is already queued or
+        running, 503 that no scan worker is up, 401/403 that this token lacks
+        tasks.run - answers the socket path only gives later, and only as an
+        error string. Read directly for the same reason as netplay_scope_ok:
+        make_authenticated_request flattens every failure to None.
+        """
+        try:
+            if not await self.ensure_valid_token():
+                return None, None
+
+            session = await self.ensure_session()
+            url = f"{self.config.API_BASE_URL}/api/tasks/scan"
+            headers = {
+                "Authorization": f"Bearer {self.access_token}",
+                "Accept": "application/json",
+            }
+
+            async with session.post(url, headers=headers, json=payload) as response:
+                try:
+                    body = await response.json(content_type=None)
+                except Exception:
+                    body = None
+                return response.status, body
+
+        except Exception as e:
+            logger.debug(f"Scan request could not complete: {e}")
+            return None, None
+
+    async def get_server_version(self) -> Optional[Tuple[int, int, int]]:
+        """RomM's release as (major, minor, patch), from /api/heartbeat.
+
+        A pre-release reads as the release it leads to: "5.5.0-beta.1" is
+        (5, 5, 0), which is what feature checks want, since a feature lands in
+        the first alpha of its release. None for anything that is not a
+        numbered release - "development" builds, an unreachable server - so
+        callers must pick their own safe default.
+        """
+        body = await self.make_authenticated_request('GET', 'heartbeat')
+        system = body.get('SYSTEM') if isinstance(body, dict) else None
+        raw = system.get('VERSION') if isinstance(system, dict) else None
+        return parse_romm_version(raw)
+
+    async def list_netplay_rooms(self, rom_id: int) -> Any:
         """GET /api/netplay/list?game_id=<rom_id> - open rooms for one ROM.
 
-        Returns a dict keyed by room session id, or {} when nothing is open.
+        Returns a dict keyed by room session id, {} when nothing is open,
+        NOT_FOUND when RomM says the ROM is gone, or None when the request
+        failed. NOT_FOUND only happens on RomM 5.4+, which 404s a ROM that was
+        deleted or hidden from us; earlier versions never looked the ROM up
+        and answered {}.
         game_id is mandatory - omitting it is a 422 - so there is no way to
         list every room on the server, which is why callers poll a bounded
         set of ROMs rather than enumerating.
@@ -500,11 +651,17 @@ class RommClient:
         callers must tolerate a None and try again on the next tick.
         """
         return await self.make_authenticated_request(
-            'GET', 'netplay/list', params={'game_id': rom_id}
+            'GET', 'netplay/list', params={'game_id': rom_id}, not_found=NOT_FOUND
         )
 
     async def netplay_scope_ok(self) -> Optional[bool]:
-        """Whether our token carries the assets.read scope netplay needs.
+        """Whether our token carries the scope /netplay/list needs.
+
+        The scope moved in RomM 5.4.0: through 5.3 the route was guarded by
+        assets.read, from 5.4 by roms.read. The probe asks the route itself
+        rather than inspecting our scopes, so it is right on either version.
+        It still answers 403 before 404 on 5.4: the scope guard wraps the
+        handler, and the handler is what 404s game_id=0.
 
         True authorized, False definitely not (401/403), None undetermined -
         the server was unreachable, or answered something that says nothing
@@ -543,3 +700,27 @@ class RommClient:
         except Exception as e:
             logger.debug(f"Netplay scope probe could not complete: {e}")
             return None
+
+    async def netplay_permission_ok(self) -> Optional[bool]:
+        """Whether our RomM user holds the emulation-read permission.
+
+        RomM 5.4.0 added a permission check inside /netplay/list on top of
+        the scope check: a user without emulation read gets {} rather than a
+        403, which is indistinguishable from "nobody is playing". Every
+        permission group is granted it by default (migration 0153), so this
+        only bites when an admin has revoked it.
+
+        /api/permissions/me reports that grant as the UI action "rom.play"
+        (revoking emulation read is what drops it). Admins bypass the check.
+
+        True or False only on a successful answer. None when it cannot be
+        determined: RomM before 5.4 has no such endpoint (404), and a token
+        without me.read is refused - neither says anything about the grant.
+        """
+        body = await self.make_authenticated_request('GET', 'permissions/me')
+        if not isinstance(body, dict) or not isinstance(body.get('grants'), list):
+            return None
+        if body.get('is_admin'):
+            return True
+        actions = {g.get('action') for g in body['grants'] if isinstance(g, dict)}
+        return 'rom.play' in actions

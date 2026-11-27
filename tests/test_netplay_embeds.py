@@ -272,6 +272,29 @@ class JoinButtonStateTests(unittest.TestCase):
         )
 
 
+class RomGoneEmbedTests(unittest.TestCase):
+    def test_an_ended_session_says_the_game_is_gone(self):
+        w = make_watcher(state=NetplayState.ENDED, rom_gone=True,
+                         live_since=1000.0, ended_at=1600.0)
+        self.assertIn("no longer available in RomM", build(w).description)
+
+    def test_an_expired_one_does_not_blame_the_players(self):
+        w = make_watcher(state=NetplayState.EXPIRED, rom_gone=True)
+        description = build(w).description
+        self.assertIn("no longer available in RomM", description)
+        self.assertNotIn("no room was ever opened", description)
+
+    def test_an_ordinary_expiry_keeps_its_wording(self):
+        w = make_watcher(state=NetplayState.EXPIRED)
+        self.assertIn("no room was ever opened", build(w).description)
+
+    def test_the_flag_is_in_the_render_key(self):
+        """Without it the edit announcing the ending would be suppressed."""
+        before = make_watcher(state=NetplayState.EXPIRED)
+        after = make_watcher(state=NetplayState.EXPIRED, rom_gone=True)
+        self.assertNotEqual(render_key(before), render_key(after))
+
+
 class UnlistedDescriptionTests(unittest.TestCase):
     """What the post says once RomM stops listing the room."""
 

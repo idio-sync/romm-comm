@@ -9,6 +9,7 @@ them ends a live session every time RomM hiccups.
 import unittest
 
 from cogs.netplay.watcher import NetplayState, NetplayWatcher, advance
+from romm_client import NOT_FOUND
 
 ROOM = {"r1": {"room_name": "Bomberman", "current": 2, "max": 4,
                "player_name": "idiosync", "hasPassword": False}}
@@ -187,6 +188,71 @@ class TerminalTests(unittest.TestCase):
         self.assertFalse(make_watcher(state=NetplayState.LIVE).is_terminal)
         self.assertTrue(make_watcher(state=NetplayState.ENDED).is_terminal)
         self.assertTrue(make_watcher(state=NetplayState.EXPIRED).is_terminal)
+
+
+class RomGoneTests(unittest.TestCase):
+    """RomM 5.4+ 404s a ROM that was deleted or hidden: the session is over.
+
+    Treated as a failure instead, a live watcher would sit stale and hold its
+    slot until the bot restarted, because no poll for that ROM succeeds again.
+    """
+
+    def test_a_live_session_ends(self):
+        w = make_watcher()
+        advance(w, ROOM, now=1000.0)
+        self.assertTrue(advance(w, NOT_FOUND, now=1100.0))
+        self.assertIs(w.state, NetplayState.ENDED)
+        self.assertEqual(w.ended_at, 1100.0)
+        self.assertTrue(w.rom_gone)
+
+    def test_a_pending_announcement_expires(self):
+        w = make_watcher()
+        self.assertTrue(advance(w, NOT_FOUND, now=1010.0))
+        self.assertIs(w.state, NetplayState.EXPIRED)
+        self.assertTrue(w.rom_gone)
+
+    def test_it_ends_at_once_not_after_repeated_polls(self):
+        """Not a failure to wait out: RomM answered, and the answer is final."""
+        w = make_watcher()
+        advance(w, ROOM, now=1000.0)
+        advance(w, NOT_FOUND, now=1020.0)
+        self.assertTrue(w.is_terminal)
+        self.assertEqual(w.consecutive_failures, 0)
+
+    def test_a_stale_session_is_no_longer_stale(self):
+        w = make_watcher()
+        advance(w, ROOM, now=1000.0)
+        for t in (1020.0, 1040.0, 1060.0):
+            advance(w, None, now=t)
+        self.assertTrue(w.stale)
+        advance(w, NOT_FOUND, now=1080.0)
+        self.assertFalse(w.stale)
+        self.assertIs(w.state, NetplayState.ENDED)
+
+    def test_an_unlisted_session_ends_without_the_capped_wording(self):
+        w = make_watcher()
+        advance(w, NEARLY_FULL, now=1000.0)
+        advance(w, {}, now=1020.0)
+        self.assertIsNotNone(w.unlisted_since)
+        advance(w, NOT_FOUND, now=1040.0)
+        self.assertIsNone(w.unlisted_since)
+        self.assertIs(w.state, NetplayState.ENDED)
+
+    def test_a_terminal_watcher_is_left_alone(self):
+        w = make_watcher()
+        advance(w, ROOM, now=1000.0)
+        advance(w, {}, now=1020.0)
+        self.assertIs(w.state, NetplayState.ENDED)
+        self.assertFalse(advance(w, NOT_FOUND, now=1040.0))
+        self.assertFalse(w.rom_gone)
+
+    def test_a_failure_is_still_not_an_ending(self):
+        """The rule this file exists for, unchanged by the new answer."""
+        w = make_watcher()
+        advance(w, ROOM, now=1000.0)
+        advance(w, None, now=1020.0)
+        self.assertIs(w.state, NetplayState.LIVE)
+        self.assertFalse(w.rom_gone)
 
 
 class UnlistedTests(unittest.TestCase):

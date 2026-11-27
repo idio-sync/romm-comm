@@ -23,6 +23,16 @@ class ScanType(str, Enum):
     UNIDENTIFIED = "unmatched"
     HASHES = "hashes"
 
+# Sent only to RomM before 5.4, which reads a missing "apis" as no metadata
+# sources at all. From 5.4 a missing "apis" means every source the server has
+# enabled, which is what an admin who set up ScreenScraper or LaunchBox wants.
+LEGACY_SCAN_APIS = ("igdb", "moby")
+SERVER_PICKS_SOURCES_SINCE = (5, 4, 0)
+# POST /api/tasks/scan, which answers a refused scan there and then rather
+# than with a scan:done_ko later.
+REST_SCAN_SINCE = (5, 4, 0)
+
+
 class ScanCommands(str, Enum):
     """Enum for scan command autocomplete"""
     PLATFORM = "platform"
@@ -354,6 +364,57 @@ class Scan(commands.Cog):
                 'channel_id': None
             })
 
+    async def _server_version(self) -> Optional[tuple]:
+        """RomM's version, or None when it cannot be read.
+
+        Every caller treats None as "older than anything we check for", which
+        is the safe reading: it keeps the behaviour every version accepts.
+        """
+        try:
+            return await self.bot.romm.get_server_version()
+        except Exception as e:
+            logger.debug(f"Could not read the RomM version: {e}")
+            return None
+
+    @staticmethod
+    def _at_least(version: Optional[tuple], wanted: tuple) -> bool:
+        return version is not None and version >= wanted
+
+    async def _request_scan(self, options: Dict[str, Any], version: Optional[tuple]) -> Optional[str]:
+        """Ask RomM to scan. Returns None once asked, or what to tell the user.
+
+        On 5.4+ this goes through the tasks API, so a scan RomM refuses is
+        refused here, before the bot claims a scan is running. Anything that
+        says nothing about the scan itself - a token without tasks.run, an
+        unreachable or erroring endpoint - falls back to the socket, which
+        every version accepts and which checks the user's scopes rather than
+        the token's.
+        """
+        if self._at_least(version, REST_SCAN_SINCE):
+            status, body = await self.bot.romm.start_scan(options)
+            detail = body.get("detail") if isinstance(body, dict) else None
+
+            if status == 202:
+                return None
+            if status == 409:
+                return (
+                    "❌ RomM is already running or queueing a scan. Use "
+                    "`/scan status` to follow it, or `/scan stop` to stop it."
+                )
+            if status == 503:
+                return (
+                    "❌ RomM has no scan worker running, so it cannot scan. "
+                    "Check the RomM container's logs."
+                )
+            if status in (400, 422):
+                return f"❌ RomM rejected the scan: {detail or 'invalid options'}"
+            logger.info(
+                f"Tasks API scan not started (status {status}); using the socket"
+            )
+
+        await self.sio.emit('scan', options)
+        return None
+
     async def _start_discord_scan(
         self,
         ctx: discord.ApplicationContext,
@@ -377,13 +438,24 @@ class Scan(commands.Cog):
             await ctx.respond("❌ Unable to connect to scan service. Please try again later.")
             return False
 
+        version = await self._server_version()
+        if "apis" not in options and not self._at_least(version, SERVER_PICKS_SOURCES_SINCE):
+            options = {**options, "apis": list(LEGACY_SCAN_APIS)}
+
         try:
-            await self.sio.emit('scan', options)
+            refusal = await self._request_scan(options, version)
         except Exception as e:
             logger.error(f"Failed to start {scan_type} scan: {e}", exc_info=True)
             await self._clear_shared_scan_state()
             self._reset_scan_state()
             await ctx.respond("❌ Failed to start scan: could not send request to RomM.")
+            return False
+
+        if refusal:
+            logger.warning(f"RomM refused the {scan_type} scan: {refusal}")
+            await self._clear_shared_scan_state()
+            self._reset_scan_state()
+            await ctx.respond(refusal)
             return False
 
         started_at = datetime.now()
@@ -530,8 +602,7 @@ class Scan(commands.Cog):
             options = {
                 "platforms": [platform_id],
                 "type": ScanType.QUICK.value,
-                "roms_ids": [],
-                "apis": ["igdb", "moby"]
+                "roms_ids": []
             }
             
             await self._start_discord_scan(
@@ -565,8 +636,7 @@ class Scan(commands.Cog):
         options = {
             "platforms": [],
             "type": ScanType.COMPLETE.value,
-            "roms_ids": [],
-            "apis": ["igdb", "moby"]
+            "roms_ids": []
         }
         
         await self._start_discord_scan(
@@ -699,8 +769,7 @@ class Scan(commands.Cog):
         options = {
             "platforms": [],
             "type": ScanType.UNIDENTIFIED.value,
-            "roms_ids": [],
-            "apis": ["igdb", "moby"]
+            "roms_ids": []
         }
         
         await self._start_discord_scan(
@@ -733,8 +802,7 @@ class Scan(commands.Cog):
         options = {
             "platforms": [],
             "type": ScanType.NEW_PLATFORMS.value,
-            "roms_ids": [],
-            "apis": ["igdb", "moby"]
+            "roms_ids": []
         }
         
         await self._start_discord_scan(
@@ -750,8 +818,7 @@ class Scan(commands.Cog):
         options = {
             "platforms": [],
             "type": ScanType.PARTIAL.value,
-            "roms_ids": [],
-            "apis": ["igdb", "moby"]
+            "roms_ids": []
         }
         
         await self._start_discord_scan(

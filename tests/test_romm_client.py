@@ -10,8 +10,16 @@ of one.
 """
 
 import unittest
+from types import SimpleNamespace
 
-from romm_client import RommApiError, RommAuthError, RommClient
+from romm_client import (
+    BASE_OAUTH_SCOPES,
+    OPTIONAL_OAUTH_SCOPES,
+    RommApiError,
+    RommAuthError,
+    RommClient,
+    parse_romm_version,
+)
 
 
 class FakeResponse:
@@ -220,6 +228,194 @@ class ClientTokenTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(await client.ensure_valid_token())
         self.assertEqual("rmm_clienttoken", client.access_token)
+
+
+class ParseRommVersionTests(unittest.TestCase):
+    def test_a_release(self):
+        self.assertEqual((5, 4, 1), parse_romm_version("5.4.1"))
+
+    def test_a_pre_release_reads_as_its_release(self):
+        self.assertEqual((5, 5, 0), parse_romm_version("5.5.0-beta.1"))
+
+    def test_a_leading_v_is_tolerated(self):
+        self.assertEqual((5, 2, 0), parse_romm_version("v5.2.0"))
+
+    def test_development_and_junk_are_unknown(self):
+        for raw in ("development", "", None, 5, "5.4"):
+            with self.subTest(raw=raw):
+                self.assertIsNone(parse_romm_version(raw))
+
+
+class GetServerVersionTests(unittest.IsolatedAsyncioTestCase):
+    async def version_from(self, body):
+        client = object.__new__(RommClient)
+        calls = []
+
+        async def make_authenticated_request(method, endpoint, **kwargs):
+            calls.append((method, endpoint))
+            return body
+
+        client.make_authenticated_request = make_authenticated_request
+        version = await client.get_server_version()
+        self.assertEqual([("GET", "heartbeat")], calls)
+        return version
+
+    async def test_reads_system_version_from_the_heartbeat(self):
+        self.assertEqual((5, 4, 1), await self.version_from({"SYSTEM": {"VERSION": "5.4.1"}}))
+
+    async def test_a_failed_heartbeat_is_unknown(self):
+        self.assertIsNone(await self.version_from(None))
+
+    async def test_a_heartbeat_without_system_is_unknown(self):
+        self.assertIsNone(await self.version_from({"OTHER": {}}))
+
+
+class TokenResponse:
+    def __init__(self, status, text, body=None):
+        self.status = status
+        self._text = text
+        self._body = body
+        self.headers = {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def text(self):
+        return self._text
+
+    async def json(self, content_type="application/json"):
+        return self._body
+
+
+class TokenSession:
+    """Answers /api/token by the scopes asked for, recording each request."""
+
+    def __init__(self, answer):
+        self.answer = answer
+        self.scopes_asked = []
+
+    def post(self, url, data=None, headers=None, json=None):
+        # aiohttp keeps form fields as (headers-with-name, extra, value).
+        fields = {headers["name"]: value for headers, _, value in data._fields}
+        scope = fields["scope"]
+        self.scopes_asked.append(scope)
+        return self.answer(scope)
+
+
+def token_client(answer):
+    client = object.__new__(RommClient)
+    client.config = SimpleNamespace(API_BASE_URL="http://romm", USER="bot", PASS="pw")
+    session = TokenSession(answer)
+
+    async def ensure_session():
+        return session
+
+    client.ensure_session = ensure_session
+    return client, session
+
+
+GRANTED = {"access_token": "a", "refresh_token": "r", "expires": 900}
+
+
+class OptionalScopeGrantTests(unittest.IsolatedAsyncioTestCase):
+    """RomM refuses the whole grant over one scope the user lacks.
+
+    So tasks.run is asked for, and dropped when refused - it must never be
+    able to stop the bot logging in.
+    """
+
+    async def test_tasks_run_is_asked_for_first(self):
+        client, session = token_client(lambda scope: TokenResponse(200, "", GRANTED))
+        self.assertTrue(await client.get_oauth_token())
+        self.assertIn("tasks.run", session.scopes_asked[0].split())
+        self.assertEqual(1, len(session.scopes_asked))
+
+    async def test_a_scope_refusal_retries_without_the_optional_scopes(self):
+        def answer(scope):
+            if "tasks.run" in scope.split():
+                return TokenResponse(403, '{"detail":"Insufficient scope"}')
+            return TokenResponse(200, "", GRANTED)
+
+        client, session = token_client(answer)
+        with self.assertLogs("romm_bot", level="WARNING"):
+            self.assertTrue(await client.get_oauth_token())
+        self.assertEqual(2, len(session.scopes_asked))
+        self.assertEqual(" ".join(BASE_OAUTH_SCOPES), session.scopes_asked[1])
+        self.assertEqual("a", client.access_token)
+
+    async def test_a_wrong_password_is_not_retried(self):
+        client, session = token_client(
+            lambda scope: TokenResponse(401, '{"detail":"Invalid username or password"}')
+        )
+        self.assertFalse(await client.get_oauth_token())
+        self.assertEqual(1, len(session.scopes_asked))
+
+    async def test_a_disabled_account_is_not_retried(self):
+        client, session = token_client(
+            lambda scope: TokenResponse(403, '{"detail":"User account is disabled"}')
+        )
+        self.assertFalse(await client.get_oauth_token())
+        self.assertEqual(1, len(session.scopes_asked))
+
+    async def test_the_base_scopes_refused_too_is_a_failure(self):
+        client, session = token_client(
+            lambda scope: TokenResponse(403, '{"detail":"Insufficient scope"}')
+        )
+        self.assertFalse(await client.get_oauth_token())
+        self.assertEqual(2, len(session.scopes_asked))
+
+    def test_tasks_run_is_optional_not_base(self):
+        self.assertIn("tasks.run", OPTIONAL_OAUTH_SCOPES)
+        self.assertNotIn("tasks.run", BASE_OAUTH_SCOPES)
+
+
+class ScanSession:
+    def __init__(self, response=None, error=None):
+        self.response = response
+        self.error = error
+        self.posts = []
+
+    def post(self, url, headers=None, json=None):
+        if self.error:
+            raise self.error
+        self.posts.append((url, json))
+        return self.response
+
+
+def scan_client(session):
+    client = object.__new__(RommClient)
+    client.config = SimpleNamespace(API_BASE_URL="http://romm")
+    client.access_token = "t"
+
+    async def ensure_valid_token():
+        return True
+
+    async def ensure_session():
+        return session
+
+    client.ensure_valid_token = ensure_valid_token
+    client.ensure_session = ensure_session
+    return client
+
+
+class StartScanTests(unittest.IsolatedAsyncioTestCase):
+    async def test_posts_the_payload_to_the_tasks_api(self):
+        session = ScanSession(TokenResponse(202, "", {"task_id": "j1"}))
+        status, body = await scan_client(session).start_scan({"type": "quick"})
+        self.assertEqual([("http://romm/api/tasks/scan", {"type": "quick"})], session.posts)
+        self.assertEqual((202, {"task_id": "j1"}), (status, body))
+
+    async def test_a_refusal_keeps_its_status_and_reason(self):
+        session = ScanSession(TokenResponse(409, "", {"detail": "already running"}))
+        self.assertEqual((409, {"detail": "already running"}),
+                         await scan_client(session).start_scan({}))
+
+    async def test_an_unreachable_server_is_none(self):
+        session = ScanSession(error=OSError("connection refused"))
+        self.assertEqual((None, None), await scan_client(session).start_scan({}))
 
 
 if __name__ == "__main__":

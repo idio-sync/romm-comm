@@ -130,11 +130,13 @@ class Netplay(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.enabled = bot.config.NETPLAY_ENABLED
-        # Both start True so a probe that cannot reach RomM fails open. Each
+        # All start True so a probe that cannot reach RomM fails open. Each
         # is flipped to False only on a positive answer: RomM reporting
-        # netplay off, or a 401/403 on the room endpoint.
+        # netplay off, a 401/403 on the room endpoint, or RomM reporting our
+        # user lacks the emulation permission.
         self.server_enabled = True
         self.scope_ok = True
+        self.permission_ok = True
         self.watchers: Dict[int, NetplayWatcher] = {}
 
         if not self.enabled:
@@ -192,14 +194,17 @@ class Netplay(commands.Cog):
             )
 
         await self.check_scope()
+        await self.check_permission()
 
-        logger.info("✅ RomM netplay available")
+        if self.scope_ok and self.permission_ok:
+            logger.info("✅ RomM netplay available")
 
     async def check_scope(self) -> None:
         """Refuse the feature outright when the token definitely cannot poll.
 
         /api/config needs no special scope, so it cannot detect this: a token
-        without assets.read passes that check and then returns None from every
+        without the room endpoint's scope (assets.read through RomM 5.3,
+        roms.read from 5.4) passes that check and then returns None from every
         room poll. Announcements would post and then silently never update -
         worse than not offering the command, because the post looks live.
 
@@ -212,15 +217,37 @@ class Netplay(commands.Cog):
         if authorized is False:
             self.scope_ok = False
             logger.error(
-                "The RomM token is missing the 'assets.read' scope, which "
-                "/api/netplay/list requires. /netplay is disabled until the "
-                "token is reissued with that scope."
+                "The RomM token was refused by /api/netplay/list. It needs "
+                "'roms.read' on RomM 5.4+, or 'assets.read' on 5.3 and "
+                "earlier. /netplay is disabled until the token is reissued "
+                "with that scope."
             )
         elif authorized is None:
             logger.warning(
-                "Could not confirm the RomM token has 'assets.read'; leaving "
-                "netplay enabled. If announcements never find a room, that "
-                "scope is the first thing to check."
+                "Could not confirm the RomM token may read /api/netplay/list; "
+                "leaving netplay enabled. If announcements never find a room, "
+                "check the token has 'roms.read' (RomM 5.4+) or 'assets.read' "
+                "(5.3 and earlier)."
+            )
+
+    async def check_permission(self) -> None:
+        """Refuse the feature when RomM says our user cannot see rooms.
+
+        RomM 5.4 answers /netplay/list with {} - not a 403 - for a user
+        without the emulation-read permission, so the scope probe passes and
+        every announcement then sits on "no room open yet" until it expires.
+
+        Only a definite answer disables anything. None (RomM before 5.4, or a
+        token without me.read) leaves the feature on.
+        """
+        allowed = await self.bot.romm.netplay_permission_ok()
+
+        if allowed is False:
+            self.permission_ok = False
+            logger.error(
+                "RomM reports the bot's user lacks the emulation read "
+                "permission. RomM 5.4+ hides every netplay room from such a "
+                "user, so /netplay is disabled until it is granted."
             )
 
     @commands.Cog.listener()
@@ -377,9 +404,17 @@ class Netplay(commands.Cog):
         if not self.scope_ok:
             # Refusing beats posting an announcement that can never update.
             await ctx.respond(
-                "My RomM token is missing the `assets.read` scope, so I cannot "
-                "see netplay rooms. An admin needs to reissue it with that "
-                "scope added."
+                "My RomM token is not allowed to list netplay rooms. An admin "
+                "needs to reissue it with the `roms.read` scope (RomM 5.4+) or "
+                "`assets.read` (RomM 5.3 and earlier)."
+            )
+            return
+
+        if not self.permission_ok:
+            await ctx.respond(
+                "My RomM user is not allowed to play games, so RomM hides "
+                "netplay rooms from me. An admin needs to grant it the "
+                "emulation read permission."
             )
             return
 

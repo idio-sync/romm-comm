@@ -181,6 +181,49 @@ class RecentRomsListenerTests(unittest.IsolatedAsyncioTestCase):
             monitor.scan_completion_timer.cancel()
 
 
+class RecentRomsIsNewTests(unittest.IsolatedAsyncioTestCase):
+    """RomM 5.4+ marks each scanned ROM with whether the scan added it."""
+
+    def monitor(self):
+        monitor = object.__new__(RecentRomsMonitor)
+        monitor.bot = FakeBot(FakeChannel([]))
+        monitor.bot.scan_state = {"is_scanning": True}
+        monitor.scan_lock = asyncio.Lock()
+        monitor.processing_lock = asyncio.Lock()
+        monitor.current_scan_roms = []
+        monitor.current_scan_names = set()
+        monitor.currently_processing = set()
+        monitor.recently_processed = set()
+        monitor.scan_completion_timer = None
+
+        async def has_been_posted(rom_id):
+            return False
+
+        monitor.has_been_posted = has_been_posted
+        return monitor
+
+    async def queued_after(self, event):
+        monitor = self.monitor()
+        await monitor.on_romm_scan_rom(event)
+        if monitor.scan_completion_timer:
+            monitor.scan_completion_timer.cancel()
+        return monitor.current_scan_roms
+
+    async def test_a_rom_the_scan_did_not_add_is_not_queued(self):
+        """A rescan, a file refresh, a ROM back from missing: none is new."""
+        queued = await self.queued_after({"id": 7, "name": "Zelda", "is_new": False})
+        self.assertEqual([], queued)
+
+    async def test_a_rom_the_scan_added_is_queued(self):
+        queued = await self.queued_after({"id": 8, "name": "Metroid", "is_new": True})
+        self.assertEqual([8], [rom["id"] for rom in queued])
+
+    async def test_without_the_flag_the_cutoff_still_decides(self):
+        """RomM before 5.4 sends no is_new; queue it for the created_at filter."""
+        queued = await self.queued_after({"id": 9, "name": "Kirby"})
+        self.assertEqual([9], [rom["id"] for rom in queued])
+
+
 class _RefreshFakeMessage:
     def __init__(self, mid, events):
         self.id = mid

@@ -9,11 +9,18 @@ in a room; the client returning None means the request failed. Treating a
 failed request as an empty room list would end a live session every time the
 server hiccups, so failures are counted and only end a session once they
 persist.
+
+NOT_FOUND is the third answer: RomM (5.4+) saying the ROM itself is gone,
+deleted or hidden from us. Unlike a failure it is a statement about the
+session - nobody can host a game RomM will not serve - so it ends the watcher
+at once rather than leaving it stale and holding a slot until the bot restarts.
 """
 
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
+
+from romm_client import NOT_FOUND
 
 DEFAULT_PENDING_TIMEOUT = 900.0
 DEFAULT_STALE_AFTER = 3
@@ -78,6 +85,8 @@ class NetplayWatcher:
     # the moment a room is listed again.
     unlisted_since: Optional[float] = None
     stale: bool = False
+    # Set when RomM reported the ROM gone, which is what ended the watcher.
+    rom_gone: bool = False
     last_render_key: Optional[str] = None
 
     @property
@@ -88,7 +97,7 @@ class NetplayWatcher:
 
 def advance(
     watcher: NetplayWatcher,
-    rooms: Optional[Dict[str, Any]],
+    rooms: Any,
     now: float,
     pending_timeout: float = DEFAULT_PENDING_TIMEOUT,
     stale_after: int = DEFAULT_STALE_AFTER,
@@ -96,7 +105,8 @@ def advance(
 ) -> bool:
     """Apply one poll result. Returns whether a reader would see a difference.
 
-    `rooms` is None for a failed request, {} for a successful empty one.
+    `rooms` is None for a failed request, {} for a successful empty one,
+    NOT_FOUND when RomM says the ROM is gone.
 
     The return value is informational - it reports whether this poll changed
     anything a reader would notice. It is deliberately not what gates the
@@ -107,6 +117,9 @@ def advance(
     """
     if watcher.is_terminal:
         return False
+
+    if rooms is NOT_FOUND:
+        return _handle_rom_gone(watcher, now)
 
     if rooms is None:
         return _handle_failure(watcher, now, pending_timeout, stale_after)
@@ -136,6 +149,24 @@ def advance(
     return (
         _handle_empty(watcher, now, pending_timeout, session_timeout) or recovered
     )
+
+
+def _handle_rom_gone(watcher: NetplayWatcher, now: float) -> bool:
+    """RomM no longer serves this ROM to us, so no room can be opened for it.
+
+    A live session ends, a pending one expires. Any staleness is cleared:
+    RomM answered, so what the post says next is something we observed.
+    """
+    watcher.rom_gone = True
+    watcher.stale = False
+    watcher.consecutive_failures = 0
+    watcher.unlisted_since = None
+    if watcher.state is NetplayState.LIVE:
+        watcher.state = NetplayState.ENDED
+        watcher.ended_at = now
+    else:
+        watcher.state = NetplayState.EXPIRED
+    return True
 
 
 def _handle_failure(
